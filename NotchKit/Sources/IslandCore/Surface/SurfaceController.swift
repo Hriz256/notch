@@ -14,7 +14,7 @@ public final class SurfaceController {
     private var hoverMonitor: HoverMonitor?
     private var geometry: NotchGeometry?
     private var screenObserver: (any NSObjectProtocol)?
-    private var spaceObserver: (any NSObjectProtocol)?
+    private var privateSpace: PrivateSpace?
 
     public private(set) var isVisible = false
 
@@ -23,19 +23,21 @@ public final class SurfaceController {
     }
 
     public func start() {
+        // A private WindowServer Space at a top absolute level is what keeps the island
+        // out of the Space-transition animation; without it the panel still works, it
+        // just slides with the transition. No observer for
+        // `activeSpaceDidChangeNotification`: it fires *after* the animation, so it can
+        // never fix positioning, and once the panel lives in its own Space there is
+        // nothing to re-assert.
+        privateSpace = PrivateSpace()
+        if privateSpace == nil {
+            logger.warning("SkyLight private space unavailable; island will ride Space transitions")
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.rebuildIfNeeded() }
-        }
-        // Switching Spaces can reorder windows underneath us even though the panel joins
-        // every Space; re-asserting the order is cheap and keeps the island on top.
-        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.window?.orderFrontRegardless() }
         }
         rebuildIfNeeded()
     }
@@ -43,8 +45,8 @@ public final class SurfaceController {
     public func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
-        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
-        spaceObserver = nil
+        privateSpace?.destroy()
+        privateSpace = nil
         hoverMonitor?.stop()
         hoverMonitor = nil
         window?.orderOut(nil)
@@ -98,6 +100,9 @@ public final class SurfaceController {
         panel.contentView = hosting
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
+        // Only now is `windowNumber` valid, so adoption has to follow the order-front.
+        // Re-adopting on every rebuild is required and safe (the call is idempotent).
+        privateSpace?.adopt(panel)
 
         let monitor = HoverMonitor(
             rectProvider: { [weak self] in self?.islandScreenRect() ?? .zero },

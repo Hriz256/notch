@@ -10,14 +10,12 @@ public final class SurfaceWindow: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        // `.screenSaver` (1000) rather than `statusWindow + 1` (26): at status level the
-        // panel is treated as ordinary window content by the WindowServer, so it is
-        // captured by the Space-transition snapshot and gets scaled/slid with it —
-        // visible as the island shrinking and drifting when a full-screen app exits or
-        // Mission Control opens. Screen-saver level sits above that transition layer, so
-        // the island stays put and unscaled. Menu bar is 24 and status items 25, so this
-        // still renders over them, which is what a notch surface needs.
-        level = .screenSaver
+        // 26 = one above the status-item level (menu bar is 24, status items 25), so the
+        // island renders over them — the same level Seam uses. Raising it further does
+        // *not* keep the panel still during Space transitions; that is ``PrivateSpace``'s
+        // job (the window is moved into a private WindowServer Space at a top absolute
+        // level, which is the only mechanism that takes it out of the transition).
+        level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         isMovable = false
         isMovableByWindowBackground = false
