@@ -10,6 +10,8 @@ public final class XPCNowPlayingSource: NowPlayingSource, @unchecked Sendable {
     private let lock = NSLock()
     private var connection: NSXPCConnection?
     private var continuation: AsyncStream<NowPlayingEvent>.Continuation?
+    private var reconnectTask: Task<Void, Never>?
+    private var isRunning = false
     private var retries = 0
     private static let maxRetries = 5
 
@@ -20,16 +22,24 @@ public final class XPCNowPlayingSource: NowPlayingSource, @unchecked Sendable {
     }
 
     public func start() async {
+        lock.withLock { isRunning = true }
         connect()
     }
 
     public func stop() async {
-        lock.withLock {
-            connection?.invalidate()
-            connection = nil
+        // Take the connection out under the lock and invalidate it outside: the invalidation
+        // handler runs on another queue and would otherwise contend for the same lock.
+        let connection = lock.withLock { () -> NSXPCConnection? in
+            isRunning = false
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            let dropped = self.connection
+            self.connection = nil
             continuation?.finish()
             continuation = nil
+            return dropped
         }
+        connection?.invalidate()
     }
 
     public func send(_ command: PlaybackCommand) async {
@@ -54,23 +64,41 @@ public final class XPCNowPlayingSource: NowPlayingSource, @unchecked Sendable {
     }
 
     private func connect() {
+        // A reconnect scheduled before `stop()` must not resurrect a stopped source.
+        guard lock.withLock({ isRunning }) else { return }
         let connection = NSXPCConnection(serviceName: NowPlayingXPC.serviceName)
         connection.remoteObjectInterface = NSXPCInterface(with: NowPlayingHelperProtocol.self)
         connection.exportedInterface = NSXPCInterface(with: NowPlayingHelperClientProtocol.self)
         connection.exportedObject = ClientReceiver { [weak self] event in self?.emit(event) }
-        connection.interruptionHandler = { [weak self] in self?.handleDrop(reason: "interrupted") }
-        connection.invalidationHandler = { [weak self] in self?.handleDrop(reason: "invalidated") }
-        lock.withLock { self.connection = connection }
+        // The connection is captured weakly: it owns these handlers, so a strong capture would
+        // be a retain cycle. Passing it lets `handleDrop` ignore a handler from a dead connection.
+        connection.interruptionHandler = { [weak self, weak connection] in
+            guard let connection else { return }
+            self?.handleDrop(reason: "interrupted", dropped: connection)
+        }
+        connection.invalidationHandler = { [weak self, weak connection] in
+            guard let connection else { return }
+            self?.handleDrop(reason: "invalidated", dropped: connection)
+        }
+        let previous = lock.withLock { () -> NSXPCConnection? in
+            let previous = self.connection
+            self.connection = connection
+            return previous
+        }
+        // Tear the old one down; its handlers no-op because it is no longer `self.connection`.
+        previous?.invalidate()
         connection.resume()
         // Fire-and-forget; delivery failures surface through the proxy error handler.
         proxy()?.startMonitoring()
         logger.info("Connected to helper")
     }
 
-    private func handleDrop(reason: String) {
+    private func handleDrop(reason: String, dropped: NSXPCConnection) {
         let attempt = lock.withLock { () -> Int? in
+            // Stale handler: this connection was already replaced, so the live one must survive.
+            guard connection === dropped else { return nil }
             connection = nil
-            guard continuation != nil else { return nil }
+            guard isRunning else { return nil }
             retries += 1
             return retries
         }
@@ -81,9 +109,15 @@ public final class XPCNowPlayingSource: NowPlayingSource, @unchecked Sendable {
         }
         let delay = min(8.0, 0.5 * pow(2.0, Double(attempt - 1)))
         logger.notice("Helper \(reason, privacy: .public); reconnecting in \(delay)s")
-        Task { [weak self] in
+        let task = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
             self?.connect()
+        }
+        lock.withLock {
+            reconnectTask?.cancel()
+            // `stop()` may have won the race; then the new task is cancelled, not stored.
+            if isRunning { reconnectTask = task } else { task.cancel() }
         }
     }
 

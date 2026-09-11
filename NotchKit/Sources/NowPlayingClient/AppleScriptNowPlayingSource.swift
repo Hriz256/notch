@@ -48,7 +48,7 @@ public final class AppleScriptNowPlayingSource: NowPlayingSource, @unchecked Sen
     }
 
     public func send(_ command: PlaybackCommand) async {
-        guard let app = activeApp() else { return }
+        guard let app = await activeApp() else { return }
         let verb: String
         switch command {
         case .play: verb = "play"
@@ -64,21 +64,38 @@ public final class AppleScriptNowPlayingSource: NowPlayingSource, @unchecked Sen
 
     /// True when Spotify or Music is running and its player state is playing.
     public static func isAnythingPlaying() async -> Bool {
-        for app in [spotify, music] where AppleScriptRunner.isRunning(bundleID: app) {
-            let out = await AppleScriptRunner.run("tell application id \"\(app)\" to return player state as string")
-            if out == "playing" { return true }
-        }
-        return false
+        await playingApp() != nil
     }
 
     // MARK: Private
 
-    private func activeApp() -> String? {
-        [Self.spotify, Self.music].first { AppleScriptRunner.isRunning(bundleID: $0) }
+    /// The running app whose player state is `playing`, if any.
+    private static func playingApp() async -> String? {
+        for app in runningApps() where await playerState(of: app) == "playing" { return app }
+        return nil
+    }
+
+    private static func runningApps() -> [String] {
+        [spotify, music].filter { AppleScriptRunner.isRunning(bundleID: $0) }
+    }
+
+    private static func playerState(of app: String) async -> String? {
+        await AppleScriptRunner.run("tell application id \"\(app)\" to return player state as string")
+    }
+
+    /// The app to read from and send commands to: whichever running app is actually playing,
+    /// falling back to the first running one (so a paused player is still controllable).
+    private func activeApp() async -> String? {
+        if let playing = await Self.playingApp() { return playing }
+        return Self.runningApps().first
     }
 
     private func poll() async {
-        guard let app = activeApp() else { return }
+        guard let app = await activeApp() else { return }
+        // Both numbers are emitted as integer milliseconds: `round` yields an integer whose text
+        // form has no decimal separator, so parsing stays correct in comma-decimal locales.
+        // Spotify's `duration` is already milliseconds; Music's is seconds.
+        let durationMS = app == Self.spotify ? "(round (duration of t))" : "(round ((duration of t) * 1000))"
         let script = """
         tell application id "\(app)"
             if player state is stopped then return "stopped"
@@ -86,27 +103,38 @@ public final class AppleScriptNowPlayingSource: NowPlayingSource, @unchecked Sen
             set st to player state as string
             set artURL to ""
             \(app == Self.spotify ? "set artURL to artwork url of t" : "")
-            return (name of t) & linefeed & (artist of t) & linefeed & (album of t) & linefeed & (duration of t) & linefeed & (player position) & linefeed & st & linefeed & artURL & linefeed & (id of t as string)
+            return (name of t) & linefeed & (artist of t) & linefeed & (album of t) & linefeed & \(durationMS) & linefeed & (round ((player position) * 1000)) & linefeed & st & linefeed & artURL & linefeed & (id of t as string)
         end tell
         """
         guard let out = await AppleScriptRunner.run(script), out != "stopped" else { return }
-        let f = out.components(separatedBy: "\n")
-        guard f.count >= 8 else {
-            logger.debug("Unexpected AppleScript field count: \(f.count, privacy: .public)")
+        let fields = out.components(separatedBy: "\n")
+        guard var snapshot = Self.parseSnapshot(fields: fields, app: app, now: Date()) else {
+            logger.debug("Unexpected AppleScript field count: \(fields.count, privacy: .public)")
             return
         }
-        // Spotify duration is milliseconds, Music duration is seconds.
-        let rawDuration = Double(f[3]) ?? 0
-        let duration = app == Self.spotify ? rawDuration / 1000 : rawDuration
-        let artwork = await artworkData(url: f[6])
-        let snapshot = NowPlayingSnapshot(
-            title: f[0], artist: f[1], album: f[2],
-            artworkData: artwork, artworkID: f[6].isEmpty ? f[7] : f[6],
-            duration: duration, elapsed: Double(f[4]),
-            playbackRate: f[5] == "playing" ? 1 : 0,
-            sourceBundleID: app, timestamp: Date()
-        )
+        snapshot.artworkData = await artworkData(url: fields[6])
         lock.withLock { continuation }?.yield(.snapshot(snapshot))
+    }
+
+    /// Builds a snapshot (without artwork bytes) from the script's newline-separated output:
+    /// title, artist, album, duration ms, position ms, player state, artwork URL, track id.
+    static func parseSnapshot(fields: [String], app: String, now: Date) -> NowPlayingSnapshot? {
+        guard fields.count >= 8 else { return nil }
+        let artworkURL = fields[6]
+        return NowPlayingSnapshot(
+            title: fields[0], artist: fields[1], album: fields[2],
+            artworkData: nil, artworkID: artworkURL.isEmpty ? fields[7] : artworkURL,
+            duration: seconds(fromMilliseconds: fields[3]),
+            elapsed: seconds(fromMilliseconds: fields[4]),
+            playbackRate: fields[5] == "playing" ? 1 : 0,
+            sourceBundleID: app, timestamp: now
+        )
+    }
+
+    /// nil rather than 0 when the field is not an integer: an absent duration beats a wrong one.
+    private static func seconds(fromMilliseconds text: String) -> TimeInterval? {
+        guard let ms = Int(text.trimmingCharacters(in: .whitespaces)) else { return nil }
+        return TimeInterval(ms) / 1000
     }
 
     private func artworkData(url: String) async -> Data? {
