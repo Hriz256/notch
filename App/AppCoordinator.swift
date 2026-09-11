@@ -1,5 +1,6 @@
 import SwiftUI
 import IslandCore
+import MusicFeature
 
 @MainActor
 @Observable
@@ -18,7 +19,7 @@ final class AppCoordinator {
 
     func start() {
         surface.start()
-        // Features are registered in Task 10.
+        registry.register(MusicFeature(), enabledByDefault: true)
     }
 
     func stop() {
