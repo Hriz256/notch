@@ -32,8 +32,16 @@ targets:
         product: NowPlayingClient
       - package: NotchKit
         product: MusicFeature
+      - package: NotchKit
+        product: CodeAgentShared
+      - package: NotchKit
+        product: CodeAgentFeature
       - target: NotchHelper
         embed: true
+      - target: NotchHook
+        embed: true
+        copy:
+          destination: executables
     info:
       path: App/Info.plist
       properties:
@@ -63,10 +71,19 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.apple.controlcenter.NotchHelper
+  NotchHook:
+    type: tool
+    platform: macOS
+    sources: [HookCLI]
+    settings:
+      base:
+        PRODUCT_NAME: notch-hook
+        PRODUCT_BUNDLE_IDENTIFIER: app.notch.hook
 schemes:
   Notch:
     build:
       targets:
         Notch: all
+        NotchHook: all
     run:
       config: Debug
