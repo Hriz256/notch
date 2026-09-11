@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Four bars that bounce while playing and rest low when paused. Purely decorative.
+/// Four bars that bounce while playing and rest as centered dots when paused.
+/// Purely decorative.
 struct VisualizerBars: View {
     let isPlaying: Bool
     var color: Color = .white
@@ -16,7 +17,10 @@ struct VisualizerBars: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
+        // Centered so every bar grows symmetrically about the vertical midline: while
+        // playing they expand up and down from the middle, and the 3 pt resting dots
+        // land exactly in the centre of the 14 pt frame instead of sitting on its floor.
+        HStack(alignment: .center, spacing: 2) {
             ForEach(heights.indices, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 1)
                     .fill(color)
@@ -32,7 +36,7 @@ struct VisualizerBars: View {
                                value: AnimationKey(isPlaying: isPlaying, phase: phase))
             }
         }
-        .frame(height: 14, alignment: .bottom)
+        .frame(height: 14, alignment: .center)
         .onAppear { if isPlaying { phase = true } }
         // Clear `phase` unanimated first so a resumed run always starts its repeating
         // animation from the same known state rather than from a half-finished cycle.
