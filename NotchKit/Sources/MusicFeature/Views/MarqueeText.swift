@@ -20,9 +20,18 @@ struct MarqueeText: View {
                 if needsScroll { label }
             }
             .offset(x: needsScroll ? offset : 0)
-            .onAppear { containerWidth = geo.size.width; restart() }
-            .onChange(of: geo.size.width) { _, w in containerWidth = w; restart() }
-            .onChange(of: text) { _, _ in restart() }
+            .onAppear { containerWidth = geo.size.width }
+            .onChange(of: geo.size.width) { _, w in containerWidth = w }
+            // The scroll loop depends on the two measured widths, so restart when either
+            // lands rather than when `text` changes: on a track change the new width is
+            // only known after the next layout pass.
+            .onChange(of: containerWidth) { _, _ in restart() }
+            .onChange(of: textWidth) { _, _ in restart() }
+            // A new title that happens to measure the same width leaves `textWidth`
+            // unchanged, so also restart here; the widths are still correct in that case.
+            // Assigning `offset` outside an animation also cancels the previous loop
+            // immediately so the old title's scroll does not linger under the new one.
+            .onChange(of: text) { _, _ in offset = 0; restart() }
         }
         .frame(height: 18)
         .clipped()
@@ -39,7 +48,11 @@ struct MarqueeText: View {
             .foregroundStyle(color)
             .lineLimit(1)
             .fixedSize()
-            .background(GeometryReader { g in Color.clear.onAppear { textWidth = g.size.width } })
+            // `onGeometryChange` re-reports on every layout change, unlike an `onAppear`
+            // inside a background reader: the `Text` keeps its identity across a track
+            // change, so `onAppear` would fire once and freeze `textWidth` at the first
+            // title's width.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
     }
 
     private func restart() {
