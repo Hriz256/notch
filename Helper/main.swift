@@ -1,13 +1,11 @@
 import Foundation
+import os
 
-// Replaced in Task 7 with the real XPC listener.
-final class PlaceholderDelegate: NSObject, NSXPCListenerDelegate {
-    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection newConnection: NSXPCConnection) -> Bool {
-        false
-    }
-}
-
-let delegate = PlaceholderDelegate()
+let logger = Logger(subsystem: "app.notch", category: "helper.main")
+let bridge = MediaRemoteBridge()
+if bridge == nil { logger.error("MediaRemote could not be loaded") }
+let monitor = bridge.map { NowPlayingMonitor(bridge: $0) }
+let delegate = ServiceDelegate(monitor: monitor)
 let listener = NSXPCListener.service()
 listener.delegate = delegate
 listener.resume()
