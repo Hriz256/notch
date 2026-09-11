@@ -11,6 +11,11 @@ public struct SurfaceView: View {
     private let geometry: NotchGeometry
     private let choreographer: TransitionChoreographer
 
+    /// Last layout handed to `.animation(_:value:)`. Written only from `onChange`, which runs
+    /// after `body`, so the value read while building `body` is genuinely the previous one.
+    /// It feeds nothing but the choice of curve, so the extra update it schedules is inert.
+    @State private var previousLayout: IslandLayout?
+
     public init(presenter: IslandPresenter, geometry: NotchGeometry, choreographer: TransitionChoreographer) {
         self.presenter = presenter
         self.geometry = geometry
@@ -20,21 +25,25 @@ public struct SurfaceView: View {
     public var body: some View {
         let current = presenter.current
         let layout = IslandLayout.resolve(state: presenter.state, current: current, geometry: geometry)
+        // The notch itself is the floor: the black shape may cover it, never sit inside it.
+        let floor = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
+        let animation = choreographer.geometryAnimation(from: previousLayout, to: layout)
 
         ZStack(alignment: .top) {
             NotchShape(topRadius: layout.topRadius, bottomRadius: layout.bottomRadius)
                 .fill(Color.black)
-                .frame(width: layout.size.width + 2 * layout.topRadius, height: layout.size.height)
+                .islandFrame(size: layout.size, flare: layout.topRadius, minimum: floor)
                 .contentShape(Rectangle())
                 .onTapGesture { presenter.toggleHoverPromotion() }
 
             content(layout: layout, current: current)
-                .frame(width: layout.size.width, height: layout.size.height, alignment: .top)
+                .islandFrame(size: layout.size, minimum: floor, alignment: .top)
                 .clipShape(NotchShape(topRadius: 0, bottomRadius: layout.bottomRadius))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(choreographer.geometry, value: layout)
-        .animation(choreographer.geometry, value: presenter.state)
+        .animation(animation, value: layout)
+        .animation(animation, value: presenter.state)
+        .onChange(of: layout, initial: true) { _, new in previousLayout = new }
     }
 
     /// Content enters and leaves on its own curves, not on the geometry spring: the

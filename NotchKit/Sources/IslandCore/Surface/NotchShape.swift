@@ -19,7 +19,10 @@ public struct NotchShape: Shape {
 
     public func path(in rect: CGRect) -> Path {
         let t = min(topRadius, rect.height / 2)
-        let b = min(bottomRadius, max(0, rect.height - t), (rect.width - 2 * t) / 2)
+        // Radii animate independently of the frame, so mid-transition a large bottom radius can
+        // meet a small height. Cap at half the height as well so the corners never swallow the
+        // straight edge between them (steady-state radii are all well under this cap).
+        let b = min(bottomRadius, max(0, rect.height - t), rect.height / 2, (rect.width - 2 * t) / 2)
         var p = Path()
         p.move(to: CGPoint(x: rect.minX, y: rect.minY))
         p.addQuadCurve(to: CGPoint(x: rect.minX + t, y: rect.minY + t),

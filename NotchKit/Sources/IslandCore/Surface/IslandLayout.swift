@@ -11,6 +11,12 @@ public struct IslandLayout: Equatable, Sendable {
     public var topRadius: CGFloat
     public var bottomRadius: CGFloat
 
+    /// True when `next` grows on neither axis: the island is collapsing back toward the notch.
+    /// Equal layouts count as shrinking; the curve is then irrelevant, nothing moves.
+    public func shrinks(to next: IslandLayout) -> Bool {
+        next.size.width <= size.width && next.size.height <= size.height
+    }
+
     @MainActor
     public static func resolve(state: IslandState, current: Presentation?, geometry: NotchGeometry) -> IslandLayout {
         let notch = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
