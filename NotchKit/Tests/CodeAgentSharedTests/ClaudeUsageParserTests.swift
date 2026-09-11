@@ -63,6 +63,9 @@ import Foundation
         #expect(usage.fetchedAt == now)
         #expect(usage.session?.percent == 48.0)
         #expect(usage.weekly?.percent == 64.0)
+        // Claude never states window lengths; they are fixed by the plan.
+        #expect(usage.session?.windowLength == 18_000)       // 5 h
+        #expect(usage.weekly?.windowLength == 604_800)       // 7 d
 
         var components = DateComponents()
         components.year = 2026; components.month = 9; components.day = 12
@@ -95,13 +98,15 @@ import Foundation
           "seven_day": { "utilization": 12.0, "resets_at": null } }
         """)
         #expect(usage.session == nil)
-        #expect(usage.weekly == UsageWindow(percent: 12.0, resetsAt: nil))
+        #expect(usage.weekly == UsageWindow(percent: 12.0, resetsAt: nil, windowLength: 604_800))
     }
 
     @Test func parsesLimitsOnlySample() throws {
         let usage = try parse(limitsOnlySample)
         #expect(usage.session?.percent == 33.0)
         #expect(usage.weekly?.percent == 71.5)
+        #expect(usage.session?.windowLength == 18_000)       // 5 h
+        #expect(usage.weekly?.windowLength == 604_800)       // 7 d
         #expect(usage.session?.resetsAt == Date(timeIntervalSince1970: 1_789_245_000))
     }
 

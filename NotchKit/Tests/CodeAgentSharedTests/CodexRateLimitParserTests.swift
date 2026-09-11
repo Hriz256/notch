@@ -32,7 +32,12 @@ import Foundation
         #expect(usage.agent == .codex)
         #expect(usage.fetchedAt == now)
         #expect(usage.planLabel == "free")
-        #expect(usage.session == UsageWindow(percent: 77, resetsAt: Date(timeIntervalSince1970: 1_790_147_743)))
+        // windowDurationMins 43 200 = 30 days: the Codex "primary" window is not always 5 h.
+        #expect(usage.session == UsageWindow(
+            percent: 77,
+            resetsAt: Date(timeIntervalSince1970: 1_790_147_743),
+            windowLength: 43_200 * 60
+        ))
         #expect(usage.weekly == nil)
         #expect(usage.sparkline.isEmpty)
     }
@@ -47,6 +52,8 @@ import Foundation
         #expect(usage.session?.percent == 4)
         #expect(usage.weekly?.percent == 1)
         #expect(usage.weekly?.resetsAt == Date(timeIntervalSince1970: 1_782_984_469))
+        #expect(usage.session?.windowLength == 18_000)       // 300 min
+        #expect(usage.weekly?.windowLength == 604_800)       // 10 080 min
         #expect(usage.planLabel == "prolite")
     }
 
@@ -57,7 +64,11 @@ import Foundation
           "secondary":{"used_percent":1.5,"window_minutes":10080,"reset_at":1782984469},
           "plan_type":"plus"}}
         """), now: now))
-        #expect(usage.session == UsageWindow(percent: 4.0, resetsAt: Date(timeIntervalSince1970: 1_782_397_669)))
+        #expect(usage.session == UsageWindow(
+            percent: 4.0,
+            resetsAt: Date(timeIntervalSince1970: 1_782_397_669),
+            windowLength: 300 * 60
+        ))
         #expect(usage.weekly?.percent == 1.5)
         #expect(usage.weekly?.resetsAt == Date(timeIntervalSince1970: 1_782_984_469))
         #expect(usage.planLabel == "plus")

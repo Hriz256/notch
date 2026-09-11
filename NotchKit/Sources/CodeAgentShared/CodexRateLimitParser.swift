@@ -29,6 +29,10 @@ public enum CodexRateLimitParser {
               let percent = UsageJSON.double(UsageJSON.value(object, "usedPercent", "used_percent"))
         else { return nil }
         let resetsAt = UsageJSON.date(UsageJSON.value(object, "resetsAt", "resets_at", "reset_at"))
-        return UsageWindow(percent: percent, resetsAt: resetsAt)
+        // Codex reports the rolling window in minutes, and it is *not* always 5 h / 7 d
+        // (a free plan's `primary` is 43 200 min = 30 days).
+        let minutes = UsageJSON.double(UsageJSON.value(object, "windowDurationMins", "window_minutes"))
+        let windowLength = minutes.flatMap { $0 > 0 ? $0 * 60 : nil }
+        return UsageWindow(percent: percent, resetsAt: resetsAt, windowLength: windowLength)
     }
 }

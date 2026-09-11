@@ -6,10 +6,15 @@ public struct UsageWindow: Codable, Sendable, Equatable {
     public var percent: Double
     /// Absent when the provider does not report a reset time.
     public var resetsAt: Date?
+    /// How long the rolling window is, in seconds — 5 h / 7 d for Claude, whatever
+    /// `windowDurationMins` reports for Codex. `nil` when the provider does not say
+    /// (Cursor's monthly request quota), in which case pace cannot be computed.
+    public var windowLength: TimeInterval?
 
-    public init(percent: Double, resetsAt: Date?) {
+    public init(percent: Double, resetsAt: Date?, windowLength: TimeInterval? = nil) {
         self.percent = percent
         self.resetsAt = resetsAt
+        self.windowLength = windowLength
     }
 }
 
@@ -96,13 +101,14 @@ public enum ResetFormatter {
 enum UsageJSON {
     /// Reset stamps arrive as ISO-8601 (with or without fractional seconds) or as epoch seconds.
     static func date(_ value: Any?) -> Date? {
+        guard let value, !(value is NSNull) else { return nil }
         switch value {
-        case let number as NSNumber where !(number is NSNull):
+        case let string as String:
+            return date(fromISO: string)
+        case let number as NSNumber:
             let seconds = number.doubleValue
             guard seconds > 0 else { return nil }
             return Date(timeIntervalSince1970: seconds)
-        case let string as String:
-            return date(fromISO: string)
         default:
             return nil
         }
@@ -134,7 +140,7 @@ enum UsageJSON {
 
     /// A JSON number that may be an `Int`, a `Double`, or absent/null.
     static func double(_ value: Any?) -> Double? {
-        guard let number = value as? NSNumber, !(number is NSNull) else { return nil }
+        guard let value, !(value is NSNull), let number = value as? NSNumber else { return nil }
         // `Bool` bridges to NSNumber too; a boolean percentage is never meaningful.
         if CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
         return number.doubleValue
