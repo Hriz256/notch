@@ -90,7 +90,13 @@ final class NowPlayingMonitor: @unchecked Sendable {
     func send(_ command: MediaRemoteBridge.Command) {
         queue.async { [self] in
             let ok = bridge.sendCommand(command.rawValue, nil)
-            if !ok { logger.error("MediaRemote rejected command \(command.rawValue, privacy: .public)") }
+            if !ok {
+                logger.error("MediaRemote rejected command \(command.rawValue, privacy: .public)")
+                // The app may have applied the command optimistically. Nothing actually changed, so
+                // the corrective snapshot equals the last one sent and would be deduped into
+                // silence, leaving the UI stuck in the wrong state.
+                dedup.reset()
+            }
             scheduleRefresh()
         }
     }
@@ -147,11 +153,12 @@ final class NowPlayingMonitor: @unchecked Sendable {
         let artwork = info[MediaRemoteBridge.InfoKey.artworkData] as? Data
         let artworkID = Self.artworkIdentifier(info[MediaRemoteBridge.InfoKey.artworkIdentifier], artwork: artwork)
         // `isPlaying` decides paused vs playing; the info rate only refines a playing rate (e.g. a
-        // podcast at 1.5x). A source that omits the rate or reports 0 while playing still reads 1.
-        // Non-finite is treated as missing: `max(.nan, 1)` is NaN, which `sanitized()` would then
-        // flatten to 0 and show as paused.
+        // podcast at 0.75x or 1.5x), so sub-1x rates are kept as reported — flooring them to 1 would
+        // make the progress projection run ahead and snap back on every snapshot. Only a missing,
+        // non-finite or non-positive rate is treated as unknown and reads 1, since a rate of 0 or NaN
+        // while playing means the source omits it, and `sanitized()` would flatten it to "paused".
         let rawRate = info[MediaRemoteBridge.InfoKey.playbackRate] as? Double
-        let playbackRate: Double = isPlaying ? max(rawRate.flatMap { $0.isFinite ? $0 : nil } ?? 1, 1) : 0
+        let playbackRate: Double = isPlaying ? (rawRate.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1) : 0
         let snapshot = NowPlayingSnapshot(
             title: info[MediaRemoteBridge.InfoKey.title] as? String,
             artist: info[MediaRemoteBridge.InfoKey.artist] as? String,

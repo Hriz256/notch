@@ -15,7 +15,10 @@ struct StatusMenu: View {
         }
         Toggle("Track change peek", isOn: $trackChangePeek)
         Divider()
+        // Reloading is a no-op while music is off, so the button reflects that rather than looking
+        // like it did something.
         Button("Reload helper") { coordinator.reloadMusic() }
+            .disabled(!coordinator.registry.isEnabled(MusicViewModel.featureID))
         Divider()
         #if DEBUG
         Button("Toggle demo island") { coordinator.toggleDemo() }

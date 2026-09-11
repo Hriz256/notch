@@ -31,8 +31,15 @@ final class AppCoordinator {
 
     /// Tears the music feature down and brings it back: the coordinator and its XPC connection
     /// are rebuilt, which also re-requests the full now-playing state.
+    ///
+    /// A reload of a feature the user has switched off would silently switch it back on, so it is
+    /// a no-op while the feature is disabled.
     func reloadMusic() {
         let id = MusicViewModel.featureID
+        guard registry.isEnabled(id) else {
+            logger.notice("Music feature is disabled: skipping helper reload")
+            return
+        }
         logger.info("Reloading music helper")
         registry.setEnabled(id, false)
         registry.setEnabled(id, true)
