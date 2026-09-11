@@ -1,0 +1,491 @@
+A clean Dynamic Island for your Mac
+ASR processing failed: 
+ASR vocabulary '
+Accessing Environment's value outside of being installed on a View. This will always read the default value and will not update.
+Accessing Environment<%s>'s value outside of being installed on a View. This will always read the default value and will not update.
+Activate License
+Adds words you correct after dictating
+After the pointer leaves
+Agent icon sways and shifts colors while your Mac is held awake
+Alert when plugged in or unplugged
+Alerts may increase energy usage when running multiple code sessions.
+Alerts on charge changes. Display in stack keeps the percentage on screen.
+All insertion paths failed; transcript copied to clipboard
+All sessions complete!
+Always show the battery percentage
+Amazon Music
+Animation clock resumed (%{public}s)
+Animation clock suspended (%{public}s)
+App staged successfully
+Apple Music
+Applying staged update %{public}s
+AsrManager not initialized. Call initialize() first.
+Automatic Updates
+Back on the shortcut layer.
+Beats Studio Buds
+Beats Studio Buds+
+Binaural Beats: 
+Bluetooth Headphones
+Bluetooth Speaker
+Brainwave entrainment tones, play along with focus music
+Briefly show your task every 5 minutes
+Built-in Speaker
+Built-in takes priority. External used when lid is closed.
+Bundle is not signed by team %{public}s
+Caffeinate Agent
+Calendar access required to show events.
+Case-insensitive trigger-to-text replacements
+Charge alerts and notch display
+Charging notifications
+Check for Updates
+Checking trial status...
+Checksum verification failed for 
+Chime when battery hits 
+Choose Your Style
+Choose how you'd like to proceed
+Chunk encode finished without a result
+Claude Code Event
+Claude Code Usage
+Claude Code-credentials
+Cleaned up staging directory
+Cleaned up update cache
+Clipboard changed since the dictation; left alone
+Clipboard restored (
+Code agent activity during Focus
+Code agent activity during flow
+Code signature verification failed: %s
+Code signature verified successfully: %s
+Codex CLI not found
+Collapse, then switch activity
+Comfortably Numb
+Completion sound
+Configure how Seam runs on your Mac
+Connect another output device to start hiding the ones you do not use.
+Connect to the internet to start a trial, or enter a license key to continue.
+Connection alerts
+Connection failed. Please try again.
+Connection required to continue
+Connection required to start trial
+Continue Download
+Contradictory frame constraints specified.
+Copy left on the clipboard (
+Copy to Clipboard
+Could not extend the trial. Please try again.
+Could not find this city. Please try again.
+Could not remove the device. Check your internet connection and try again.
+Couldn't connect. Check your internet.
+Couldn't install update: 
+Couldn't launch updater: 
+Couldn't open update: 
+Couldn't save update file
+Current Capacity
+Cursor API returned 
+Cursor not installed
+Cursor rejected the stored session
+Custom Replacements
+Custom dictionary
+Customize Preferences
+Cycle Audio Output
+Cycle outputs with keyboard
+DMG mount failed: %s
+DMG mount response parse failed (data size: %ld)
+DMG mount succeeded but no mount point in plist output
+Deactivate this Mac
+Deactivation Failed
+Decoder destination stride
+Decoder projection hidden size mismatch: 
+Decoder projection stride
+Decoder projection stride exceeds buffer bounds
+Decoder projection time axis must be 1: 
+Deep Work
+Delete restores the shortcut layer.
+Delivering state update
+Destination stride
+Detach failed to run: %s
+Detach returned non-zero for %s
+Device Connections
+Digest mismatch
+Discarding staged update %{public}s
+Display Identifier
+Display in screenshots
+Display in stack
+Display usage when idle
+Display when apps go fullscreen
+Display when idle
+Display when on code window
+Display when on media window
+DisplayPort Audio
+Don't worry, you can change all this later in Settings.
+Download and Restart
+Download cancelled
+Download complete: %s
+Download failed (HTTP 
+Download failed, retry %ld/%ld
+Download failed: %s
+Download file missing
+Download in Progress
+Download incomplete. Please try again.
+Download manually
+Download size mismatch: got %ld, expected %ld
+Drag files near the Surface to AirDrop or stash.
+Drag files near the Surface to quickly AirDrop or stash them for later.
+Duplicate values for key: '
+Duration bin index out of range: 
+During Recording
+Ed25519 signature verification failed
+Ed25519 signature verified successfully
+Edit this shortcut
+Enable in Privacy & Security 
+Encoder frame index out of range: 
+Encoder hidden size mismatch: 
+Encoder output has no frames
+Expand the activity
+FROM logs
+Failed to allocate decoder state: 
+Failed to allocate joint decoder step buffer
+Failed to allocate joint duration buffer
+Failed to allocate joint encoder step buffer
+Failed to allocate joint token ID buffer
+Failed to allocate joint token prob buffer
+Failed to allocate joint top_k_ids buffer
+Failed to allocate joint top_k_logits buffer
+Failed to clean staging: %s
+Failed to clean update cache: %s
+Failed to create cache directory: %s
+Failed to create stereo audio format
+Failed to download 
+Failed to extract: 
+Failed to fetch model metadata
+Failed to load ASR models: 
+Failed to move downloaded file: %s
+Fatal error
+Feed proof does not match the configured integrity
+Finally finish that thing...
+Fingerprint inputs: serial=%s..., uuid=%s..., salt=%s..., bundleId=%s
+Focus deeply with timers and music.
+Focus notifications
+Focus timer with session tracking
+Full access to all features. No credit card required.
+Full update verification passed
+Gaming Focus (Seam hidden)
+Generated fingerprint: %s
+Get notified when your battery is low or charging.
+HTTP error: %ld
+Helper launched, quitting app
+Helper script not found
+Helps transcription. No text cleanup rules yet.
+Hidden devices are skipped in the Now Playing picker and when cycling outputs.
+Hide Seam completely while Game Mode is on
+Hide during Gaming
+Hides native macOS alerts when enabled.
+Hold Fn, Left Option, Left Command, Right Control, or Right Shift.
+Hold Fn, Left Option, Left Command, or Right Control.
+Hold to record, release to transcribe.
+Hours in Meetings
+Hover time before expanding
+Incomplete install after download: 
+Incorrect actor executor assumption; Expected same executor as 
+Inserted new assertion
+Installs next time Seam starts
+Intent corrections
+Interact with Seam using your trackpad or mouse
+Interact with the floating island
+Invalid URL construction: 
+Invalid audio data provided. Must be at least 1 second of 16kHz audio.
+Invalid audio input format: 
+Invalid decoder output
+Invalid decoder projection rank: 
+Invalid download URL
+Invalid encoder output
+Invalid encoder output length
+Invalid encoder output shape: 
+Invalid hardcoded URL: 
+Invalid hidden stride: 0
+Invalid license key
+Invalid mount response
+Invalid public key configuration
+Invalid response from server
+Invalid signature format
+Island Visibility
+Joint decision output missing duration
+Joint decision output missing token_id
+Joint decision output missing token_prob
+Joint decision returned unexpected tensor shapes
+Jump to browser tab
+Keep files temporarily
+Keep your Mac awake while agents work
+Know instantly when your audio devices connect.
+Know when Focus or Do Not Disturb is active.
+LIMIT 20
+Launch at startup
+Learn from corrections
+Learned Replacements
+Library/Application Support/Cursor/User/globalStorage/state.vscdb
+License Activated
+License active on 
+Loading devices...
+Local AI, private and offline
+Location access denied
+Location access required for automatic weather.
+Lock notifications
+Low battery warning
+Meeting time will appear here automatically
+Microphone changed. Try again.
+Missing coremldata.bin in model: 
+Missing metadata for feature: 
+Missing required encoder input: 
+Missing runtime for feature: 
+Model deletion requires an explicit user-initiated authorization token.
+Model is downloading
+Model not downloaded. Open Settings to download.
+Model path is not a directory: 
+Native alerts may appear until Accessibility is enabled.
+Network connection required to verify license
+No Accessibility permission; transcript copied to clipboard
+No Codex home found
+No Codex home has credentials
+No Codex home has valid credentials
+No Cursor session
+No Cursor session, sign in to the Cursor app
+No OAuth token in Keychain
+No audio detected. Check your microphone.
+No audio recorded.
+No coding activity yet
+No devices activated
+No dictation yet
+No flow sessions yet
+No meetings tracked yet
+No mount point found
+No output devices available
+No rate-limit records in any Codex home
+No replacements yet.
+No update available
+Normalize numbers
+Notch overlay active
+Notch wraps around your camera cutout. Island floats as a pill just below the menu bar.
+Nothing learned yet.
+Nothing was decoded; the clipboard is left alone
+Notification when your Mac locks or unlocks.
+Now Playing activity
+Now Playing and upcoming events during Focus
+Now Playing and upcoming events during flow
+OAuth usage API returned 
+ORDER BY id DESC
+Offer Add to Stash as an extra zone
+Offer Replace Stash as an extra zone
+Open Translate app to download 
+Open the expanded view without clicking
+Open the now playing tab
+Output device picker
+PRAGMA table_info(logs)
+Paste failed: CGEvent create for Cmd+V returned nil
+Paste failed: the pasteboard write returned false
+Paste insertion (
+Paste your license key
+Peek at the current activity
+Personalized Volume: delta=
+Pink Floyd
+Pinned hosting view appearance to %{public}s
+Pinning: NO match found - rejecting connection
+Pinning: chain has %ld certificates, checking against %ld pinned hashes
+Pinning: computed SPKI hash=%s
+Pinning: evaluating trust for %s
+Pinning: expected hashes: %s
+Pinning: failed to copy certificate chain
+Pinning: failed to copy public key from certificate
+Pinning: failed to export public key: %s
+Pinning: key type=%s size=%ld
+Pinning: no pins configured, deferring to system trust
+Pinning: no server trust available
+Pinning: raw public key data size=%ld bytes
+Pinning: trust evaluation failed: %s
+Pinning: unknown key type: %s
+Pinning: unsupported EC key size: %ld
+Pinning: unsupported RSA key size: %ld
+Pinning: using EC P-256 ASN.1 header
+Pinning: using EC P-384 ASN.1 header
+Pinning: using RSA 2048 ASN.1 header
+Pinning: using RSA 4096 ASN.1 header
+Play a chime when a session completes
+Play ambient audio when no music is playing
+Play sound on complete
+Play sound on lock
+Play sound on start
+Play sound on unlock
+Point at a setting to see what it does.
+Power Source State
+Powerbeats Pro 2
+Prepared decoder step shape mismatch: 
+Press a modifier key
+Press the keys you want.
+Press to record, press again to stop.
+Press your voice key + a letter to transcribe and translate.
+Published digest is not a sha256
+Punctuation dictation
+Purchase a license to continue
+Puts back what you had copied a second later, leaving the dictation just under it in your clipboard history.
+Quick access from menu bar
+Ready, installs when you next start Seam
+Receive alerts when code completed
+Record your voice and transcribe it locally using AI.
+Reduce Interruptions
+Refusing to verify a bundle with no team configured
+Relaunch failed: %{public}s
+Relaunching into %{public}s
+Remove filler words
+Remove learned word
+Remove microphone
+Remove replacement
+Replay the welcome tour
+Required for automatic weather
+Required for the output shortcut
+Required for transcription
+Required for voice transcription
+Required to hide native alerts
+Required to show events
+Requires Apple Silicon (M1 or later)
+Restart Onboarding
+Restore Clipboard
+Reverse swipe direction
+SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';
+Salt: loaded existing from keychain
+Salt: none found, created new salt
+Save failed: %d
+Scroll event name
+Scroll song titles
+Seam is downloading the transcription model. The download will continue automatically next time you open the app.
+Seam is keeping coding agents awake
+Seam is ready to use
+Seam records from the highest-ranked microphone that is connected.
+Search for a city...
+See a beautiful indicator when you adjust brightness.
+See a confirmation when your Mac locks or unlocks.
+See beautiful indicators when you adjust volume or brightness.
+See live activity when Claude Code or Codex are working.
+See live weather conditions in the notch
+See live weather conditions in the notch.
+See upcoming events before they start
+See upcoming events before they start.
+See what's playing and control your music.
+Selected microphone is unavailable.
+Send files via AirDrop
+Share ideas and report issues
+Shortcuts combine this modifier with Shift and a letter. Record a different one on any feature's own settings row.
+Show Claude Usage
+Show Codex Usage
+Show Cursor Usage
+Show Menu Bar Icon
+Show Now Playing
+Show all-day events
+Show code agent activity in Surface
+Show code events
+Show during active meetings
+Show event location
+Show icon in menu bar
+Show in full screen
+Show last track even when paused
+Show music and calendar
+Show output switching in the expanded player
+Show overlay when code app is focused
+Show overlay when media app is focused
+Show pace indicator on usage bars
+Show peek when song changes
+Show today's events
+Show when Focus modes change
+Show when adjusting brightness
+Show when adjusting volume
+Show when headphones and audio devices connect
+Show when screen locks or unlocks
+Show zones when dragging files
+Shown on the display where your pointer is.
+Shown on your built-in display and every external display at the same time.
+Shows active Focus mode on change.
+Shows events a few minutes before they start.
+Signature verification failed
+Skip This Version
+Skip tracks while music is playing
+Skipped version %{public}s
+Staged apply failed: %{public}s
+Staged helper ignored: bundle is not signed by this team
+Staging failed: %{public}s
+Staging update from: %s
+Start Flow Music
+Start Flow session
+Start Music With Flow
+Start Seam when you log in
+Start a flow session to begin tracking
+Start dictating to see your stats
+Start or Stop Flow
+Start or Stop Flow Music
+Start your 48-hour free trial or enter a license key to continue.
+Start your 48-hour free trial to use this feature
+Starting download from: %s
+Stop Caffeinating Agent
+Summon the island from the top
+Swipe horizontally
+Swipe left or right to change tracks
+Switch to the next visible output device
+Sync keychain unavailable, using local storage
+Sync settings across my Macs
+System caches directory unavailable, using temp directory
+Team identifier verified: %{public}s
+Tells Seam which languages to expect. Spoken numbers and punctuation are converted for the ones that have rules.
+Temperature unit
+Text copied to clipboard (
+The device currently playing cannot be hidden
+The download did not arrive complete.
+The download does not match what was published
+The update is not signed by this app's developer
+This app is not configured to install its own updates
+This device cannot be hidden
+This license has been revoked
+This will deactivate Seam on this Mac. You'll need to re-enter your license key to use Seam again.
+Token, timestamp, and confidence arrays are misaligned
+Track change animation
+Track your productivity across Voice, Flow, Code, and Calendar.
+Transcription Model
+Transcription failed. Try again.
+Transcription model not loaded. Download it in Settings.
+Translation Shortcuts
+Turn on Binaural Beats
+Turning this off may miss security updates
+Unable to determine location
+Unable to find city
+Unicode keystroke failed: CGEvent create returned nil
+Unicode keystroke insertion (
+Unknown Location
+Unsupported batch dimension: 
+Unsupported decoder batch dimension: 
+Unsupported decoder projection type: 
+Unsupported encoder output type: 
+Update Available
+Update Check Failed
+Update helper not found
+Update package is invalid
+Update signature missing
+Update verification failed
+Update verification failed: 
+Updates install only from the Applications folder
+Updating weather...
+Use Claude Code or Codex to see usage
+Use a letter with Control, Option, or Command.
+Use calendar colors
+Use current location
+Using the staged build's helper
+Voice Transcription
+Voice session cancelled.
+Voice transcription requires Apple Silicon (M1 or later).
+Volume, brightness, and battery during flow
+We'll ask for a few permissions to work smoothly.
+Weather update failed. Will retry automatically.
+What a drop does when the stash already has files
+Works best with stereo headphones.
+XPC reconnect exhausted after 
+You're up to date!
+Your Mac stays awake while agents work
+Your day is clear
+Your personal content stays on your Mac.
+Your trial has begun
+Your trial has expired. Buy Seam to keep using it.
+Your trial has expired. Get more time, or buy Seam to keep it for good.
+Your trial has expired. Purchase a license to continue.

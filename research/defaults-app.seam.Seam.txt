@@ -1,0 +1,27 @@
+{
+    "app.seam.interactionHistory" = {length = 26, bytes = 0x7b226d75 73696322 3a383130 38333936 ... 2e363835 3539357d };
+    "app.seam.userState" = {length = 244, bytes = 0x7b226973 46697273 744c6175 6e636822 ... 312e3134 2e37227d };
+    builtInDisplayMode = notch;
+    calendarNotificationsEnabled = 1;
+    codeEventsClaudeCodeEnabled = 1;
+    codeEventsClaudeCodeShowWhenIdle = 1;
+    codeEventsCodexEnabled = 1;
+    codeEventsCodexShowWhenIdle = 1;
+    codeEventsCursorEnabled = 1;
+    codeEventsCursorShowWhenIdle = 1;
+    codeEventsEnabled = 1;
+    codeEventsPlayCompleteSound = 1;
+    connectivityEnabled = 1;
+    dropzonesEnabled = 1;
+    externalDisplayMode = bar;
+    flowTimerEnabled = 1;
+    hoverDelayScaleMigrated = 1;
+    multiDisplayPlacement = automatic;
+    nowPlayingEnabled = 1;
+    showMenuBarIcon = 1;
+    swetrixInstallID = "3313069a-825c-4ec4-9727-ed87dc7ea7b8";
+    "sys.pref.53ff45fea24a3594" = 9ee021b200524603;
+    "update.lastCheck" = "1789146748.799903";
+    voiceEnabled = 1;
+    weatherEnabled = 1;
+}
