@@ -24,7 +24,11 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// of being published and becoming the dedup baseline.
     private var epoch: UInt64 = 0
 
+    /// Info-did-change arrives in bursts (one per changed key), so those are coalesced.
     private static let debounce: DispatchTimeInterval = .milliseconds(150)
+    /// Play/pause flips arrive as a single notification and are the most latency-visible change in
+    /// the UI (the visualizer and the glyph), so they are refreshed without coalescing.
+    private static let immediate: DispatchTimeInterval = .milliseconds(0)
 
     init(bridge: MediaRemoteBridge) {
         self.bridge = bridge
@@ -46,10 +50,11 @@ final class NowPlayingMonitor: @unchecked Sendable {
             bridge.register(queue)
             let center = NotificationCenter.default
             for name in [MediaRemoteBridge.infoDidChange, MediaRemoteBridge.isPlayingDidChange, MediaRemoteBridge.applicationDidChange] {
+                let delay: DispatchTimeInterval = name == MediaRemoteBridge.isPlayingDidChange ? Self.immediate : Self.debounce
                 // Delivered on an unspecified queue; hop onto `queue` so all state stays confined.
                 observers.append(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                     guard let self else { return }
-                    queue.async { [weak self] in self?.scheduleRefresh() }
+                    queue.async { [weak self] in self?.scheduleRefresh(after: delay) }
                 })
             }
             let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: queue)
@@ -99,43 +104,54 @@ final class NowPlayingMonitor: @unchecked Sendable {
 
     // MARK: Private (on `queue`)
 
-    private func scheduleRefresh() {
+    private func scheduleRefresh(after delay: DispatchTimeInterval = NowPlayingMonitor.debounce) {
         pendingRefresh?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.refresh() }
         pendingRefresh = item
-        queue.asyncAfter(deadline: .now() + Self.debounce, execute: item)
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     private func refresh() {
         epoch &+= 1
         let current = epoch
         bridge.getInfo(queue) { [weak self] dict in
-            // Both replies arrive on `queue`, so `epoch` is read under the same confinement it is
+            // Every reply arrives on `queue`, so `epoch` is read under the same confinement it is
             // written under. A newer refresh having started means this reply is stale: drop it.
             guard let self, current == epoch else { return }
             let info = (dict as NSDictionary?) as? [String: Any] ?? [:]
-            // Both symbols are optional (see MediaRemoteBridge); without them the source app is unknown.
-            guard let getClient = bridge.getClient, bridge.clientBundleID != nil else {
-                publish(info: info, bundleID: nil)
-                return
-            }
-            getClient(queue) { [weak self] client in
+            // The info dictionary's playback rate is unreliable (Spotify omits it or reports 0 while
+            // playing), so the application-is-playing flag is fetched as the authoritative source.
+            bridge.getIsPlaying(queue) { [weak self] isPlaying in
                 guard let self, current == epoch else { return }
-                // No client is the common "nothing is playing" state, and the bundle-id function
-                // must not be called with a NULL client.
-                guard let client else {
-                    publish(info: info, bundleID: nil)
+                // Both symbols are optional (see MediaRemoteBridge); without them the source app is unknown.
+                guard let getClient = bridge.getClient, bridge.clientBundleID != nil else {
+                    publish(info: info, isPlaying: isPlaying, bundleID: nil)
                     return
                 }
-                let bundleID = bridge.clientBundleID?(client)?.takeUnretainedValue() as String?
-                publish(info: info, bundleID: bundleID)
+                getClient(queue) { [weak self] client in
+                    guard let self, current == epoch else { return }
+                    // No client is the common "nothing is playing" state, and the bundle-id function
+                    // must not be called with a NULL client.
+                    guard let client else {
+                        publish(info: info, isPlaying: isPlaying, bundleID: nil)
+                        return
+                    }
+                    let bundleID = bridge.clientBundleID?(client)?.takeUnretainedValue() as String?
+                    publish(info: info, isPlaying: isPlaying, bundleID: bundleID)
+                }
             }
         }
     }
 
-    private func publish(info: [String: Any], bundleID: String?) {
+    private func publish(info: [String: Any], isPlaying: Bool, bundleID: String?) {
         let artwork = info[MediaRemoteBridge.InfoKey.artworkData] as? Data
         let artworkID = Self.artworkIdentifier(info[MediaRemoteBridge.InfoKey.artworkIdentifier], artwork: artwork)
+        // `isPlaying` decides paused vs playing; the info rate only refines a playing rate (e.g. a
+        // podcast at 1.5x). A source that omits the rate or reports 0 while playing still reads 1.
+        // Non-finite is treated as missing: `max(.nan, 1)` is NaN, which `sanitized()` would then
+        // flatten to 0 and show as paused.
+        let rawRate = info[MediaRemoteBridge.InfoKey.playbackRate] as? Double
+        let playbackRate: Double = isPlaying ? max(rawRate.flatMap { $0.isFinite ? $0 : nil } ?? 1, 1) : 0
         let snapshot = NowPlayingSnapshot(
             title: info[MediaRemoteBridge.InfoKey.title] as? String,
             artist: info[MediaRemoteBridge.InfoKey.artist] as? String,
@@ -144,14 +160,14 @@ final class NowPlayingMonitor: @unchecked Sendable {
             artworkID: artworkID,
             duration: info[MediaRemoteBridge.InfoKey.duration] as? Double,
             elapsed: info[MediaRemoteBridge.InfoKey.elapsedTime] as? Double,
-            playbackRate: info[MediaRemoteBridge.InfoKey.playbackRate] as? Double ?? 0,
+            playbackRate: playbackRate,
             sourceBundleID: bundleID,
             timestamp: info[MediaRemoteBridge.InfoKey.timestamp] as? Date ?? Date()
         )
         // Sanitize before dedup: MediaRemote reports NaN durations for live streams, and NaN never
         // compares equal, so raw values would defeat `isEquivalent` and send on every notification.
         guard let prepared = dedup.prepare(snapshot.sanitized(), now: Date()) else { return }
-        logger.debug("Snapshot: \(prepared.title ?? "-", privacy: .public) rate=\(prepared.playbackRate) artwork=\(prepared.artworkData?.count ?? 0)B")
+        logger.debug("Snapshot: \(prepared.title ?? "-", privacy: .public) isPlaying=\(isPlaying, privacy: .public) rawRate=\(rawRate ?? .nan) rate=\(prepared.playbackRate) artwork=\(prepared.artworkData?.count ?? 0)B")
         sendSnapshot?(prepared)
     }
 
