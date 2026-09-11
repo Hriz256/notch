@@ -11,6 +11,8 @@
 		24BB646E8280BF7005276E3B /* MusicFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 9235D02F51730FDDF3FF6482 /* MusicFeature */; };
 		2C9810F3C999792F37BFA72C /* NowPlayingShared in Frameworks */ = {isa = PBXBuildFile; productRef = 2FFCC25DFF5BB31C716D832A /* NowPlayingShared */; };
 		5EB5DB18E9E901784AAA3091 /* NotchHelper.xpc in CopyFiles */ = {isa = PBXBuildFile; fileRef = 16539A7FC4DDE89B4223DCF5 /* NotchHelper.xpc */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		64C71E1416852CBC570D0DB9 /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCC576ECACFE653F75DA28C /* AppCoordinator.swift */; };
+		781D25019837B25A2851270A /* StatusMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 519D0FBC833BFF2AF2734FEB /* StatusMenu.swift */; };
 		7D5C91F22526A4C108217F06 /* IslandCore in Frameworks */ = {isa = PBXBuildFile; productRef = F895EF8C9149EBD34AD43592 /* IslandCore */; };
 		934470EC2C43C99B3282F3CA /* NowPlayingClient in Frameworks */ = {isa = PBXBuildFile; productRef = CC162D9B08D12B5B9594B85D /* NowPlayingClient */; };
 		A5825EDFD2DCA7412387B2A7 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F2FE5918224B67254B48200 /* main.swift */; };
@@ -41,9 +43,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0BCC576ECACFE653F75DA28C /* AppCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCoordinator.swift; sourceTree = "<group>"; };
 		16539A7FC4DDE89B4223DCF5 /* NotchHelper.xpc */ = {isa = PBXFileReference; explicitFileType = "wrapper.xpc-service"; includeInIndex = 0; path = NotchHelper.xpc; sourceTree = BUILT_PRODUCTS_DIR; };
 		16B508E5F9AA0F6EDD199732 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		23F4D8F01E19567B2DCC6E11 /* NotchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchApp.swift; sourceTree = "<group>"; };
+		519D0FBC833BFF2AF2734FEB /* StatusMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenu.swift; sourceTree = "<group>"; };
 		6F1407BD23453DE2A470B1EF /* Notch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9F2FE5918224B67254B48200 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		9FCA840298128308FA781720 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -94,8 +98,10 @@
 		83E9CD4C0A233D4B762B6750 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				0BCC576ECACFE653F75DA28C /* AppCoordinator.swift */,
 				9FCA840298128308FA781720 /* Info.plist */,
 				23F4D8F01E19567B2DCC6E11 /* NotchApp.swift */,
+				519D0FBC833BFF2AF2734FEB /* StatusMenu.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -211,7 +217,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				64C71E1416852CBC570D0DB9 /* AppCoordinator.swift in Sources */,
 				BB24D36D386F615B47DA300F /* NotchApp.swift in Sources */,
+				781D25019837B25A2851270A /* StatusMenu.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
