@@ -18,7 +18,7 @@ let package = Package(
         .testTarget(name: "IslandCoreTests", dependencies: ["IslandCore"]),
         .testTarget(name: "NowPlayingSharedTests", dependencies: ["NowPlayingShared"]),
         .testTarget(name: "NowPlayingClientTests", dependencies: ["NowPlayingClient", "NowPlayingShared"]),
-        .testTarget(name: "MusicFeatureTests", dependencies: ["MusicFeature", "IslandCore", "NowPlayingShared"]),
+        .testTarget(name: "MusicFeatureTests", dependencies: ["MusicFeature", "IslandCore", "NowPlayingShared", "NowPlayingClient"]),
     ],
     swiftLanguageModes: [.v6]
 )

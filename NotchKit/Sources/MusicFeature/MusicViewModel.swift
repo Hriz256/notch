@@ -48,6 +48,8 @@ public final class MusicViewModel {
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private let sendCommand: @Sendable (PlaybackCommand) async -> Void
     @ObservationIgnored private let viewFactory: MusicViewFactory
+    /// Wall-clock source, injected so tests can drive progress projection deterministically.
+    @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private var backgroundID: PresentationID?
     @ObservationIgnored private var pauseToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
@@ -55,11 +57,13 @@ public final class MusicViewModel {
     public init(presenter: any IslandPresenting,
                 clock: any IslandClock,
                 sendCommand: @escaping @Sendable (PlaybackCommand) async -> Void,
-                viewFactory: MusicViewFactory) {
+                viewFactory: MusicViewFactory,
+                now: @escaping @Sendable () -> Date = { Date() }) {
         self.presenter = presenter
         self.clock = clock
         self.sendCommand = sendCommand
         self.viewFactory = viewFactory
+        self.now = now
     }
 
     // MARK: Events
@@ -77,7 +81,7 @@ public final class MusicViewModel {
         let old = snapshot
         mergeArtwork(from: new)
         snapshot = new
-        displayedElapsed = PlaybackProgressTracker.elapsed(for: new, at: Date()) ?? 0
+        displayedElapsed = PlaybackProgressTracker.elapsed(for: new, at: now()) ?? 0
 
         guard new.hasTrack else {
             dismissBackground()
@@ -116,7 +120,9 @@ public final class MusicViewModel {
         }
     }
 
+    /// Tears the feature down to idle: no presentation, no pause timer, no 1 Hz tick.
     private func dismissBackground() {
+        stopTicking()
         pauseToken?.cancel()
         pauseToken = nil
         if let backgroundID {
@@ -173,7 +179,7 @@ public final class MusicViewModel {
     }
 
     private func tick() {
-        if let snapshot { displayedElapsed = PlaybackProgressTracker.elapsed(for: snapshot, at: Date()) ?? 0 }
+        if let snapshot { displayedElapsed = PlaybackProgressTracker.elapsed(for: snapshot, at: now()) ?? 0 }
         tickToken = clock.schedule(after: .seconds(1)) { [weak self] in
             guard let self, self.tickToken != nil else { return }
             self.tick()

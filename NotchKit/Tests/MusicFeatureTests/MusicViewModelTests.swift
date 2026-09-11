@@ -24,6 +24,10 @@ final class ManualClock: IslandClock {
     private var entries: [Entry] = []
     private var nextID = 0
     private(set) var now: Duration = .zero
+    /// Wall-clock origin the virtual `now` is measured from.
+    let startDate = Date(timeIntervalSince1970: 1_700_000_000)
+    var currentDate: Date { startDate.addingTimeInterval(now.timeIntervalValue) }
+    var pendingCount: Int { entries.count }
     func schedule(after delay: Duration, _ action: @escaping @MainActor () -> Void) -> ScheduledToken {
         let id = nextID; nextID += 1
         entries.append(Entry(due: now + delay, action: action, id: id))
@@ -40,9 +44,16 @@ final class ManualClock: IslandClock {
     }
 }
 
-private func snap(_ title: String?, rate: Double = 1, artworkID: String? = "a", artwork: Data? = Data([1])) -> NowPlayingSnapshot {
+private extension Duration {
+    var timeIntervalValue: TimeInterval {
+        TimeInterval(components.seconds) + TimeInterval(components.attoseconds) / 1e18
+    }
+}
+
+private func snap(_ title: String?, rate: Double = 1, artworkID: String? = "a", artwork: Data? = Data([1]),
+                  timestamp: Date = Date()) -> NowPlayingSnapshot {
     NowPlayingSnapshot(title: title, artist: "Artist", album: nil, artworkData: artwork, artworkID: artworkID,
-                       duration: 100, elapsed: 5, playbackRate: rate, sourceBundleID: "com.spotify.client", timestamp: Date())
+                       duration: 100, elapsed: 5, playbackRate: rate, sourceBundleID: "com.spotify.client", timestamp: timestamp)
 }
 
 @MainActor
@@ -53,7 +64,8 @@ struct MusicViewModelTests {
         let sent = SentCommands()
         let vm = MusicViewModel(presenter: presenter, clock: clock,
                                 sendCommand: { await sent.append($0) },
-                                viewFactory: .placeholder)
+                                viewFactory: .placeholder,
+                                now: { MainActor.assumeIsolated { clock.currentDate } })
         return (vm, presenter, clock, sent)
     }
 
@@ -144,13 +156,31 @@ struct MusicViewModelTests {
 
     @Test func tickingUpdatesElapsedOnlyWhilePlaying() {
         let (vm, _, clock, _) = make()
-        vm.handle(.snapshot(snap("One")))
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
         vm.startTicking()
-        clock.advance(by: .seconds(1))
-        #expect(vm.displayedElapsed >= 5)
+        clock.advance(by: .seconds(3))
+        #expect(abs(vm.displayedElapsed - 8) < 0.01)
         vm.stopTicking()
+        clock.advance(by: .seconds(5))
+        #expect(abs(vm.displayedElapsed - 8) < 0.01)
+    }
+
+    @Test func tickingHoldsWhilePaused() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", rate: 0, timestamp: clock.currentDate)))
+        vm.startTicking()
+        clock.advance(by: .seconds(3))
+        #expect(abs(vm.displayedElapsed - 5) < 0.01)
+    }
+
+    @Test func dismissStopsTicking() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.startTicking()
+        vm.handle(.snapshot(snap(nil, timestamp: clock.currentDate)))
         let frozen = vm.displayedElapsed
         clock.advance(by: .seconds(5))
+        #expect(clock.pendingCount == 0)
         #expect(vm.displayedElapsed == frozen)
     }
 }
