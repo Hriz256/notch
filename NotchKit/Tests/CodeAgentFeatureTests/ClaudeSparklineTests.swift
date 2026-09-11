@@ -127,6 +127,52 @@ private func line(id: String, request: String, tokens: Int, at date: Date) -> St
         #expect(await second.readCount == 0)
     }
 
+    @Test func transcriptsOlderThanTheWindowAreNeverOpened() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let now = Date()
+        let stale = now.addingTimeInterval(-30 * 24 * 3600)
+
+        let recent = fixture.root.appendingPathComponent("-Users-me-alpha/a.jsonl")
+        let old = fixture.root.appendingPathComponent("-Users-me-beta/old.jsonl")
+        try (line(id: "m1", request: "r1", tokens: 100, at: now) + "\n")
+            .write(to: recent, atomically: true, encoding: .utf8)
+        try (line(id: "m2", request: "r2", tokens: 999, at: stale) + "\n")
+            .write(to: old, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: stale],
+            ofItemAtPath: old.path
+        )
+
+        let sparkline = ClaudeSparkline(root: fixture.root, cacheURL: fixture.cacheURL)
+        let totals = await sparkline.dailyTotals(now: now)
+
+        #expect(await sparkline.readCount == 1)
+        #expect(totals[6] == 100)
+        #expect(totals[0...5].allSatisfy { $0 == 0 })
+    }
+
+    @Test func linesThatAreNotAssistantTurnsAreSkipped() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let now = Date()
+        let file = fixture.root.appendingPathComponent("-Users-me-alpha/a.jsonl")
+        try ("""
+        {"type":"mode","mode":"normal"}
+        {"type":"user","timestamp":"\(timestamp(now))","message":{"role":"user"}}
+        \(line(id: "m1", request: "r1", tokens: 64, at: now))
+
+        """).write(to: file, atomically: true, encoding: .utf8)
+
+        let sparkline = ClaudeSparkline(root: fixture.root, cacheURL: fixture.cacheURL)
+        let totals = await sparkline.dailyTotals(now: now)
+
+        #expect(await sparkline.readCount == 1)
+        #expect(totals[6] == 64)
+    }
+
     @Test func missingRootYieldsZeroes() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

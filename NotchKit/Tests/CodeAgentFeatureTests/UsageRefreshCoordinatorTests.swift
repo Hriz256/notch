@@ -77,6 +77,33 @@ private struct FakeProvider: UsageProvider {
     }
 }
 
+/// A sparkline scan that parks until the test releases it, standing in for the minute-long
+/// cold scan of `~/.claude/projects`.
+private actor GatedSparkline: UsageSparkline {
+    private let totals: [Double]
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+    private(set) var calls = 0
+
+    init(totals: [Double]) {
+        self.totals = totals
+    }
+
+    func dailyTotals(now: Date, days: Int) async -> [Double] {
+        calls += 1
+        if !isReleased {
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return totals
+    }
+
+    func release() {
+        isReleased = true
+        waiter?.resume()
+        waiter = nil
+    }
+}
+
 private func usage(
     _ agent: Agent,
     percent: Double = 10,
@@ -145,6 +172,85 @@ struct UsageRefreshCoordinatorTests {
         }
         #expect(snapshot.session?.percent == 42)
         #expect(coordinator.usage[.cursor] == .failure(.unavailable("Sign in to Cursor")))
+    }
+
+    private func makeClaude(
+        sparkline: GatedSparkline,
+        percent: Double = 42
+    ) -> (UsageRefreshCoordinator, FetchRecorder, UsageManualClock) {
+        let clock = UsageManualClock()
+        let recorder = FetchRecorder([], fallback: .success(usage(.claude, percent: percent)))
+        let coordinator = UsageRefreshCoordinator(
+            providers: [FakeProvider(agent: .claude, recorder: recorder)],
+            sparkline: sparkline,
+            clock: clock,
+            now: { MainActor.assumeIsolated { clock.currentDate } }
+        )
+        return (coordinator, recorder, clock)
+    }
+
+    @Test func claudeResultIsPublishedBeforeTheSparklineResolves() async {
+        let sparkline = GatedSparkline(totals: [1, 2, 3, 4, 5, 6, 7])
+        let (coordinator, _, _) = makeClaude(sparkline: sparkline)
+
+        coordinator.start()
+        await coordinator.settle()
+
+        // The scan is still parked, yet the API result is already on screen.
+        guard case .success(let pending) = coordinator.usage[.claude] else {
+            Issue.record("expected the Claude snapshot before the sparkline resolved")
+            return
+        }
+        #expect(pending.session?.percent == 42)
+        #expect(pending.sparkline.isEmpty)
+
+        await sparkline.release()
+        await coordinator.settleSparkline()
+
+        guard case .success(let merged) = coordinator.usage[.claude] else {
+            Issue.record("expected the Claude snapshot after the sparkline resolved")
+            return
+        }
+        #expect(merged.sparkline == [1, 2, 3, 4, 5, 6, 7])
+        #expect(merged.session?.percent == 42)
+    }
+
+    @Test func onlyOneSparklineScanRunsAtATime() async {
+        let sparkline = GatedSparkline(totals: [1, 1, 1, 1, 1, 1, 1])
+        let (coordinator, recorder, _) = makeClaude(sparkline: sparkline)
+
+        coordinator.start()
+        await coordinator.settle()
+        coordinator.refreshNow()
+        await coordinator.settle()
+
+        #expect(await recorder.calls == 2)
+        #expect(await sparkline.calls == 1)
+
+        await sparkline.release()
+        await coordinator.settleSparkline()
+        coordinator.stop()
+    }
+
+    @Test func aLaterPollKeepsTheSparklineAlreadyOnScreen() async {
+        let sparkline = GatedSparkline(totals: [9, 9, 9, 9, 9, 9, 9])
+        let (coordinator, _, clock) = makeClaude(sparkline: sparkline)
+
+        coordinator.start()
+        await coordinator.settle()
+        await sparkline.release()
+        await coordinator.settleSparkline()
+
+        clock.advance(by: .seconds(900))
+        await coordinator.settle()
+
+        guard case .success(let snapshot) = coordinator.usage[.claude] else {
+            Issue.record("expected a Claude snapshot after the poll")
+            return
+        }
+        #expect(snapshot.sparkline == [9, 9, 9, 9, 9, 9, 9])
+        await coordinator.settleSparkline()
+        coordinator.stop()
     }
 
     @Test func idleCadenceIsFifteenMinutes() async {

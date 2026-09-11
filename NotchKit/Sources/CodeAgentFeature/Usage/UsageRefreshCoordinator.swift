@@ -33,7 +33,7 @@ public final class UsageRefreshCoordinator {
 
     @ObservationIgnored private let providers: [Agent: any UsageProvider]
     @ObservationIgnored private let order: [Agent]
-    @ObservationIgnored private let sparkline: ClaudeSparkline?
+    @ObservationIgnored private let sparkline: (any UsageSparkline)?
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let logger = UsageLog.logger("coordinator")
@@ -44,10 +44,12 @@ public final class UsageRefreshCoordinator {
     @ObservationIgnored private var backoff: [Agent: TimeInterval] = [:]
     @ObservationIgnored private var inFlight: [Agent: Task<Void, Never>] = [:]
     @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var sparklineTask: Task<Void, Never>?
+    @ObservationIgnored private var latestSparkline: [Double]?
 
     public init(
         providers: [any UsageProvider],
-        sparkline: ClaudeSparkline?,
+        sparkline: (any UsageSparkline)?,
         clock: any IslandClock,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -93,6 +95,8 @@ public final class UsageRefreshCoordinator {
         cancelResetTokens()
         for task in inFlight.values { task.cancel() }
         inFlight.removeAll()
+        sparklineTask?.cancel()
+        sparklineTask = nil
     }
 
     /// Fetches every agent immediately, cancelling any pending poll.
@@ -114,25 +118,65 @@ public final class UsageRefreshCoordinator {
                 result = .failure(error)
             }
 
-            guard let self else { return }
-            result = await self.merged(result, for: agent)
-            guard !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled else { return }
 
+            result = self.withSparkline(result, for: agent)
             self.usage[agent] = result
             self.inFlight[agent] = nil
             self.log(result, for: agent)
             self.scheduleNext(agent, after: result)
+            if agent == .claude { self.refreshSparkline() }
         }
     }
 
-    /// Claude's bars and its 7-day sparkline are one snapshot in the UI, so the scan is
-    /// folded into the fetch result rather than published separately.
-    private func merged(
+    // MARK: - Sparkline
+
+    /// The 7-day scan walks every recent transcript on disk and can take a minute on a
+    /// cold cache, so it never gates a publish: it is started only *after* the fetch
+    /// result is stored, and the totals are merged into that snapshot when they arrive.
+    ///
+    /// Starting it afterwards rather than alongside the fetch is deliberate — a cold scan
+    /// reads gigabytes, and running it first starves `claude --version` (which boots Node)
+    /// badly enough to push the first publish out by more than a minute.
+    ///
+    /// One scan at a time — a poll that fires while the previous scan is still running
+    /// reuses it rather than starting a second walk of the same tree.
+    private func refreshSparkline() {
+        guard let sparkline, sparklineTask == nil else { return }
+        // Sampled here, on the main actor: `now` may be isolated to it in tests, and the
+        // scan below runs off it.
+        let startedAt = now()
+        sparklineTask = Task { @MainActor [weak self] in
+            let totals = await Task.detached(priority: .utility) {
+                await sparkline.dailyTotals(now: startedAt, days: 7)
+            }.value
+
+            guard let self, !Task.isCancelled else { return }
+            self.sparklineTask = nil
+            self.mergeSparkline(totals)
+        }
+    }
+
+    /// Folds finished totals into the stored Claude snapshot, leaving every other field —
+    /// and every other agent — untouched.
+    private func mergeSparkline(_ totals: [Double]) {
+        latestSparkline = totals
+        guard case .success(var snapshot) = usage[.claude] else { return }
+        snapshot.sparkline = totals
+        usage[.claude] = .success(snapshot)
+    }
+
+    /// Carries the most recent totals into a freshly fetched Claude snapshot so a poll
+    /// never blanks bars that are already on screen.
+    private func withSparkline(
         _ result: Result<AgentUsage, UsageError>,
         for agent: Agent
-    ) async -> Result<AgentUsage, UsageError> {
-        guard agent == .claude, let sparkline, case .success(var snapshot) = result else { return result }
-        snapshot.sparkline = await sparkline.dailyTotals(now: now())
+    ) -> Result<AgentUsage, UsageError> {
+        guard agent == .claude,
+              let latestSparkline,
+              case .success(var snapshot) = result
+        else { return result }
+        snapshot.sparkline = latestSparkline
         return .success(snapshot)
     }
 
@@ -241,5 +285,10 @@ public final class UsageRefreshCoordinator {
         while let task = inFlight.values.first {
             await task.value
         }
+    }
+
+    /// Awaits the pending sparkline scan so tests can assert on the merged snapshot.
+    func settleSparkline() async {
+        await sparklineTask?.value
     }
 }
