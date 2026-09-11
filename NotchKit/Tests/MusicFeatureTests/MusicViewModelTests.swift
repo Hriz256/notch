@@ -51,9 +51,9 @@ private extension Duration {
 }
 
 private func snap(_ title: String?, rate: Double = 1, artworkID: String? = "a", artwork: Data? = Data([1]),
-                  timestamp: Date = Date()) -> NowPlayingSnapshot {
+                  elapsed: TimeInterval? = 5, timestamp: Date = Date()) -> NowPlayingSnapshot {
     NowPlayingSnapshot(title: title, artist: "Artist", album: nil, artworkData: artwork, artworkID: artworkID,
-                       duration: 100, elapsed: 5, playbackRate: rate, sourceBundleID: "com.spotify.client", timestamp: timestamp)
+                       duration: 100, elapsed: elapsed, playbackRate: rate, sourceBundleID: "com.spotify.client", timestamp: timestamp)
 }
 
 @MainActor
@@ -263,6 +263,40 @@ struct MusicViewModelTests {
         #expect(abs(vm.displayedElapsed - 50) < 0.01)
         clock.advance(by: .seconds(2))
         #expect(abs(vm.displayedElapsed - 52) < 0.01)
+    }
+
+    /// Spotify frequently leaves `ElapsedTime`/`Timestamp` describing a moment *before* the pause,
+    /// so the paused snapshot says "0:45 at t0" for a track that had been projected to 1:00. That
+    /// pair must not rewind the display.
+    @Test func stalePausedSnapshotDoesNotRollBackElapsed() {
+        let (vm, _, clock, _) = make()
+        let t0 = clock.currentDate
+        vm.handle(.snapshot(snap("One", elapsed: 45, timestamp: t0)))
+        vm.startTicking()
+        clock.advance(by: .seconds(15))
+        #expect(abs(vm.displayedElapsed - 60) < 0.01)
+
+        vm.perform(.pause)                       // optimistic pause at t0 + 15, frozen at 60
+        #expect(vm.isPlaying == false)
+
+        // The real snapshot echoes the pause but carries the pre-pause pair.
+        vm.handle(.snapshot(snap("One", rate: 0, elapsed: 45, timestamp: t0)))
+        #expect(abs(vm.displayedElapsed - 60) < 0.01)
+        clock.advance(by: .seconds(5))
+        #expect(abs(vm.displayedElapsed - 60) < 0.01)
+    }
+
+    /// The counterpart: a pair stamped after our base is a genuine update from the source.
+    @Test func freshPausedSnapshotIsTrusted() {
+        let (vm, _, clock, _) = make()
+        let t0 = clock.currentDate
+        vm.handle(.snapshot(snap("One", elapsed: 45, timestamp: t0)))
+        vm.startTicking()
+        clock.advance(by: .seconds(15))
+        vm.perform(.pause)
+
+        vm.handle(.snapshot(snap("One", rate: 0, elapsed: 58, timestamp: t0.addingTimeInterval(15.5))))
+        #expect(abs(vm.displayedElapsed - 58) < 0.01)
     }
 
     @Test func tickingUpdatesElapsedOnlyWhilePlaying() {

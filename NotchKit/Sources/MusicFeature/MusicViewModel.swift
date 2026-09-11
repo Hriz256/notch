@@ -113,7 +113,9 @@ public final class MusicViewModel {
         }
     }
 
-    private func apply(_ new: NowPlayingSnapshot) {
+    private func apply(_ new: NowPlayingSnapshot, isOptimistic: Bool = false) {
+        var new = new
+        if !isOptimistic { freezePositionIfPairIsStale(&new) }
         let old = snapshot
         mergeArtwork(from: new)
         snapshot = new
@@ -156,6 +158,23 @@ public final class MusicViewModel {
                 self?.dismissBackground()
             }
         }
+    }
+
+    /// Defensive mirror of the helper's rule, for sources whose `elapsed`/`timestamp` pair still
+    /// describes a moment before the pause (Spotify does not always refresh it). Such a pair
+    /// carries rate 0 and a timestamp older than the base we are already projecting from, so
+    /// honouring it would rewind the display — a track paused at 1:00 snapping back to 0:45.
+    /// The position on screen is kept instead. A pair stamped *after* our base is a genuine
+    /// update and is trusted; a track change and a playing snapshot are never touched.
+    private func freezePositionIfPairIsStale(_ new: inout NowPlayingSnapshot) {
+        guard let current = snapshot,
+              !new.isPlaying,
+              new.elapsed != nil,
+              TrackIdentity(current) == TrackIdentity(new),
+              new.timestamp < current.timestamp
+        else { return }
+        new.elapsed = PlaybackProgressTracker.elapsed(for: current, at: now()) ?? displayedElapsed
+        new.timestamp = now()
     }
 
     private func mergeArtwork(from new: NowPlayingSnapshot) {
@@ -251,7 +270,7 @@ public final class MusicViewModel {
             return  // the incoming track is unknown; wait for the real snapshot
         }
         optimistic.timestamp = now()
-        apply(optimistic)
+        apply(optimistic, isOptimistic: true)
     }
 
     // MARK: Progress ticking (only while the expanded view is visible)

@@ -23,6 +23,19 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// reply from an older refresh can land after a newer one; the stale reply is dropped instead
     /// of being published and becoming the dedup baseline.
     private var epoch: UInt64 = 0
+    /// The last snapshot handed to the client. Its projection is the position the UI is showing,
+    /// and it is what a play/pause flip re-bases on when MediaRemote's own pair is stale.
+    private var lastPublished: NowPlayingSnapshot?
+    /// Play state of the previous publish, so a true→false / false→true flip can be recognised.
+    private var lastIsPlaying: Bool?
+    /// When the flip to paused / to playing was observed. MediaRemote's info dictionary carries an
+    /// `ElapsedTime` valid at `Timestamp`, and sources (Spotify) frequently do not refresh that
+    /// pair when the transport state changes: the pair still describes a moment *before* the flip.
+    /// Reading it as-is with rate 0 would freeze the display at that older position — the elapsed
+    /// time visibly jumping backwards on pause. These two dates date the flip so a pre-flip pair
+    /// can be recognised and replaced by the position actually on screen.
+    private var pauseObservedAt: Date?
+    private var resumeObservedAt: Date?
 
     /// Info-did-change arrives in bursts (one per changed key), so those are coalesced.
     private static let debounce: DispatchTimeInterval = .milliseconds(150)
@@ -150,6 +163,8 @@ final class NowPlayingMonitor: @unchecked Sendable {
     }
 
     private func publish(info: [String: Any], isPlaying: Bool, bundleID: String?) {
+        let now = Date()
+        recordTransportFlip(isPlaying: isPlaying, at: now)
         let artwork = info[MediaRemoteBridge.InfoKey.artworkData] as? Data
         let artworkID = Self.artworkIdentifier(info[MediaRemoteBridge.InfoKey.artworkIdentifier], artwork: artwork)
         // `isPlaying` decides paused vs playing; the info rate only refines a playing rate (e.g. a
@@ -159,7 +174,7 @@ final class NowPlayingMonitor: @unchecked Sendable {
         // while playing means the source omits it, and `sanitized()` would flatten it to "paused".
         let rawRate = info[MediaRemoteBridge.InfoKey.playbackRate] as? Double
         let playbackRate: Double = isPlaying ? (rawRate.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1) : 0
-        let snapshot = NowPlayingSnapshot(
+        var snapshot = NowPlayingSnapshot(
             title: info[MediaRemoteBridge.InfoKey.title] as? String,
             artist: info[MediaRemoteBridge.InfoKey.artist] as? String,
             album: info[MediaRemoteBridge.InfoKey.album] as? String,
@@ -169,13 +184,59 @@ final class NowPlayingMonitor: @unchecked Sendable {
             elapsed: info[MediaRemoteBridge.InfoKey.elapsedTime] as? Double,
             playbackRate: playbackRate,
             sourceBundleID: bundleID,
-            timestamp: info[MediaRemoteBridge.InfoKey.timestamp] as? Date ?? Date()
+            timestamp: info[MediaRemoteBridge.InfoKey.timestamp] as? Date ?? now
         )
+        rebaseOnFlipIfPairIsStale(&snapshot, isPlaying: isPlaying)
         // Sanitize before dedup: MediaRemote reports NaN durations for live streams, and NaN never
         // compares equal, so raw values would defeat `isEquivalent` and send on every notification.
-        guard let prepared = dedup.prepare(snapshot.sanitized(), now: Date()) else { return }
+        let sanitized = snapshot.sanitized()
+        // The projection base only reads elapsed/rate/timestamp, so it is kept without the artwork
+        // bytes rather than holding an album cover alive for the lifetime of the track.
+        var base = sanitized
+        base.artworkData = nil
+        defer { lastPublished = base }
+        guard let prepared = dedup.prepare(sanitized, now: now) else { return }
         logger.debug("Snapshot: \(prepared.title ?? "-", privacy: .public) isPlaying=\(isPlaying, privacy: .public) rawRate=\(rawRate ?? .nan) rate=\(prepared.playbackRate) artwork=\(prepared.artworkData?.count ?? 0)B")
         sendSnapshot?(prepared)
+    }
+
+    /// Dates the transport flips this publish represents. Called before the snapshot is built, so
+    /// the flip that a stale info pair has to be measured against is already recorded.
+    private func recordTransportFlip(isPlaying: Bool, at now: Date) {
+        defer { lastIsPlaying = isPlaying }
+        guard let was = lastIsPlaying, was != isPlaying else { return }
+        if isPlaying {
+            resumeObservedAt = now
+            pauseObservedAt = nil
+        } else {
+            pauseObservedAt = now
+            resumeObservedAt = nil
+        }
+    }
+
+    /// Replaces an `elapsed`/`timestamp` pair that predates the current play/pause flip with the
+    /// position the last published snapshot projects to at the moment of that flip.
+    ///
+    /// Pausing at 1:00 a track whose info pair still says "0:45 at T0" would otherwise publish
+    /// 0:45 with rate 0, and the UI would snap backwards by the 15 s that had been projected. A
+    /// pair stamped *after* the flip is a genuine update from the source and is trusted as-is.
+    private func rebaseOnFlipIfPairIsStale(_ snapshot: inout NowPlayingSnapshot, isPlaying: Bool) {
+        guard let flippedAt = isPlaying ? resumeObservedAt : pauseObservedAt,
+              snapshot.timestamp < flippedAt,
+              let last = lastPublished,
+              Self.isSameTrack(last, snapshot),
+              let frozen = PlaybackProgressTracker.elapsed(for: last, at: flippedAt)
+        else { return }
+        let reported = snapshot.elapsed ?? .nan
+        logger.debug("Stale MediaRemote pair on \(isPlaying ? "resume" : "pause", privacy: .public): elapsed \(reported) → \(frozen)")
+        snapshot.elapsed = frozen
+        snapshot.timestamp = flippedAt
+    }
+
+    /// A frozen position only carries over within one track; across a track change the info pair,
+    /// stale or not, is the only thing that describes the new track.
+    private static func isSameTrack(_ a: NowPlayingSnapshot, _ b: NowPlayingSnapshot) -> Bool {
+        a.title == b.title && a.artist == b.artist && a.artworkID == b.artworkID
     }
 
     /// MediaRemote reports the artwork identifier as a string on some sources and as a number on
