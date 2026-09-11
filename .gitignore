@@ -3,5 +3,5 @@
 /DerivedData/
 *.xcuserstate
 xcuserdata/
-/.swiftpm/
-/.build/
+.swiftpm/
+.build/

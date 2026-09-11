@@ -1,0 +1,72 @@
+name: Notch
+options:
+  bundleIdPrefix: app.notch
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: false
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: false
+packages:
+  NotchKit:
+    path: NotchKit
+targets:
+  Notch:
+    type: application
+    platform: macOS
+    sources: [App]
+    dependencies:
+      - package: NotchKit
+        product: IslandCore
+      - package: NotchKit
+        product: NowPlayingShared
+      - package: NotchKit
+        product: NowPlayingClient
+      - package: NotchKit
+        product: MusicFeature
+      - target: NotchHelper
+        embed: true
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleName: Notch
+        CFBundleDisplayName: Notch
+        LSUIElement: true
+        LSMinimumSystemVersion: "26.0"
+        NSAppleEventsUsageDescription: Notch reads what Spotify or Music is playing when the built-in helper is unavailable.
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.notch.Notch
+        SWIFT_EMIT_LOC_STRINGS: false
+  NotchHelper:
+    type: xpc-service
+    platform: macOS
+    sources: [Helper]
+    dependencies:
+      - package: NotchKit
+        product: NowPlayingShared
+    info:
+      path: Helper/Info.plist
+      properties:
+        CFBundleName: NotchHelper
+        XPCService:
+          ServiceType: Application
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.apple.controlcenter.NotchHelper
+schemes:
+  Notch:
+    build:
+      targets:
+        Notch: all
+    run:
+      config: Debug
