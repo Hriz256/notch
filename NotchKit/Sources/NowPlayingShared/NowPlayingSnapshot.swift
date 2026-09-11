@@ -34,6 +34,18 @@ public struct NowPlayingSnapshot: Codable, Sendable, Equatable {
     public var isPlaying: Bool { playbackRate > 0 }
     public var hasTrack: Bool { !(title ?? "").isEmpty }
 
-    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+    /// Drops non-finite numbers, which MediaRemote reports for live streams. JSON cannot carry
+    /// them, and downstream arithmetic on them is meaningless: `duration`/`elapsed` become nil,
+    /// a non-finite `playbackRate` becomes 0 (paused).
+    public func sanitized() -> NowPlayingSnapshot {
+        var out = self
+        if let duration, !duration.isFinite { out.duration = nil }
+        if let elapsed, !elapsed.isFinite { out.elapsed = nil }
+        if !playbackRate.isFinite { out.playbackRate = 0 }
+        return out
+    }
+
+    /// Encodes `sanitized()`, so a non-finite value can never fail the encode.
+    public func encoded() throws -> Data { try JSONEncoder().encode(sanitized()) }
     public static func decode(_ data: Data) throws -> NowPlayingSnapshot { try JSONDecoder().decode(NowPlayingSnapshot.self, from: data) }
 }

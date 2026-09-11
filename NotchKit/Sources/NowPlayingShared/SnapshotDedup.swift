@@ -17,7 +17,11 @@ public struct SnapshotDedup: Sendable {
     }
 
     public mutating func prepare(_ new: NowPlayingSnapshot, now: Date) -> NowPlayingSnapshot? {
-        if let last = lastSent, isEquivalent(last, new, now: now) {
+        // MediaRemote often delivers the image bytes in a later info update than the metadata
+        // that names them. Such an update differs from the last one in no field `isEquivalent`
+        // looks at, so it has to be forced through or the artwork never reaches the receiver.
+        let carriesUnsentArtwork = new.artworkData != nil && new.artworkID != lastSentArtworkID
+        if !carriesUnsentArtwork, let last = lastSent, isEquivalent(last, new, now: now) {
             return nil
         }
         var out = new
@@ -26,9 +30,17 @@ public struct SnapshotDedup: Sendable {
         } else if new.artworkData != nil {
             lastSentArtworkID = new.artworkID
         }
-        lastSent = new
+        // `isEquivalent` never reads artwork bytes, so keep the comparison baseline without them
+        // rather than holding an album cover alive for the lifetime of the track.
+        var kept = new
+        kept.artworkData = nil
+        lastSent = kept
         return out
     }
+
+    /// Bytes the dedup is holding on to. Always 0: `isEquivalent` never reads artwork data, so
+    /// there is no reason to keep an album cover alive in `lastSent`.
+    var retainedArtworkByteCount: Int { lastSent?.artworkData?.count ?? 0 }
 
     private func isEquivalent(_ a: NowPlayingSnapshot, _ b: NowPlayingSnapshot, now: Date) -> Bool {
         guard a.title == b.title, a.artist == b.artist, a.album == b.album,
