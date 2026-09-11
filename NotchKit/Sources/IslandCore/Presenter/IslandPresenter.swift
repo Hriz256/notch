@@ -14,6 +14,10 @@ public final class IslandPresenter: IslandPresenting {
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private var ttlTokens: [PresentationID: ScheduledToken] = [:]
     @ObservationIgnored private var hoverToken: ScheduledToken?
+    /// Whether the pointer is inside the island. Tracked separately from `isHoverPromoted`
+    /// so queue changes can re-evaluate promotion without a fresh hover transition.
+    @ObservationIgnored private var isHovering = false
+    @ObservationIgnored private var isHoverEnterPending = false
 
     public init(clock: any IslandClock) {
         self.clock = clock
@@ -44,40 +48,41 @@ public final class IslandPresenter: IslandPresenting {
             queue.append(presentation)
         }
         armTTL(for: presentation)
+        queueDidChange()
     }
 
     public func update(_ presentation: Presentation) {
         guard let index = queue.firstIndex(where: { $0.id == presentation.id }) else { return }
         queue[index] = presentation
+        queueDidChange()
     }
 
     public func dismiss(_ id: PresentationID) {
         ttlTokens.removeValue(forKey: id)?.cancel()
         queue.removeAll { $0.id == id }
-        if current == nil { clearHover() }
+        queueDidChange()
     }
 
     // MARK: Hover
 
     public func setHovering(_ hovering: Bool) {
-        hoverToken?.cancel()
-        hoverToken = nil
+        guard isHovering != hovering else { return }
+        isHovering = hovering
+        cancelHoverTimer()
         if hovering {
-            guard !isHoverPromoted else { return }
-            hoverToken = clock.schedule(after: Self.hoverEnterDelay) { [weak self] in
-                self?.isHoverPromoted = true
-            }
+            armHoverEnterIfNeeded()
         } else {
             guard isHoverPromoted else { return }
             hoverToken = clock.schedule(after: Self.hoverExitDelay) { [weak self] in
-                self?.isHoverPromoted = false
+                guard let self else { return }
+                hoverToken = nil
+                isHoverPromoted = false
             }
         }
     }
 
     public func toggleHoverPromotion() {
-        hoverToken?.cancel()
-        hoverToken = nil
+        cancelHoverTimer()
         isHoverPromoted.toggle()
     }
 
@@ -92,9 +97,40 @@ public final class IslandPresenter: IslandPresenting {
         }
     }
 
-    private func clearHover() {
+    /// A presentation can be hover-promoted only if it exists, is not an alert, has an
+    /// expanded view, and is not already showing expanded by its own style.
+    private var isHoverEligible: Bool {
+        guard let current else { return false }
+        return current.style == .peek && current.priority < .alert && current.expanded != nil
+    }
+
+    /// The winner may have changed: keep the promotion in sync with what is now on screen.
+    private func queueDidChange() {
+        if isHoverEligible {
+            armHoverEnterIfNeeded()
+        } else {
+            cancelHoverTimer()
+            if isHoverPromoted { isHoverPromoted = false }
+        }
+    }
+
+    /// Starts the enter delay when the pointer is inside, the winner is eligible, and no
+    /// promotion (or pending promotion) is already in flight.
+    private func armHoverEnterIfNeeded() {
+        guard isHovering, !isHoverPromoted, !isHoverEnterPending, isHoverEligible else { return }
+        isHoverEnterPending = true
+        hoverToken = clock.schedule(after: Self.hoverEnterDelay) { [weak self] in
+            guard let self else { return }
+            hoverToken = nil
+            isHoverEnterPending = false
+            guard isHovering, isHoverEligible else { return }
+            isHoverPromoted = true
+        }
+    }
+
+    private func cancelHoverTimer() {
         hoverToken?.cancel()
         hoverToken = nil
-        isHoverPromoted = false
+        isHoverEnterPending = false
     }
 }

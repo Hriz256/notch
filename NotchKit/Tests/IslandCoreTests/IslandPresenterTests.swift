@@ -186,6 +186,50 @@ struct IslandPresenterTests {
         #expect(p.state == .peek(music.id))
     }
 
+    @Test func hoverSurvivesPresentationSwap() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(a.id))
+        p.dismiss(a.id)
+        p.present(b)
+        #expect(p.state == .peek(b.id))
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(b.id))
+    }
+
+    @Test func hoverBeforeFirstPresentDoesNotPromoteInstantly() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        p.setHovering(true)
+        clock.advance(by: .seconds(5))
+        #expect(p.isHoverPromoted == false)
+        let a = makePresentation(feature: "a")
+        p.present(a)
+        #expect(p.state == .peek(a.id))
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(a.id))
+    }
+
+    @Test func hoverOverAlertThenAlertExpiresPromotesBackground() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(1))
+        p.present(music)
+        p.present(alert)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .peek(alert.id))
+        clock.advance(by: .seconds(1))
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(music.id))
+    }
+
     @Test func dismissingCurrentClearsHoverPromotion() {
         let p = IslandPresenter(clock: ManualClock())
         let music = makePresentation()
