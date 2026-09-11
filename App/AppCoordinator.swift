@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 import IslandCore
 import MusicFeature
 
@@ -8,6 +9,7 @@ final class AppCoordinator {
     let presenter: IslandPresenter
     let registry: FeatureRegistry
     let surface: SurfaceController
+    @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "coordinator")
     private var demoID: PresentationID?
 
     init() {
@@ -25,6 +27,15 @@ final class AppCoordinator {
     func stop() {
         registry.deactivateAll()
         surface.stop()
+    }
+
+    /// Tears the music feature down and brings it back: the coordinator and its XPC connection
+    /// are rebuilt, which also re-requests the full now-playing state.
+    func reloadMusic() {
+        let id = MusicViewModel.featureID
+        logger.info("Reloading music helper")
+        registry.setEnabled(id, false)
+        registry.setEnabled(id, true)
     }
 
     #if DEBUG

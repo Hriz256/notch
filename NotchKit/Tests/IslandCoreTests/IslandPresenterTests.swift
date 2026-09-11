@@ -256,6 +256,28 @@ struct IslandPresenterTests {
         #expect(p.state == .expanded(b.id))
     }
 
+    /// Regression: a track-change style activity peek that carries an expanded view must not
+    /// collapse an already hover-expanded background under the pointer, and the panel must come
+    /// back on its own when the peek's TTL expires (no hover exit/enter in between).
+    @Test func activityPeekWithExpandedKeepsHoverPromotion() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let background = makePresentation(feature: "music", priority: .background)
+        p.present(background)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(background.id))
+
+        let peek = makePresentation(feature: "music", priority: .activity, ttl: .seconds(2.5))
+        p.present(peek)
+        #expect(p.state == .expanded(peek.id))
+        #expect(p.isHoverPromoted)
+
+        clock.advance(by: .seconds(2.5))
+        #expect(p.state == .expanded(background.id))
+        #expect(p.isHoverPromoted)
+    }
+
     @Test func dismissingCurrentClearsHoverPromotion() {
         let p = IslandPresenter(clock: ManualClock())
         let music = makePresentation()

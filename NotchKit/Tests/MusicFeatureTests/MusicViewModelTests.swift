@@ -58,14 +58,15 @@ private func snap(_ title: String?, rate: Double = 1, artworkID: String? = "a", 
 
 @MainActor
 struct MusicViewModelTests {
-    func make() -> (MusicViewModel, FakePresenter, ManualClock, SentCommands) {
+    func make(trackChangePeekEnabled: Bool = true) -> (MusicViewModel, FakePresenter, ManualClock, SentCommands) {
         let presenter = FakePresenter()
         let clock = ManualClock()
         let sent = SentCommands()
         let vm = MusicViewModel(presenter: presenter, clock: clock,
                                 sendCommand: { await sent.append($0) },
                                 viewFactory: .placeholder,
-                                now: { MainActor.assumeIsolated { clock.currentDate } })
+                                now: { MainActor.assumeIsolated { clock.currentDate } },
+                                isTrackChangePeekEnabled: { trackChangePeekEnabled })
         return (vm, presenter, clock, sent)
     }
 
@@ -93,7 +94,19 @@ struct MusicViewModelTests {
         let peeks = presenter.presented.filter { $0.priority == .activity }
         #expect(peeks.count == 1)
         #expect(peeks[0].ttl == MusicViewModel.trackChangePeekDuration)
+        // The peek must carry an expanded view so it stays hover-eligible: without it the
+        // presenter clears hover promotion and an open panel collapses under the pointer.
+        #expect(peeks[0].expanded != nil)
+        #expect(peeks[0].expandedSize == MusicViewModel.expandedSize)
         #expect(presenter.updated.count == 1)   // background presentation refreshed
+    }
+
+    @Test func trackChangePeekDisabledByPreference() {
+        let (vm, presenter, _, _) = make(trackChangePeekEnabled: false)
+        vm.handle(.snapshot(snap("One")))
+        vm.handle(.snapshot(snap("Two", artworkID: "b")))
+        #expect(presenter.presented.filter { $0.priority == .activity }.isEmpty)
+        #expect(presenter.updated.count == 1)   // background still refreshed
     }
 
     @Test func trackChangeWhilePausedDoesNotPeek() {

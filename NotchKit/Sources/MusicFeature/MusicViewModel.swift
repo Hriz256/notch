@@ -36,6 +36,8 @@ public final class MusicViewModel {
     public static let pauseDismissDelay: Duration = .seconds(600)
     public static let trackChangePeekDuration: Duration = .seconds(2.5)
     public static let expandedSize = CGSize(width: 380, height: 160)
+    /// UserDefaults key backing the "Track change peek" setting (absent means on).
+    public nonisolated static let trackChangePeekDefaultsKey = "music.trackChangePeek"
 
     public private(set) var snapshot: NowPlayingSnapshot?
     public private(set) var artwork: Data?
@@ -50,6 +52,8 @@ public final class MusicViewModel {
     @ObservationIgnored private let viewFactory: MusicViewFactory
     /// Wall-clock source, injected so tests can drive progress projection deterministically.
     @ObservationIgnored private let now: @Sendable () -> Date
+    /// User preference (`music.trackChangePeek`, default on) gating the track-change peek.
+    @ObservationIgnored private let isTrackChangePeekEnabled: @Sendable () -> Bool
     @ObservationIgnored private var backgroundID: PresentationID?
     @ObservationIgnored private var pauseToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
@@ -58,12 +62,18 @@ public final class MusicViewModel {
                 clock: any IslandClock,
                 sendCommand: @escaping @Sendable (PlaybackCommand) async -> Void,
                 viewFactory: MusicViewFactory,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                now: @escaping @Sendable () -> Date = { Date() },
+                isTrackChangePeekEnabled: @escaping @Sendable () -> Bool = {
+                    UserDefaults.standard.object(forKey: MusicViewModel.trackChangePeekDefaultsKey) == nil
+                        ? true
+                        : UserDefaults.standard.bool(forKey: MusicViewModel.trackChangePeekDefaultsKey)
+                }) {
         self.presenter = presenter
         self.clock = clock
         self.sendCommand = sendCommand
         self.viewFactory = viewFactory
         self.now = now
+        self.isTrackChangePeekEnabled = isTrackChangePeekEnabled
     }
 
     // MARK: Events
@@ -98,7 +108,7 @@ public final class MusicViewModel {
             presenter.present(makeBackgroundPresentation(id: id))
         }
 
-        if trackChanged, new.isPlaying {
+        if trackChanged, new.isPlaying, isTrackChangePeekEnabled() {
             presenter.present(makeTrackChangePeek())
         }
 
@@ -154,7 +164,10 @@ public final class MusicViewModel {
             ttl: Self.trackChangePeekDuration,
             leading: viewFactory.leading(self),
             trailing: viewFactory.trailing(self),
-            expanded: nil
+            // Carries the expanded view so the peek stays hover-eligible: otherwise the presenter
+            // clears hover promotion and an open panel would collapse under the pointer.
+            expanded: viewFactory.expanded(self),
+            expandedSize: Self.expandedSize
         )
     }
 
