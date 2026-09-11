@@ -174,9 +174,45 @@ public final class MusicViewModel {
     // MARK: Commands
 
     public func perform(_ command: PlaybackCommand) {
-        if case .seek(let seconds) = command { displayedElapsed = seconds }
+        applyOptimistically(command)
         let send = sendCommand
         Task { await send(command) }
+    }
+
+    /// Reflects a transport command locally before the source echoes it back. The round trip
+    /// (MediaRemote → helper debounce → XPC) takes 1-2 s, which reads as an unresponsive UI.
+    /// The change is routed through `apply` so the pause timer, the presentation refresh and the
+    /// track-change peek behave exactly as they do for a real snapshot (the title, artist and
+    /// artwork are untouched, so nothing is treated as a track change). The next real snapshot
+    /// overrides all of it.
+    private func applyOptimistically(_ command: PlaybackCommand) {
+        guard var optimistic = snapshot else {
+            if case .seek(let seconds) = command { displayedElapsed = seconds }
+            return
+        }
+        // Re-bases the projection on what is on screen so the next `tick()` freezes or resumes
+        // from there instead of replaying the stale snapshot's elapsed. An unknown elapsed
+        // stays unknown.
+        func rebaseOnDisplayed(_ s: inout NowPlayingSnapshot) {
+            if s.elapsed != nil { s.elapsed = displayedElapsed }
+        }
+        switch command {
+        case .togglePlayPause:
+            optimistic.playbackRate = isPlaying ? 0 : 1
+            rebaseOnDisplayed(&optimistic)
+        case .play:
+            optimistic.playbackRate = 1
+            rebaseOnDisplayed(&optimistic)
+        case .pause:
+            optimistic.playbackRate = 0
+            rebaseOnDisplayed(&optimistic)
+        case .seek(let seconds):
+            optimistic.elapsed = seconds
+        case .next, .previous:
+            return  // the incoming track is unknown; wait for the real snapshot
+        }
+        optimistic.timestamp = now()
+        apply(optimistic)
     }
 
     // MARK: Progress ticking (only while the expanded view is visible)

@@ -167,6 +167,52 @@ struct MusicViewModelTests {
         #expect(await sent.all == [.next])
     }
 
+    @Test func togglePlayPauseIsOptimistic() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.startTicking()
+        let updatesBefore = presenter.updated.count
+
+        vm.perform(.togglePlayPause)
+        #expect(vm.isPlaying == false)
+        #expect(presenter.updated.count == updatesBefore + 1)   // compact visualizer refreshed
+        let frozen = vm.displayedElapsed
+        clock.advance(by: .seconds(3))
+        #expect(abs(vm.displayedElapsed - frozen) < 0.01)
+
+        vm.perform(.togglePlayPause)
+        #expect(vm.isPlaying)
+        clock.advance(by: .seconds(2))
+        #expect(abs(vm.displayedElapsed - (frozen + 2)) < 0.01)
+    }
+
+    @Test func optimisticToggleDoesNotPeek() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", rate: 0, timestamp: clock.currentDate)))
+        vm.perform(.togglePlayPause)
+        #expect(vm.isPlaying)
+        #expect(presenter.presented.filter { $0.priority == .activity }.isEmpty)
+    }
+
+    @Test func realSnapshotOverridesOptimisticState() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.perform(.togglePlayPause)
+        #expect(vm.isPlaying == false)
+        vm.handle(.snapshot(snap("One", rate: 1, timestamp: clock.currentDate)))
+        #expect(vm.isPlaying)
+    }
+
+    @Test func seekRebasesProjection() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.startTicking()
+        vm.perform(.seek(50))
+        #expect(abs(vm.displayedElapsed - 50) < 0.01)
+        clock.advance(by: .seconds(2))
+        #expect(abs(vm.displayedElapsed - 52) < 0.01)
+    }
+
     @Test func tickingUpdatesElapsedOnlyWhilePlaying() {
         let (vm, _, clock, _) = make()
         vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
