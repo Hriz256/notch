@@ -230,6 +230,32 @@ struct IslandPresenterTests {
         #expect(p.state == .expanded(music.id))
     }
 
+    @Test func clickCollapseIsNotUndoneByQueueChange() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let a = makePresentation(feature: "a")
+        p.present(a)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(a.id))
+
+        p.toggleHoverPromotion()
+        #expect(p.state == .peek(a.id))
+
+        // Queue churn while the pointer never left must not undo the click-collapse.
+        p.update(a)
+        let b = makePresentation(feature: "b")
+        p.present(b)
+        clock.advance(by: .seconds(5))
+        #expect(p.state == .peek(b.id))
+
+        // Leaving and re-entering re-arms hover promotion normally.
+        p.setHovering(false)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(b.id))
+    }
+
     @Test func dismissingCurrentClearsHoverPromotion() {
         let p = IslandPresenter(clock: ManualClock())
         let music = makePresentation()

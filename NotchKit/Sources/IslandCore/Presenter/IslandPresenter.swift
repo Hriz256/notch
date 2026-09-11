@@ -18,6 +18,9 @@ public final class IslandPresenter: IslandPresenting {
     /// so queue changes can re-evaluate promotion without a fresh hover transition.
     @ObservationIgnored private var isHovering = false
     @ObservationIgnored private var isHoverEnterPending = false
+    /// Set when the user clicks to collapse while still hovering: hover must not re-promote
+    /// until the pointer leaves, otherwise the next queue change would undo the click.
+    @ObservationIgnored private var hoverSuppressedUntilExit = false
 
     public init(clock: any IslandClock) {
         self.clock = clock
@@ -72,6 +75,7 @@ public final class IslandPresenter: IslandPresenting {
         if hovering {
             armHoverEnterIfNeeded()
         } else {
+            hoverSuppressedUntilExit = false
             guard isHoverPromoted else { return }
             hoverToken = clock.schedule(after: Self.hoverExitDelay) { [weak self] in
                 guard let self else { return }
@@ -84,6 +88,7 @@ public final class IslandPresenter: IslandPresenting {
     public func toggleHoverPromotion() {
         cancelHoverTimer()
         isHoverPromoted.toggle()
+        hoverSuppressedUntilExit = !isHoverPromoted && isHovering
     }
 
     // MARK: Private
@@ -117,7 +122,7 @@ public final class IslandPresenter: IslandPresenting {
     /// Starts the enter delay when the pointer is inside, the winner is eligible, and no
     /// promotion (or pending promotion) is already in flight.
     private func armHoverEnterIfNeeded() {
-        guard isHovering, !isHoverPromoted, !isHoverEnterPending, isHoverEligible else { return }
+        guard isHovering, !hoverSuppressedUntilExit, !isHoverPromoted, !isHoverEnterPending, isHoverEligible else { return }
         isHoverEnterPending = true
         hoverToken = clock.schedule(after: Self.hoverEnterDelay) { [weak self] in
             guard let self else { return }
