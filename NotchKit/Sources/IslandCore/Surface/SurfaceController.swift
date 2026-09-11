@@ -14,6 +14,7 @@ public final class SurfaceController {
     private var hoverMonitor: HoverMonitor?
     private var geometry: NotchGeometry?
     private var screenObserver: (any NSObjectProtocol)?
+    private var spaceObserver: (any NSObjectProtocol)?
 
     public private(set) var isVisible = false
 
@@ -28,12 +29,22 @@ public final class SurfaceController {
         ) { [weak self] _ in
             Task { @MainActor in self?.rebuildIfNeeded() }
         }
+        // Switching Spaces can reorder windows underneath us even though the panel joins
+        // every Space; re-asserting the order is cheap and keeps the island on top.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.window?.orderFrontRegardless() }
+        }
         rebuildIfNeeded()
     }
 
     public func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
+        spaceObserver = nil
         hoverMonitor?.stop()
         hoverMonitor = nil
         window?.orderOut(nil)
@@ -83,12 +94,7 @@ public final class SurfaceController {
         let panel = SurfaceWindow(contentRect: frame)
         let root = SurfaceView(presenter: presenter, geometry: geometry, choreographer: .current())
         let hosting = PassThroughHostingView(rootView: root)
-        hosting.hitRectProvider = { [weak self, weak panel] in
-            guard let self, let panel else { return .zero }
-            let screenRect = self.islandScreenRect()
-            let windowRect = panel.convertFromScreen(screenRect)
-            return windowRect
-        }
+        hosting.hitRectProvider = { [weak self] in self?.islandScreenRect() ?? .zero }
         panel.contentView = hosting
         panel.setFrame(frame, display: true)
         panel.orderFrontRegardless()
