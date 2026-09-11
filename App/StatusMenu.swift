@@ -1,4 +1,6 @@
 import SwiftUI
+import CodeAgentFeature
+import CodeAgentShared
 import IslandCore
 import MusicFeature
 
@@ -15,6 +17,8 @@ struct StatusMenu: View {
         }
         Toggle("Track change peek", isOn: $trackChangePeek)
         Divider()
+        codingAgents
+        Divider()
         // Reloading is a no-op while music is off, so the button reflects that rather than looking
         // like it did something.
         Button("Reload helper") { coordinator.reloadMusic() }
@@ -26,5 +30,38 @@ struct StatusMenu: View {
         #endif
         Button("Quit Notch") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    /// Mirrors the island's context menu for the settings that are worth changing without
+    /// waiting for a card to be on screen — above all, which agents are watched at all.
+    private var codingAgents: some View {
+        Menu("Coding agents") {
+            ForEach(Agent.allCases, id: \.self) { agent in
+                Toggle(agent.displayName, isOn: Binding(
+                    get: { coordinator.codeFeature.isAgentEnabled(agent) },
+                    set: { coordinator.codeFeature.setAgentEnabled(agent, $0) }
+                ))
+            }
+            Divider()
+            Toggle("Play completion sound", isOn: Binding(
+                get: { coordinator.codeFeature.settings.playCompleteSound },
+                set: { coordinator.codeFeature.settings.playCompleteSound = $0 }
+            ))
+            Toggle("Show pace indicator", isOn: Binding(
+                get: { coordinator.codeFeature.settings.showPace },
+                set: { coordinator.codeFeature.settings.showPace = $0 }
+            ))
+            Toggle("Caffeinate while working", isOn: Binding(
+                get: { coordinator.codeFeature.settings.caffeinate },
+                set: { coordinator.codeFeature.settings.caffeinate = $0 }
+            ))
+            // Codex silently ignores its `[hooks]` table until the user approves it, so the
+            // island would simply never show Codex activity with no explanation.
+            if coordinator.codeFeature.codexNeedsTrust {
+                Divider()
+                Button("Codex: run /hooks to approve") {}
+                    .disabled(true)
+            }
+        }
     }
 }

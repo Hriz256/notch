@@ -105,7 +105,9 @@ public enum ClaudeVersionDetector {
               let output = await ProcessRunner.output(
                   executable: executable,
                   arguments: ["--version"],
-                  timeout: .seconds(10)
+                  // `claude --version` boots Node: ~10 s on a cold machine, so a 10 s
+                  // budget would fall back to the placeholder UA about half the time.
+                  timeout: .seconds(20)
               ),
               let semver = semver(in: output)
         else {

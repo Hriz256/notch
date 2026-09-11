@@ -88,6 +88,25 @@ public final class CodeAgentViewModel {
     public var activeCount: Int { tracker.activeCount }
     public var isCaffeinating: Bool { caffeinator.isActive }
 
+    /// The session the island is currently about: the running one, or — while a completion
+    /// alert is up — the finished one the alert is for. This is what the views render.
+    public var displayedSession: SessionTracker.Session? { tracker.activeSession ?? alertingSession }
+
+    /// Agents the user switched on, in `Agent.allCases` order; the context menu's "Show" list.
+    public var enabledAgents: [Agent] { settings.enabledAgents }
+    /// Whether a completed session chimes. Mirrors `code.playCompleteSound`.
+    public var playsCompletionSound: Bool { settings.playCompleteSound }
+    /// Whether the user asked Notch to hold a power assertion while agents work. Distinct
+    /// from ``isCaffeinating``, which is whether the assertion is held *right now*.
+    public var caffeinateWhileWorking: Bool { settings.caffeinate }
+
+    /// Daily token totals behind the sparkline; empty when usage is unavailable.
+    public var sparkline: [Double] { displayedUsage?.sparkline ?? [] }
+
+    /// Hook install state per agent, mirrored from ``HookInstaller`` so the context menu
+    /// re-renders when it changes (the installer itself is not observable).
+    public private(set) var hookStates: [Agent: HookInstaller.InstallState] = [:]
+
     // MARK: - Collaborators
 
     @ObservationIgnored private let presenter: any IslandPresenting
@@ -100,6 +119,9 @@ public final class CodeAgentViewModel {
     @ObservationIgnored private let viewFactory: CodeViewFactory
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "code.viewmodel")
+    /// Injected after construction by ``CodeAgentFeature`` (the feature owns both), so the
+    /// context menu can read and change hook state. `nil` in tests.
+    @ObservationIgnored public weak var hooks: HookInstaller?
 
     // MARK: - Private state
 
@@ -108,8 +130,12 @@ public final class CodeAgentViewModel {
     @ObservationIgnored private var alertToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
     /// The finished session the current alert is about, kept so the views can render its
-    /// stage for as long as the alert is up.
-    @ObservationIgnored private var alertingSession: SessionTracker.Session?
+    /// stage for as long as the alert is up. Observed (not `@ObservationIgnored`) because
+    /// ``displayedSession`` hands it to the views.
+    private var alertingSession: SessionTracker.Session?
+    /// Set by ``teardown()``. Observation callbacks armed before the teardown can still
+    /// fire afterwards; this stops them from re-presenting a dismissed island.
+    @ObservationIgnored private var isTornDown = false
     /// `session key → lastEventAt of the finish we already alerted about`. Keyed by the
     /// event time so a revived session that finishes again alerts again.
     @ObservationIgnored private var alertedFinishes: [String: Date] = [:]
@@ -159,6 +185,57 @@ public final class CodeAgentViewModel {
         refreshPresentation()
     }
 
+    public func togglePlayCompletionSound() {
+        settings.playCompleteSound.toggle()
+        refreshPresentation()
+    }
+
+    /// Fetches every agent's usage right now, bypassing the poll cadence.
+    public func refreshUsage() {
+        usage.refreshNow()
+    }
+
+    // MARK: - Hooks
+
+    /// Re-reads the three config files and republishes ``hookStates``.
+    public func syncHookStates() {
+        hooks?.refreshState()
+        hookStates = hooks?.state ?? [:]
+    }
+
+    /// Installs or removes Notch's hooks for one agent. Failures are logged and end up in
+    /// ``hookStates`` as `.failed`, which is what the menu shows.
+    public func setHooksInstalled(_ agent: Agent, _ installed: Bool) {
+        guard let hooks else { return }
+        do {
+            if installed { try hooks.install(agent) } else { try hooks.uninstall(agent) }
+        } catch {
+            logger.error("hook change failed for \(agent.rawValue, privacy: .public)")
+        }
+        hookStates = hooks.state
+    }
+
+    // MARK: - Teardown
+
+    /// Drops both presentations and every timer. The view model is single-use afterwards:
+    /// nothing it observes can bring the island back.
+    public func teardown() {
+        isTornDown = true
+        stopTicking()
+        observationTask?.cancel()
+        observationTask = nil
+        alertToken?.cancel()
+        alertToken = nil
+        alertingSession = nil
+        visibleStage = nil
+        if let alertID {
+            presenter.dismiss(alertID)
+            self.alertID = nil
+        }
+        dismissMain()
+        caffeinator.set(false)
+    }
+
     // MARK: - Refresh
 
     /// Recomputes both presentations from the tracker, the usage coordinator and the settings.
@@ -167,6 +244,7 @@ public final class CodeAgentViewModel {
     /// wrapped in `withObservationTracking`: the next change to either schedules one more
     /// refresh, which re-arms the tracking. Callers never have to poll.
     public func refreshPresentation() {
+        guard !isTornDown else { return }
         withObservationTracking {
             _ = usage.usage
             _ = tracker.sessions
@@ -222,7 +300,11 @@ public final class CodeAgentViewModel {
             return
         }
         guard settings.showsStage(driver.agent, driver.stage) else { return }
+        guard visibleStage != driver.stage else { return }
         visibleStage = driver.stage
+        // The one line that says what the island is showing. Stage and agent only — never
+        // the tool arguments or the prompt text the detail line carries.
+        logger.info("showing \(driver.stage.rawValue, privacy: .public) for \(driver.agent.rawValue, privacy: .public)")
     }
 
     private func updateElapsed(_ active: SessionTracker.Session?) {
@@ -283,7 +365,9 @@ public final class CodeAgentViewModel {
     // MARK: - The completion alert
 
     private func presentAlert(for session: SessionTracker.Session) {
-        logger.debug("alerting \(session.stage.rawValue, privacy: .public) for \(session.agent.rawValue, privacy: .public)")
+        // Info rather than debug: this is the event that chimes and steals the island, so
+        // it is the first thing anyone looks for in the log. Stage and agent only.
+        logger.info("alerting \(session.stage.rawValue, privacy: .public) for \(session.agent.rawValue, privacy: .public)")
 
         if session.stage == .completed, settings.playCompleteSound { sound() }
 

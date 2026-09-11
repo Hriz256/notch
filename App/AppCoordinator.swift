@@ -1,5 +1,6 @@
 import SwiftUI
 import os
+import CodeAgentFeature
 import IslandCore
 import MusicFeature
 
@@ -9,6 +10,9 @@ final class AppCoordinator {
     let presenter: IslandPresenter
     let registry: FeatureRegistry
     let surface: SurfaceController
+    /// Held by name as well as by the registry: the status menu talks to its settings and
+    /// hook installer directly, which the type-erased `any IslandFeature` cannot offer.
+    let codeFeature = CodeAgentFeature()
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "coordinator")
     private var demoID: PresentationID?
 
@@ -22,6 +26,7 @@ final class AppCoordinator {
     func start() {
         surface.start()
         registry.register(MusicFeature(), enabledByDefault: true)
+        registry.register(codeFeature, enabledByDefault: true)
     }
 
     func stop() {

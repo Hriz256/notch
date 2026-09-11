@@ -120,6 +120,7 @@ public final class UsageRefreshCoordinator {
 
             self.usage[agent] = result
             self.inFlight[agent] = nil
+            self.log(result, for: agent)
             self.scheduleNext(agent, after: result)
         }
     }
@@ -133,6 +134,36 @@ public final class UsageRefreshCoordinator {
         guard agent == .claude, let sparkline, case .success(var snapshot) = result else { return result }
         snapshot.sparkline = await sparkline.dailyTotals(now: now())
         return .success(snapshot)
+    }
+
+    /// One line per settled fetch, so a failing agent can be diagnosed from the log alone.
+    ///
+    /// Only the two percentages are ever logged: token counts, plan names and the
+    /// credentials behind them stay out of the system log.
+    private func log(_ result: Result<AgentUsage, UsageError>, for agent: Agent) {
+        let name = agent.rawValue
+        switch result {
+        case .success(let snapshot):
+            let session = Self.percentText(snapshot.session?.percent)
+            let weekly = Self.percentText(snapshot.weekly?.percent)
+            logger.info("\(name, privacy: .public) usage: session \(session, privacy: .public), weekly \(weekly, privacy: .public)")
+        case .failure(let error):
+            logger.info("\(name, privacy: .public) usage unavailable: \(Self.describe(error), privacy: .public)")
+        }
+    }
+
+    private static func percentText(_ percent: Double?) -> String {
+        guard let percent else { return "n/a" }
+        return "\(Int(percent.rounded()))%"
+    }
+
+    private static func describe(_ error: UsageError) -> String {
+        switch error {
+        case .notSignedIn: "not signed in"
+        case .rateLimited(let retryAfter): "rate limited (retry after \(retryAfter.map { "\(Int($0))s" } ?? "unspecified"))"
+        case .network(let reason): "network: \(reason)"
+        case .unavailable(let reason): "unavailable: \(reason)"
+        }
     }
 
     // MARK: - Scheduling
