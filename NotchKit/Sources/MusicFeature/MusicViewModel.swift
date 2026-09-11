@@ -39,9 +39,17 @@ public final class MusicViewModel {
     /// UserDefaults key backing the "Track change peek" setting (absent means on).
     public nonisolated static let trackChangePeekDefaultsKey = "music.trackChangePeek"
 
+    /// MediaRemote replays the outgoing track for a moment after a skip. A revert to the
+    /// immediately previous track inside this window is treated as part of that burst: the
+    /// snapshot is still applied, but it does not re-trigger the track-change banner.
+    static let trackChangeBurstWindow: TimeInterval = 1.5
+
     public private(set) var snapshot: NowPlayingSnapshot?
     public private(set) var artwork: Data?
     public private(set) var displayedElapsed: TimeInterval = 0
+    /// True for `trackChangePeekDuration` after a track changes while playing. Views read this
+    /// to surface the new track; the island itself is never re-presented, so nothing flickers.
+    public private(set) var isShowingTrackChange = false
 
     public var isPlaying: Bool { snapshot?.isPlaying ?? false }
     public var duration: TimeInterval { snapshot?.duration ?? 0 }
@@ -57,6 +65,24 @@ public final class MusicViewModel {
     @ObservationIgnored private var backgroundID: PresentationID?
     @ObservationIgnored private var pauseToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
+    @ObservationIgnored private var trackChangeToken: ScheduledToken?
+    /// Identity of the track that was playing *before* the current one, plus when the swap
+    /// happened — together they recognise MediaRemote's old/new burst after a skip.
+    @ObservationIgnored private var previousTrack: TrackIdentity?
+    @ObservationIgnored private var lastTrackChangeAt: Date?
+
+    /// The fields that make a snapshot a different *track* (as opposed to a progress update).
+    private struct TrackIdentity: Equatable {
+        let title: String?
+        let artist: String?
+        let artworkID: String?
+
+        init(_ s: NowPlayingSnapshot) {
+            title = s.title
+            artist = s.artist
+            artworkID = s.artworkID
+        }
+    }
 
     public init(presenter: any IslandPresenting,
                 clock: any IslandClock,
@@ -98,8 +124,12 @@ public final class MusicViewModel {
             return
         }
 
-        let trackChanged = old.map { $0.title != new.title || $0.artist != new.artist || $0.artworkID != new.artworkID } ?? false
+        let identity = TrackIdentity(new)
+        let trackChanged = old.map { TrackIdentity($0) != identity } ?? false
 
+        // A track change keeps the *same* presentation and only refreshes its content. Presenting
+        // a second presentation would give the panel a new view identity and blink it away and
+        // back — twice, once when the peek appears and once when it expires.
         if let backgroundID {
             presenter.update(makeBackgroundPresentation(id: backgroundID))
         } else {
@@ -108,8 +138,14 @@ public final class MusicViewModel {
             presenter.present(makeBackgroundPresentation(id: id))
         }
 
-        if trackChanged, new.isPlaying, isTrackChangePeekEnabled() {
-            presenter.present(makeTrackChangePeek())
+        if trackChanged {
+            let isBurstEcho = previousTrack == identity
+                && lastTrackChangeAt.map { now().timeIntervalSince($0) <= Self.trackChangeBurstWindow } ?? false
+            previousTrack = old.map(TrackIdentity.init)
+            lastTrackChangeAt = now()
+            if !isBurstEcho, new.isPlaying, isTrackChangePeekEnabled() {
+                showTrackChange()
+            }
         }
 
         if new.isPlaying {
@@ -133,6 +169,7 @@ public final class MusicViewModel {
     /// Tears the feature down to idle: no presentation, no pause timer, no 1 Hz tick.
     private func dismissBackground() {
         stopTicking()
+        hideTrackChange()
         pauseToken?.cancel()
         pauseToken = nil
         if let backgroundID {
@@ -156,19 +193,21 @@ public final class MusicViewModel {
         )
     }
 
-    private func makeTrackChangePeek() -> Presentation {
-        Presentation(
-            featureID: Self.featureID,
-            priority: .activity,
-            style: .peek,
-            ttl: Self.trackChangePeekDuration,
-            leading: viewFactory.leading(self),
-            trailing: viewFactory.trailing(self),
-            // Carries the expanded view so the peek stays hover-eligible: otherwise the presenter
-            // clears hover promotion and an open panel would collapse under the pointer.
-            expanded: viewFactory.expanded(self),
-            expandedSize: Self.expandedSize
-        )
+    // MARK: Track-change banner
+
+    /// Raises the banner flag and re-arms its timer, so consecutive skips each get a full peek.
+    private func showTrackChange() {
+        isShowingTrackChange = true
+        trackChangeToken?.cancel()
+        trackChangeToken = clock.schedule(after: Self.trackChangePeekDuration) { [weak self] in
+            self?.hideTrackChange()
+        }
+    }
+
+    private func hideTrackChange() {
+        trackChangeToken?.cancel()
+        trackChangeToken = nil
+        isShowingTrackChange = false
     }
 
     // MARK: Commands
@@ -182,7 +221,7 @@ public final class MusicViewModel {
     /// Reflects a transport command locally before the source echoes it back. The round trip
     /// (MediaRemote → helper debounce → XPC) takes 1-2 s, which reads as an unresponsive UI.
     /// The change is routed through `apply` so the pause timer, the presentation refresh and the
-    /// track-change peek behave exactly as they do for a real snapshot (the title, artist and
+    /// track-change banner behave exactly as they do for a real snapshot (the title, artist and
     /// artwork are untouched, so nothing is treated as a track change). The next real snapshot
     /// overrides all of it.
     private func applyOptimistically(_ command: PlaybackCommand) {

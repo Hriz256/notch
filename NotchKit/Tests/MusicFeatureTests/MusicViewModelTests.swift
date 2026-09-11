@@ -87,25 +87,42 @@ struct MusicViewModelTests {
         #expect(presenter.dismissed == [id])
     }
 
-    @Test func trackChangeWhilePlayingShowsTimedActivityPeek() {
-        let (vm, presenter, _, _) = make()
-        vm.handle(.snapshot(snap("One")))
-        vm.handle(.snapshot(snap("Two", artworkID: "b")))
-        let peeks = presenter.presented.filter { $0.priority == .activity }
-        #expect(peeks.count == 1)
-        #expect(peeks[0].ttl == MusicViewModel.trackChangePeekDuration)
-        // The peek must carry an expanded view so it stays hover-eligible: without it the
-        // presenter clears hover promotion and an open panel collapses under the pointer.
-        #expect(peeks[0].expanded != nil)
-        #expect(peeks[0].expandedSize == MusicViewModel.expandedSize)
-        #expect(presenter.updated.count == 1)   // background presentation refreshed
+    @Test func trackChangeUpdatesInPlaceAndFlagsBanner() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        #expect(presenter.presented.count == 1)
+
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        // The island must never be re-presented on a track change: a second presentation swaps
+        // the whole panel (new `Presentation` id → new view identity) and reads as a flicker.
+        #expect(presenter.presented.count == 1)
+        #expect(presenter.updated.count == 1)
+        #expect(presenter.updated[0].id == presenter.presented[0].id)
+        #expect(vm.isShowingTrackChange)
+
+        clock.advance(by: MusicViewModel.trackChangePeekDuration)
+        #expect(vm.isShowingTrackChange == false)
+        #expect(presenter.presented.count == 1)
+    }
+
+    @Test func consecutiveTrackChangesReArmTheBanner() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        clock.advance(by: .seconds(2))
+        vm.handle(.snapshot(snap("Three", artworkID: "c", timestamp: clock.currentDate)))
+        clock.advance(by: .seconds(1))
+        #expect(vm.isShowingTrackChange)        // the first timer must not cut the second peek
+        clock.advance(by: .seconds(2))
+        #expect(vm.isShowingTrackChange == false)
     }
 
     @Test func trackChangePeekDisabledByPreference() {
         let (vm, presenter, _, _) = make(trackChangePeekEnabled: false)
         vm.handle(.snapshot(snap("One")))
         vm.handle(.snapshot(snap("Two", artworkID: "b")))
-        #expect(presenter.presented.filter { $0.priority == .activity }.isEmpty)
+        #expect(vm.isShowingTrackChange == false)
+        #expect(presenter.presented.count == 1)
         #expect(presenter.updated.count == 1)   // background still refreshed
     }
 
@@ -113,7 +130,42 @@ struct MusicViewModelTests {
         let (vm, presenter, _, _) = make()
         vm.handle(.snapshot(snap("One", rate: 0)))
         vm.handle(.snapshot(snap("Two", rate: 0, artworkID: "b")))
-        #expect(presenter.presented.filter { $0.priority == .activity }.isEmpty)
+        #expect(vm.isShowingTrackChange == false)
+        #expect(presenter.presented.count == 1)
+    }
+
+    /// MediaRemote replays the outgoing track for a moment after a skip. The data must stay
+    /// truthful, but the revert must not re-trigger the banner (that is the visible flicker).
+    @Test func revertWithinBurstDoesNotReflag() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        #expect(vm.isShowingTrackChange)
+
+        // Burst echo: back to "One", then "Two" again, both inside the burst window.
+        clock.advance(by: .seconds(0.3))
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        #expect(vm.snapshot?.title == "One")     // the data stays truthful
+        clock.advance(by: .seconds(0.3))
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        #expect(vm.snapshot?.title == "Two")
+        #expect(presenter.presented.count == 1)
+
+        // The echoes must not have re-armed the banner: it still expires on the original timer.
+        clock.advance(by: MusicViewModel.trackChangePeekDuration - .seconds(0.7))
+        #expect(vm.isShowingTrackChange)
+        clock.advance(by: .seconds(0.2))
+        #expect(vm.isShowingTrackChange == false)
+    }
+
+    @Test func revertAfterBurstWindowFlagsAgain() {
+        let (vm, _, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        clock.advance(by: MusicViewModel.trackChangePeekDuration)
+        // A deliberate "previous track" press long after the skip is a real track change.
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        #expect(vm.isShowingTrackChange)
     }
 
     @Test func artworkPersistsWhenSnapshotOmitsBytes() {
