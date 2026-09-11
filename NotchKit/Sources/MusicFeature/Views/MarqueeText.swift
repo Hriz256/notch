@@ -35,11 +35,24 @@ struct MarqueeText: View {
         }
         .frame(height: 18)
         .clipped()
-        .mask(
+        .mask(edgeFade)
+    }
+
+    /// Fading both edges only earns its keep while the text scrolls under them. A title
+    /// that fits is fully visible, so the same gradient would dim its first and last
+    /// glyph for no reason — a plain opaque mask leaves it untouched and leading-aligned.
+    /// Keeping one mask modifier (rather than branching on `needsScroll` in `body`) keeps
+    /// the marquee's view identity stable, so the running scroll animation survives the
+    /// moment a longer title flips `needsScroll`.
+    @ViewBuilder
+    private var edgeFade: some View {
+        if needsScroll {
             LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04),
                                    .init(color: .black, location: 0.96), .init(color: .clear, location: 1)],
                            startPoint: .leading, endPoint: .trailing)
-        )
+        } else {
+            Color.black
+        }
     }
 
     private var label: some View {

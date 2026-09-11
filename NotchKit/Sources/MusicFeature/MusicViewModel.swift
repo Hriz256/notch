@@ -35,7 +35,7 @@ public final class MusicViewModel {
     public static let featureID = FeatureID("music")
     public static let pauseDismissDelay: Duration = .seconds(600)
     public static let trackChangePeekDuration: Duration = .seconds(2.5)
-    public static let expandedSize = CGSize(width: 390, height: 200)
+    public static let expandedSize = CGSize(width: 380, height: 160)
 
     public private(set) var snapshot: NowPlayingSnapshot?
     public private(set) var artwork: Data?

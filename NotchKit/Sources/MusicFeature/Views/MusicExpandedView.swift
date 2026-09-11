@@ -6,12 +6,15 @@ struct MusicExpandedView: View {
     @State private var tint: Color = .clear
 
     var body: some View {
-        VStack(spacing: 10) {
+        // Sized to fit the 128 pt of usable height left under the 32 pt notch region:
+        // 56 (artwork row) + 6 + 12 (progress) + 6 + 28 (transport) + 4 + 8 padding = 120.
+        VStack(spacing: 6) {
             HStack(spacing: 12) {
-                ArtworkView(data: model.artwork, size: 64, radius: 12)
+                ArtworkView(data: model.artwork, size: 56, radius: 10)
                     .onTapGesture { openSourceApp() }
-                VStack(alignment: .leading, spacing: 2) {
-                    MarqueeText(text: model.snapshot?.title ?? "")
+                VStack(alignment: .leading, spacing: 1) {
+                    MarqueeText(text: model.snapshot?.title ?? "",
+                                font: .system(size: 13, weight: .semibold))
                     Text(model.snapshot?.artist ?? "")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.6))
@@ -24,11 +27,12 @@ struct MusicExpandedView: View {
                 }
             }
             TimeProgressBar(elapsed: model.displayedElapsed, duration: model.duration) { model.perform(.seek($0)) }
+                .frame(height: 12)
             TransportControls(isPlaying: model.isPlaying) { model.perform($0) }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
         .background(
             RadialGradient(colors: [tint.opacity(0.12), .clear], center: .topLeading, startRadius: 0, endRadius: 320)
         )

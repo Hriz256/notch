@@ -14,7 +14,8 @@ import os
 /// Space, so it is composited above all of them and never participates in the
 /// transition — while remaining visible over full-screen apps.
 ///
-/// Absolute level table (from SkyLight, as documented by mew-notch's `WindowManager`):
+/// Absolute level table (from SkyLight) — these are the only values WindowServer
+/// accepts, and they composite in ascending order (0 < 100 < 300 < 400 < 600):
 ///
 ///     0    kCGSSpaceAbsoluteLevelDefault
 ///     100  kCGSSpaceAbsoluteLevelSetupAssistant
@@ -24,9 +25,16 @@ import os
 ///     500  kCGSSpaceAbsoluteLevelBootProgress
 ///     600  kCGSSpaceAbsoluteLevelVoiceOver
 ///
-/// We use `Int32.max`, which is what boring.notch, mew-notch and jackson-storm's
-/// DynamicNotch all ship — it puts the island above everything, including Mission
-/// Control. Lower it via ``absoluteLevel`` to slot under a specific system layer.
+/// Anything above 600 is treated as *invalid*, not as "higher": measured on macOS 26.5
+/// (z-order sampled with `CGWindowListCopyWindowInfo` during a Dock minimize), a space
+/// at `Int32.max` — and at 1 000 or 100 000 — composites *below* a space at 100 and
+/// below the Dock's Genie animation. So the `Int32.max` that boring.notch, mew-notch
+/// and jackson-storm's DynamicNotch ship is a silent downgrade, not a top level.
+///
+/// We use 400, which is what the commercial Seam ships (and what Lakr233's
+/// SkyLightWindow uses). Every valid level 100…600 sits above the Dock minimize
+/// animation; 400 is the lowest that clears it with headroom while staying *below*
+/// VoiceOver — 600 would additionally cover the VoiceOver cursor, which we do not want.
 ///
 /// Symbols are resolved at runtime with `dlopen`/`dlsym`: SkyLight is a private
 /// framework, so it is never linked at build time, and a missing symbol on a future
@@ -34,10 +42,11 @@ import os
 /// instead of a launch-time dyld crash.
 @MainActor
 public final class PrivateSpace {
-    /// Absolute level of the private Space. `2_147_483_647` (`Int32.max`) is the value
-    /// used by every shipping notch app that solves the slide; tune if the island needs
-    /// to sit *below* some system layer (see the table above).
-    public static var absoluteLevel: Int32 = 2_147_483_647
+    /// Absolute level of the private Space. Must be one of the valid SkyLight levels
+    /// (0, 100, 200, 300, 400, 500, 600) — larger values are rejected by WindowServer
+    /// and sink the space below level 100. 400 matches Seam and sits above the Dock's
+    /// minimize animation; see the table above before changing it.
+    public static var absoluteLevel: Int32 = 400
 
     private typealias MainConnectionIDFn = @convention(c) () -> Int32
     private typealias SpaceCreateFn = @convention(c) (Int32, Int32, Int32) -> UInt64

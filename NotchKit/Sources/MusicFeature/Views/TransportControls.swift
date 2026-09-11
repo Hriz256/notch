@@ -6,10 +6,10 @@ struct TransportControls: View {
     let perform: (PlaybackCommand) -> Void
 
     var body: some View {
-        HStack(spacing: 28) {
-            button("backward.fill", size: 18) { perform(.previous) }
-            button(isPlaying ? "pause.fill" : "play.fill", size: 24) { perform(.togglePlayPause) }
-            button("forward.fill", size: 18) { perform(.next) }
+        HStack(spacing: 24) {
+            button("backward.fill", size: 16) { perform(.previous) }
+            button(isPlaying ? "pause.fill" : "play.fill", size: 20) { perform(.togglePlayPause) }
+            button("forward.fill", size: 16) { perform(.next) }
         }
     }
 
@@ -18,7 +18,7 @@ struct TransportControls: View {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 28)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
