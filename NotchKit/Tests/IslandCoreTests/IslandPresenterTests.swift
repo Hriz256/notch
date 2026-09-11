@@ -278,6 +278,109 @@ struct IslandPresenterTests {
         #expect(p.isHoverPromoted)
     }
 
+    // MARK: Card stack
+
+    @Test func cycleWithTwoBackgroundPresentationsPinsTheOther() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        #expect(p.current?.id == b.id)
+        p.cycle(.next)
+        #expect(p.pinnedID == a.id)
+        #expect(p.current?.id == a.id)
+        #expect(p.state == .peek(a.id))
+    }
+
+    @Test func alertStillWinsOverPin() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.cycle(.next)
+        #expect(p.current?.id == a.id)
+
+        let alert = makePresentation(feature: "devices", priority: .alert)
+        p.present(alert)
+        #expect(p.current?.id == alert.id)
+        // The pin survives the interruption and takes over again once it clears.
+        #expect(p.pinnedID == a.id)
+        p.dismiss(alert.id)
+        #expect(p.current?.id == a.id)
+    }
+
+    @Test func dismissingPinnedClearsPin() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.cycle(.next)
+        #expect(p.pinnedID == a.id)
+        p.dismiss(a.id)
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == b.id)
+    }
+
+    @Test func cycleWithOnePresentationIsNoOp() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        p.present(a)
+        p.cycle(.next)
+        p.cycle(.previous)
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == a.id)
+    }
+
+    @Test func stackKeepsInsertionOrder() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b", priority: .activity)
+        let alert = makePresentation(feature: "devices", priority: .alert)
+        let c = makePresentation(feature: "c")
+        p.present(a)
+        p.present(b)
+        p.present(alert)
+        p.present(c)
+        #expect(p.stack.map(\.id) == [a.id, b.id, c.id])
+    }
+
+    @Test func cycleWrapsAround() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        let c = makePresentation(feature: "c")
+        p.present(a)
+        p.present(b)
+        p.present(c)
+        #expect(p.current?.id == c.id)
+        p.cycle(.next)          // c -> a
+        #expect(p.current?.id == a.id)
+        p.cycle(.previous)      // a -> c
+        #expect(p.current?.id == c.id)
+        p.cycle(.previous)      // c -> b
+        #expect(p.current?.id == b.id)
+        p.cycle(.next)          // b -> c
+        #expect(p.current?.id == c.id)
+    }
+
+    @Test func cycleKeepsHoverPromotion() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(b.id))
+        p.cycle(.next)
+        #expect(p.state == .expanded(a.id))
+        #expect(p.isHoverPromoted)
+    }
+
     @Test func dismissingCurrentClearsHoverPromotion() {
         let p = IslandPresenter(clock: ManualClock())
         let music = makePresentation()

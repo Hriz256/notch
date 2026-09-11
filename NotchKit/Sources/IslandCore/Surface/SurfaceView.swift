@@ -35,6 +35,7 @@ public struct SurfaceView: View {
                 .islandFrame(size: layout.size, flare: layout.topRadius, minimum: floor)
                 .contentShape(Rectangle())
                 .onTapGesture { presenter.toggleHoverPromotion() }
+                .overlay(alignment: .trailing) { stackDots(layout: layout) }
 
             content(layout: layout, current: current)
                 .islandFrame(size: layout.size, minimum: floor, alignment: .top)
@@ -58,6 +59,33 @@ public struct SurfaceView: View {
                 .animation(choreographer.contentOut)
         )
     }
+
+    /// One dot per card, hugging the right edge inside the black body. Purely decorative:
+    /// it sits in an overlay with hit testing off, so neither the content's layout nor the
+    /// tap target on the shape changes when the stack grows.
+    @ViewBuilder
+    private func stackDots(layout: IslandLayout) -> some View {
+        let count = presenter.stack.count
+        if count > 1, layout.mode != .collapsed {
+            let index = presenter.stackIndex
+            VStack(spacing: Self.dotSpacing) {
+                ForEach(0..<count, id: \.self) { position in
+                    Circle()
+                        .fill(Color.white.opacity(position == index ? 1 : 0.35))
+                        .frame(width: Self.dotSize, height: Self.dotSize)
+                }
+            }
+            // The shape's frame includes the flares, so the black body's right edge sits
+            // `topRadius` inside it: the dots clear both.
+            .padding(.trailing, Self.dotInset + layout.topRadius)
+            .allowsHitTesting(false)
+            .animation(choreographer.contentIn, value: index)
+        }
+    }
+
+    private static let dotSize: CGFloat = 3
+    private static let dotSpacing: CGFloat = 5
+    private static let dotInset: CGFloat = 6
 
     @ViewBuilder
     private func content(layout: IslandLayout, current: Presentation?) -> some View {

@@ -12,6 +12,7 @@ public final class SurfaceController {
     private var window: SurfaceWindow?
     private var hostingView: PassThroughHostingView<SurfaceView>?
     private var hoverMonitor: HoverMonitor?
+    private var swipeMonitor: ScrollSwipeMonitor?
     private var geometry: NotchGeometry?
     private var screenObserver: (any NSObjectProtocol)?
     private var privateSpace: PrivateSpace?
@@ -49,6 +50,8 @@ public final class SurfaceController {
         privateSpace = nil
         hoverMonitor?.stop()
         hoverMonitor = nil
+        swipeMonitor?.stop()
+        swipeMonitor = nil
         window?.orderOut(nil)
         window = nil
         hostingView = nil
@@ -85,6 +88,7 @@ public final class SurfaceController {
 
     private func buildWindow(for geometry: NotchGeometry) {
         hoverMonitor?.stop()
+        swipeMonitor?.stop()
         window?.orderOut(nil)
 
         let frame = CGRect(
@@ -110,9 +114,16 @@ public final class SurfaceController {
         )
         monitor.start()
 
+        let swipe = ScrollSwipeMonitor(
+            rectProvider: { [weak self] in self?.islandScreenRect() ?? .zero },
+            onSwipe: { [weak self] direction in self?.presenter.cycle(direction) }
+        )
+        swipe.start()
+
         window = panel
         hostingView = hosting
         hoverMonitor = monitor
+        swipeMonitor = swipe
         isVisible = true
         logger.info("Surface window built for notch \(geometry.notchRect.debugDescription, privacy: .public)")
     }

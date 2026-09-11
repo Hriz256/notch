@@ -10,6 +10,10 @@ public final class IslandPresenter: IslandPresenting {
     /// Insertion-ordered queue. Winner = highest priority, then latest inserted.
     public private(set) var queue: [Presentation] = []
     public private(set) var isHoverPromoted = false
+    /// The card the user picked by cycling. Cleared as soon as it leaves `stack`.
+    public private(set) var pinnedID: PresentationID?
+
+    public enum CycleDirection: Sendable { case next, previous }
 
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private var ttlTokens: [PresentationID: ScheduledToken] = [:]
@@ -26,11 +30,18 @@ public final class IslandPresenter: IslandPresenting {
         self.clock = clock
     }
 
+    /// The cards the user can cycle between: everything queued below `.alert`, in insertion
+    /// order. Alerts are interruptions, not cards — they are never part of the stack.
+    public var stack: [Presentation] {
+        queue.filter { $0.priority < .alert }
+    }
+
+    /// An alert always wins; otherwise the pinned card, if the user picked one and it is
+    /// still queued; otherwise the plain queue winner.
     public var current: Presentation? {
-        queue.enumerated().max { a, b in
-            if a.element.priority != b.element.priority { return a.element.priority < b.element.priority }
-            return a.offset < b.offset
-        }?.element
+        if let alert = winner(in: queue.filter { $0.priority == .alert }) { return alert }
+        if let pinnedID, let pinned = stack.first(where: { $0.id == pinnedID }) { return pinned }
+        return winner(in: queue)
     }
 
     public var state: IslandState {
@@ -66,6 +77,28 @@ public final class IslandPresenter: IslandPresenting {
         queueDidChange()
     }
 
+    // MARK: Card stack
+
+    /// Index of the card the stack dots mark as current: the pinned one, else whichever
+    /// card would win on its own. `nil` while the stack is empty.
+    var stackIndex: Int? {
+        let stack = stack
+        if let pinnedID, let index = stack.firstIndex(where: { $0.id == pinnedID }) { return index }
+        guard let winner = winner(in: stack) else { return nil }
+        return stack.firstIndex { $0.id == winner.id }
+    }
+
+    /// Pins the neighbour of the currently displayed card, wrapping at both ends. A stack
+    /// of fewer than two cards has no neighbour, so the call is a no-op. Pinning leaves
+    /// hover promotion alone unless the new card cannot be expanded at all.
+    public func cycle(_ direction: CycleDirection) {
+        let stack = stack
+        guard stack.count > 1, let index = stackIndex else { return }
+        let offset = direction == .next ? 1 : stack.count - 1
+        pinnedID = stack[(index + offset) % stack.count].id
+        queueDidChange()
+    }
+
     // MARK: Hover
 
     public func setHovering(_ hovering: Bool) {
@@ -93,6 +126,14 @@ public final class IslandPresenter: IslandPresenting {
 
     // MARK: Private
 
+    /// Highest priority, then latest inserted.
+    private func winner(in presentations: [Presentation]) -> Presentation? {
+        presentations.enumerated().max { a, b in
+            if a.element.priority != b.element.priority { return a.element.priority < b.element.priority }
+            return a.offset < b.offset
+        }?.element
+    }
+
     private func armTTL(for presentation: Presentation) {
         ttlTokens.removeValue(forKey: presentation.id)?.cancel()
         guard let ttl = presentation.ttl else { return }
@@ -109,8 +150,13 @@ public final class IslandPresenter: IslandPresenting {
         return current.style == .peek && current.priority < .alert && current.expanded != nil
     }
 
-    /// The winner may have changed: keep the promotion in sync with what is now on screen.
+    /// The winner may have changed: keep the pin and the promotion in sync with what is
+    /// now on screen. A pin only survives while its card is still part of the stack, so
+    /// dismissal and TTL expiry both drop it here.
     private func queueDidChange() {
+        if let pinnedID, !stack.contains(where: { $0.id == pinnedID }) {
+            self.pinnedID = nil
+        }
         if isHoverEligible {
             armHoverEnterIfNeeded()
         } else {
