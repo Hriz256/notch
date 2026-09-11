@@ -37,6 +37,19 @@ public struct SurfaceView: View {
         .animation(choreographer.geometry, value: presenter.state)
     }
 
+    /// Content enters and leaves on its own curves, not on the geometry spring: the
+    /// per-transition `.animation(_:)` overrides the transaction animation supplied by
+    /// the `.animation(choreographer.geometry, value:)` modifiers on `body`, so the
+    /// shape still springs while content eases in (delayed) and eases out (immediately).
+    private var contentTransition: AnyTransition {
+        .asymmetric(
+            insertion: .islandContent(usesBlur: choreographer.usesBlur)
+                .animation(choreographer.contentIn),
+            removal: .islandContent(usesBlur: choreographer.usesBlur)
+                .animation(choreographer.contentOut)
+        )
+    }
+
     @ViewBuilder
     private func content(layout: IslandLayout, current: Presentation?) -> some View {
         switch layout.mode {
@@ -52,7 +65,7 @@ public struct SurfaceView: View {
                         .frame(width: IslandLayout.peekSlotWidth, height: geometry.notchHeight)
                 }
                 .id("peek-\(current.id)")
-                .transition(.islandContent(usesBlur: choreographer.usesBlur))
+                .transition(contentTransition)
             }
         case .expanded:
             if let current, let expanded = current.expanded {
@@ -60,7 +73,7 @@ public struct SurfaceView: View {
                     .padding(.top, geometry.notchHeight)
                     .frame(width: layout.size.width, height: layout.size.height, alignment: .top)
                     .id("expanded-\(current.id)")
-                    .transition(.islandContent(usesBlur: choreographer.usesBlur))
+                    .transition(contentTransition)
             }
         }
     }
