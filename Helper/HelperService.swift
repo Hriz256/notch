@@ -9,6 +9,8 @@ final class HelperService: NSObject, NowPlayingHelperProtocol, @unchecked Sendab
     private let logger = Logger(subsystem: "app.notch", category: "helper.service")
     private let monitor: NowPlayingMonitor?
     private let client: any NowPlayingHelperClientProtocol
+    /// Identifies this connection's snapshot sink in the shared monitor.
+    let clientToken = UUID()
 
     init(monitor: NowPlayingMonitor?, client: any NowPlayingHelperClientProtocol) {
         self.monitor = monitor
@@ -24,7 +26,7 @@ final class HelperService: NSObject, NowPlayingHelperProtocol, @unchecked Sendab
         // `client` is a non-Sendable XPC proxy, so it is reached through `self` (which is
         // @unchecked Sendable) rather than captured directly. Weakly, so the monitor — which
         // outlives every connection — does not pin a dead connection's exported object.
-        monitor.start { [weak self] snapshot in
+        monitor.start(token: clientToken) { [weak self] snapshot in
             guard let self, let data = try? snapshot.encoded() else { return }
             client.snapshotDidChange(data)
         }
@@ -48,11 +50,28 @@ final class ServiceDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         connection.exportedInterface = NSXPCInterface(with: NowPlayingHelperProtocol.self)
         connection.remoteObjectInterface = NSXPCInterface(with: NowPlayingHelperClientProtocol.self)
-        guard let client = connection.remoteObjectProxyWithErrorHandler({ _ in }) as? any NowPlayingHelperClientProtocol else {
+        let logger = self.logger
+        guard let client = connection.remoteObjectProxyWithErrorHandler({ error in
+            logger.error("Client proxy call failed: \(error.localizedDescription, privacy: .public)")
+        }) as? any NowPlayingHelperClientProtocol else {
             logger.error("Rejecting connection: client proxy does not implement the client protocol")
             return false
         }
-        connection.exportedObject = HelperService(monitor: monitor, client: client)
+        let service = HelperService(monitor: monitor, client: client)
+        let token = service.clientToken
+        connection.exportedObject = service
+        // Without this the proxy keeps the connection alive and the connection keeps its exported
+        // object: one leaked service plus connection per reconnect, and a dead proxy still being
+        // called. Capture the monitor (a process-lifetime singleton) rather than the service, so
+        // the handler itself adds no reference back into the connection's own object graph.
+        connection.invalidationHandler = { [weak connection, monitor] in
+            logger.notice("XPC connection invalidated: releasing the exported object")
+            monitor?.stop(token: token)
+            connection?.exportedObject = nil
+        }
+        connection.interruptionHandler = {
+            logger.notice("XPC connection interrupted")
+        }
         connection.resume()
         return true
     }

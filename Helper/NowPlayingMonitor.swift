@@ -16,6 +16,13 @@ final class NowPlayingMonitor: @unchecked Sendable {
     private var memoryPressure: DispatchSourceMemoryPressure?
     private var isRegistered = false
     private var sendSnapshot: (@Sendable (NowPlayingSnapshot) -> Void)?
+    /// Identifies the connection that installed `sendSnapshot`, so a late `stop` from a connection
+    /// that has already been replaced cannot silence the current client.
+    private var sendToken: UUID?
+    /// Bumped at the top of every `refresh()`. A refresh is two chained async round-trips, so a
+    /// reply from an older refresh can land after a newer one; the stale reply is dropped instead
+    /// of being published and becoming the dedup baseline.
+    private var epoch: UInt64 = 0
 
     private static let debounce: DispatchTimeInterval = .milliseconds(150)
 
@@ -23,9 +30,14 @@ final class NowPlayingMonitor: @unchecked Sendable {
         self.bridge = bridge
     }
 
-    func start(send: @escaping @Sendable (NowPlayingSnapshot) -> Void) {
+    /// - Parameter token: identifies the calling connection; pass the same value to `stop(token:)`.
+    func start(token: UUID, send: @escaping @Sendable (NowPlayingSnapshot) -> Void) {
         queue.async { [self] in
+            if sendSnapshot != nil, sendToken != token {
+                logger.notice("Replacing the snapshot sink of a previous client connection")
+            }
             sendSnapshot = send
+            sendToken = token
             // A (re)connecting client holds no state of its own. Without this reset, a client whose
             // last-seen snapshot matches the helper's cached one would be deduped into silence.
             dedup.reset()
@@ -49,6 +61,17 @@ final class NowPlayingMonitor: @unchecked Sendable {
             source.resume()
             memoryPressure = source
             refresh()
+        }
+    }
+
+    /// Drops the snapshot sink installed by `start(token:send:)` — only if it is still the one this
+    /// token installed, so an invalidated connection cannot silence the client that replaced it.
+    func stop(token: UUID) {
+        queue.async { [self] in
+            guard sendToken == token else { return }
+            sendSnapshot = nil
+            sendToken = nil
+            logger.notice("Client disconnected: snapshot sink cleared")
         }
     }
 
@@ -84,8 +107,12 @@ final class NowPlayingMonitor: @unchecked Sendable {
     }
 
     private func refresh() {
+        epoch &+= 1
+        let current = epoch
         bridge.getInfo(queue) { [weak self] dict in
-            guard let self else { return }
+            // Both replies arrive on `queue`, so `epoch` is read under the same confinement it is
+            // written under. A newer refresh having started means this reply is stale: drop it.
+            guard let self, current == epoch else { return }
             let info = (dict as NSDictionary?) as? [String: Any] ?? [:]
             // Both symbols are optional (see MediaRemoteBridge); without them the source app is unknown.
             guard let getClient = bridge.getClient, bridge.clientBundleID != nil else {
@@ -93,7 +120,13 @@ final class NowPlayingMonitor: @unchecked Sendable {
                 return
             }
             getClient(queue) { [weak self] client in
-                guard let self else { return }
+                guard let self, current == epoch else { return }
+                // No client is the common "nothing is playing" state, and the bundle-id function
+                // must not be called with a NULL client.
+                guard let client else {
+                    publish(info: info, bundleID: nil)
+                    return
+                }
                 let bundleID = bridge.clientBundleID?(client)?.takeUnretainedValue() as String?
                 publish(info: info, bundleID: bundleID)
             }
@@ -115,7 +148,9 @@ final class NowPlayingMonitor: @unchecked Sendable {
             sourceBundleID: bundleID,
             timestamp: info[MediaRemoteBridge.InfoKey.timestamp] as? Date ?? Date()
         )
-        guard let prepared = dedup.prepare(snapshot, now: Date()) else { return }
+        // Sanitize before dedup: MediaRemote reports NaN durations for live streams, and NaN never
+        // compares equal, so raw values would defeat `isEquivalent` and send on every notification.
+        guard let prepared = dedup.prepare(snapshot.sanitized(), now: Date()) else { return }
         logger.debug("Snapshot: \(prepared.title ?? "-", privacy: .public) rate=\(prepared.playbackRate) artwork=\(prepared.artworkData?.count ?? 0)B")
         sendSnapshot?(prepared)
     }
