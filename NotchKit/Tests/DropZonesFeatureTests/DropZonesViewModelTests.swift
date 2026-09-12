@@ -355,6 +355,57 @@ private final class Harness {
         #expect(harness.model.catcherFrameNeeded == nil)
     }
 
+    /// The feature orders the catcher window in from this callback. It has to arrive in
+    /// the same turn as the drag event — and, because the catcher's frame contains the
+    /// hot rect, *before* the panel is presented: AppKit picks a drag's destination when
+    /// the drag moves, so a window that appears a turn later under a cursor that has
+    /// already stopped gets no `draggingEntered` and the drop falls through.
+    @Test func theCatcherFrameIsHandedOverSynchronouslyAsTheZonesGoUpAndDown() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
+        harness.model.panelFrameProvider = { frame }
+
+        var frames: [CGRect?] = []
+        // The panel is presented into the fake presenter, so its count at the moment of
+        // the call says whether the catcher got there first.
+        var presentedWhenCalled: [Int] = []
+        harness.model.onCatcherFrameChange = { [presenter = harness.presenter] next in
+            frames.append(next)
+            presentedWhenCalled.append(presenter.presented.count)
+        }
+
+        harness.enterHotRect()
+
+        #expect(frames == [frame])
+        #expect(presentedWhenCalled == [0])
+
+        // Targeting a card updates the panel in place; the catcher is already where it
+        // has to be, so nothing is handed over again mid-drag.
+        _ = harness.model.targeted(at: airDropPoint)
+        #expect(frames == [frame])
+
+        harness.model.handle(.ended)
+
+        #expect(frames == [frame, nil])
+    }
+
+    /// `stop()` takes the panel down, so the catcher has to come down with it — a window
+    /// left over the notch after the feature is switched off would swallow every drop.
+    @Test func stoppingHandsOverANilCatcherFrame() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.panelFrameProvider = { CGRect(x: 0, y: 0, width: 280, height: 140) }
+        var frames: [CGRect?] = []
+        harness.model.onCatcherFrameChange = { frames.append($0) }
+
+        harness.enterHotRect()
+        harness.model.stop()
+
+        #expect(frames.count == 2)
+        #expect(frames.last == .some(nil))
+    }
+
     /// The hot rect is 300×121 from the top of the screen; the panel is 140 tall. A
     /// cursor heading into the bottom of a card therefore leaves the rect *before* it
     /// drops, and the dismiss that arms there must not survive the drop.

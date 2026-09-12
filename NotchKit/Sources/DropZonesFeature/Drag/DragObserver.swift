@@ -58,14 +58,20 @@ public enum DragPasteboardClassifier {
 public final class DragObserver {
 
     /// Every crossing the detector reports, with the cursor's screen location at
-    /// that moment (origin bottom-left) — the view model needs it to decide which
-    /// screen the zones belong on.
+    /// that moment (origin bottom-left).
+    ///
+    /// `DropZonesFeature` ignores the location: the island is on one screen, and
+    /// both the panel's frame and the hot rect are derived from that screen's
+    /// metrics rather than from where the cursor happens to be. It is reported
+    /// anyway because it is already in hand at the crossing — the detector had to
+    /// read it to decide there *was* one — and because it is what a second island
+    /// on a second screen would need.
     ///
     /// The location is real only for the outputs that come from a mouse-*dragged*
-    /// event — `.enteredHotRect` and `.leftHotRect`, the two that need it. `.ended`
-    /// and `.cancelled` report `.zero`, because reading `NSEvent.mouseLocation` is
-    /// a WindowServer round trip and those events fire on an idle machine (design
-    /// §5: nothing but an `Int` comparison until a mouse-down).
+    /// event — `.enteredHotRect` and `.leftHotRect`. `.ended` and `.cancelled`
+    /// report `.zero`, because reading `NSEvent.mouseLocation` is a WindowServer
+    /// round trip and those events fire on an idle machine (design §5: nothing but
+    /// an `Int` comparison until a mouse-down).
     public var onEvent: ((DragDetector.Output, CGPoint) -> Void)?
 
     /// Set by `StashDragSource` for the life of a drag that started from our own

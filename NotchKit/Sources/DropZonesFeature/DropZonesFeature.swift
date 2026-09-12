@@ -20,9 +20,10 @@ import os
 ///   two drags needs no notification plumbing;
 /// - the `DragObserver` feeds `handle(_:)` and is handed *to* the model as well, because a
 ///   drag that started from our own stash must not be offered the stash card again;
-/// - the `DropCatcherWindow` is ordered in and out by following the model's
-///   ``DropZonesViewModel/catcherFrameNeeded``, so the only window that can swallow a drop
-///   exists over the notch exactly while the zones are drawn there.
+/// - the `DropCatcherWindow` is ordered in and out from the model's
+///   ``DropZonesViewModel/onCatcherFrameChange``, so the only window that can swallow a
+///   drop exists over the notch exactly while the zones are drawn there — and is in place
+///   before the panel they are drawn in is presented.
 @MainActor
 @Observable
 public final class DropZonesFeature: IslandFeature {
@@ -43,15 +44,11 @@ public final class DropZonesFeature: IslandFeature {
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "dropzones.feature")
 
     @ObservationIgnored private var observer: DragObserver?
-    @ObservationIgnored private var catcher: DropCatcherWindow?
+    /// The window that receives the drop, or `nil` while the feature is off. Not private
+    /// so the tests can check that it is ordered in with the zones and out with them.
+    @ObservationIgnored private(set) var catcher: DropCatcherWindow?
     @ObservationIgnored private var bridge: CatcherBridge?
-    /// Bumped on every activation and deactivation, so the observation loop below can tell
-    /// whether the activation it belongs to is still the current one.
-    @ObservationIgnored private var catcherGeneration = 0
     @ObservationIgnored private var loadTask: Task<Void, Never>?
-    /// Mirrors the catcher window's state so show/hide is logged on transitions only —
-    /// the frame is re-applied on every widening of the panel, several times a second.
-    @ObservationIgnored private var isCatcherShown = false
 
     /// `~/Library/Application Support/Notch`, the directory the whole app keeps its state in.
     ///
@@ -134,14 +131,15 @@ public final class DropZonesFeature: IslandFeature {
         let catcher = DropCatcherWindow()
         let bridge = CatcherBridge(model: model, stagingRoot: Self.stagingRoot)
         catcher.catcherView.delegate = bridge
+        // Direct and synchronous: the model calls this as the zones go up, in the same
+        // main-actor turn, before the panel is presented.
+        model.onCatcherFrameChange = { [weak self] frame in self?.setCatcherFrame(frame) }
 
         self.model = model
         self.observer = observer
         self.catcher = catcher
         self.bridge = bridge
 
-        catcherGeneration += 1
-        trackCatcherFrame(generation: catcherGeneration)
         observer.start()
         loadTask = Task { @MainActor [weak model] in await model?.loadStash() }
         logger.info("Drop Zones feature activated")
@@ -156,12 +154,15 @@ public final class DropZonesFeature: IslandFeature {
         // panel the view model is about to dismiss.
         observer?.stop()
         observer = nil
-        catcherGeneration += 1
         loadTask?.cancel()
         loadTask = nil
+        // `hide` orders it out and makes it transparent to the mouse again; `close`
+        // releases the window's server-side resources rather than leaving them to the
+        // next autorelease (the panel is `isReleasedWhenClosed = false`, so this is safe
+        // with the last reference still in hand).
         catcher?.hide()
+        catcher?.close()
         catcher = nil
-        isCatcherShown = false
         bridge = nil
         // The copies on disk survive: the stash is the user's, not the session's.
         model?.stop()
@@ -177,33 +178,16 @@ public final class DropZonesFeature: IslandFeature {
 
     // MARK: - The catcher window
 
-    /// Follows ``DropZonesViewModel/catcherFrameNeeded`` for as long as the feature is on.
-    ///
-    /// `withObservationTracking` is one-shot and its `onChange` fires *before* the new value
-    /// is stored, so the sync is re-run — and the tracking re-armed — in the next main-actor
-    /// turn. Without a catcher the body reads nothing observable at all, so a loop left over
-    /// from a previous activation ends by itself; `generation` is what stops it re-arming
-    /// over the *next* activation's catcher in the meantime, which would leave two loops
-    /// running for one window.
-    private func trackCatcherFrame(generation: Int) {
-        withObservationTracking {
-            syncCatcher()
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, generation == catcherGeneration else { return }
-                trackCatcherFrame(generation: generation)
-            }
-        }
-    }
-
     /// Orders the catcher in over the panel, or out when there is no panel to catch for.
-    private func syncCatcher() {
+    ///
+    /// Called by the view model as the zones are presented and dismissed — synchronously,
+    /// in that same turn (see ``DropZonesViewModel/onCatcherFrameChange``). An empty frame
+    /// counts as "out": a machine with no notch has no panel to catch for, and a 40×40
+    /// window parked at the screen's origin would be a bug everywhere else on the desktop.
+    private func setCatcherFrame(_ frame: CGRect?) {
         guard let catcher else { return }
-        guard let frame = model?.catcherFrameNeeded, !frame.isEmpty else {
-            guard isCatcherShown else { return }
-            isCatcherShown = false
+        guard let frame, !frame.isEmpty else {
             catcher.hide()
-            logger.debug("catcher ordered out")
             return
         }
         catcher.catcherView.panelFrame = frame
@@ -211,9 +195,6 @@ public final class DropZonesFeature: IslandFeature {
         // card's edge still reaches the catcher; the hit test is against `panelFrame`, so
         // the extra area answers "no zone" and refuses the drag, exactly as a gap does.
         catcher.show(frame: frame.insetBy(dx: -Self.catcherSlack, dy: -Self.catcherSlack))
-        guard !isCatcherShown else { return }
-        isCatcherShown = true
-        logger.debug("catcher ordered in over \(NSStringFromRect(frame), privacy: .public)")
     }
 
     private static let catcherSlack: CGFloat = 20

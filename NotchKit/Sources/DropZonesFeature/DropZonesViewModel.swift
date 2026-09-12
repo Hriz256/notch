@@ -106,8 +106,9 @@ public struct AnimationState: Equatable, Sendable {
 ///   stash, updated in place as files and thumbnails change.
 ///
 /// The view model owns no windows. `DragObserver` feeds it `handle(_:)`, the catcher
-/// window asks it `targeted(at:)` / `drop(urls:on:)`, and it publishes
-/// ``catcherFrameNeeded`` so the feature knows when to order that window in.
+/// window asks it `targeted(at:)` / `drop(urls:on:)`, and it calls
+/// ``onCatcherFrameChange`` — synchronously, before the panel is presented — so the
+/// feature can order that window in.
 @MainActor
 @Observable
 public final class DropZonesViewModel {
@@ -175,6 +176,10 @@ public final class DropZonesViewModel {
     /// exactly "the panel's frame while the zones are shown" — and `nil` until the
     /// feature has told us where the panel is, so the catcher is never ordered in at a
     /// frame nobody has computed yet.
+    ///
+    /// Read-only convenience: the feature is *told* this value through
+    /// ``onCatcherFrameChange`` rather than polling it, because the window has to be in
+    /// place in the same turn the zones go up.
     public var catcherFrameNeeded: CGRect? {
         guard isZonesShown, let panelFrameProvider else { return nil }
         return panelFrameProvider()
@@ -191,6 +196,19 @@ public final class DropZonesViewModel {
     /// it knows the island's geometry; `nil` until then, which makes ``catcherFrameNeeded``
     /// `nil` too, so the catcher is never ordered in at a frame nobody has computed.
     @ObservationIgnored public var panelFrameProvider: (@MainActor () -> CGRect)?
+    /// Called with ``catcherFrameNeeded`` whenever the zones go up (the panel's frame)
+    /// or come down (`nil`). Set by the feature, which orders the catcher window in and
+    /// out inline.
+    ///
+    /// A direct callback rather than observation, and called *before* the panel is
+    /// presented: the catcher's frame contains the whole hot rect, so by the time the
+    /// window appears the cursor is usually already inside it — and AppKit only picks a
+    /// drag's destination when the drag *moves*. A window ordered in one main-actor turn
+    /// later (which is the best `withObservationTracking` can do, its `onChange` firing
+    /// before the new value is even stored) would miss a cursor that entered the notch
+    /// and stopped: no `draggingEntered`, and the drop falls through to whatever is
+    /// behind the island.
+    @ObservationIgnored public var onCatcherFrameChange: (@MainActor (CGRect?) -> Void)?
     /// The observer a drag *out* of the stash flags for its lifetime, so the panel offers
     /// the stash card alone rather than inviting the user to drop their own files back
     /// where they came from. Set by the feature at activation, and weak because the
@@ -469,8 +487,13 @@ public final class DropZonesViewModel {
     // MARK: - The stash's lifecycle
 
     /// Reads the stash from disk at activation and shows it if it survived.
+    ///
+    /// The read is cancellable: the feature cancels this task in `deactivate`, and a
+    /// load that came back afterwards would present a peek for an island that is off.
     public func loadStash() async {
-        index = await store.load()
+        let loaded = await store.load()
+        guard !Task.isCancelled else { return }
+        index = loaded
         guard !index.files.isEmpty else { return }
         phase = .stashed
         refreshStash()
@@ -560,8 +583,18 @@ public final class DropZonesViewModel {
     // MARK: - The zones presentation
 
     private func showZones() {
+        let id = zonesID ?? PresentationID()
+        let isNewShowing = zonesID == nil
+        if isNewShowing {
+            zonesID = id
+            isZonesShown = true
+            // The catcher goes up first, before the SwiftUI card is built and presented:
+            // see ``onCatcherFrameChange``. Presenting is the most expensive thing that
+            // happens during a drag, and a window ordered in after it can miss the drop.
+            onCatcherFrameChange?(catcherFrameNeeded)
+        }
         let presentation = Presentation(
-            id: zonesID ?? PresentationID(),
+            id: id,
             featureID: Self.featureID,
             title: Self.displayTitle,
             priority: .alert,
@@ -571,9 +604,7 @@ public final class DropZonesViewModel {
             expanded: viewFactory.zones(self),
             expandedSize: Self.zonesSize
         )
-        if zonesID == nil {
-            zonesID = presentation.id
-            isZonesShown = true
+        if isNewShowing {
             islandPresenter.present(presentation)
         } else {
             islandPresenter.update(presentation)
@@ -593,6 +624,8 @@ public final class DropZonesViewModel {
         islandPresenter.dismiss(zonesID)
         self.zonesID = nil
         isZonesShown = false
+        // Nothing to catch for any more; `catcherFrameNeeded` is `nil` from here.
+        onCatcherFrameChange?(catcherFrameNeeded)
     }
 
     private func cancelLeave() {

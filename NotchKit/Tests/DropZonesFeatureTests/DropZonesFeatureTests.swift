@@ -18,12 +18,30 @@ private final class FakePresenter: IslandPresenting {
 
 /// A feature pointed at a throw-away stash directory and a throw-away defaults suite, so
 /// no test can reach the user's real stash or preferences.
+///
+/// ``cleanUp()`` takes both away again: a defaults suite left behind is a plist in the
+/// user's preferences folder that outlives the test run, and a stash directory left
+/// behind is a pile of them in `/tmp`.
 @MainActor
-private func makeFeature() -> (DropZonesFeature, URL) {
-    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("dropzones-feature-tests/\(UUID().uuidString)", isDirectory: true)
-    let defaults = UserDefaults(suiteName: "dropzones.feature.tests.\(UUID().uuidString)")!
-    return (DropZonesFeature(baseDirectory: directory, defaults: defaults), directory)
+private final class Harness {
+    let feature: DropZonesFeature
+    let directory: URL
+    let suite: String
+
+    init() {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("dropzones-feature-tests/\(UUID().uuidString)", isDirectory: true)
+        suite = "dropzones.feature.tests.\(UUID().uuidString)"
+        feature = DropZonesFeature(baseDirectory: directory, defaults: UserDefaults(suiteName: suite)!)
+    }
+
+    /// Deactivates the feature (which takes the eight global monitors back down) and
+    /// removes everything it was pointed at. Safe on a feature that was never activated.
+    func cleanUp() {
+        feature.deactivate()
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: directory)
+    }
 }
 
 @Suite @MainActor struct DropZonesFeatureTests {
@@ -38,44 +56,78 @@ private func makeFeature() -> (DropZonesFeature, URL) {
     @Test func deactivatingBeforeActivatingIsHarmless() {
         // `FeatureRegistry` calls `deactivate` whenever the master switch goes
         // off, including for a feature that was never activated.
-        let (feature, _) = makeFeature()
-        feature.deactivate()
-        feature.deactivate()
-        #expect(feature.model == nil)
-        #expect(feature.id == FeatureID("dropzones"))
+        let harness = Harness()
+        defer { harness.cleanUp() }
+
+        harness.feature.deactivate()
+        harness.feature.deactivate()
+        #expect(harness.feature.model == nil)
+        #expect(harness.feature.id == FeatureID("dropzones"))
     }
 
-    @Test func activatingBuildsAModelAroundTheFeaturesOwnSettings() {
-        let (feature, _) = makeFeature()
-        defer { feature.deactivate() }
+    @Test func activatingBuildsAModelAroundTheFeaturesOwnSettings() throws {
+        let harness = Harness()
+        defer { harness.cleanUp() }
 
-        feature.activate(presenter: FakePresenter())
+        harness.feature.activate(presenter: FakePresenter())
 
-        let model = try? #require(feature.model)
+        let model = try #require(harness.feature.model)
         // One settings object, or the status menu and the island's own menu would disagree.
-        #expect(model?.settings === feature.settings)
+        #expect(model.settings === harness.feature.settings)
         // The observer is handed to the model so a drag out of the stash can be recognised.
-        #expect(model?.dragObserver != nil)
-        // Without a provider the catcher would never be ordered in.
-        #expect(model?.panelFrameProvider != nil)
+        #expect(model.dragObserver != nil)
+        // Without a provider the catcher would never be ordered in…
+        #expect(model.panelFrameProvider != nil)
+        // …and without the callback it would never be told to.
+        #expect(model.onCatcherFrameChange != nil)
     }
 
-    @Test func deactivatingDropsTheModelAndActivatingAgainBuildsAFreshOne() {
-        let (feature, _) = makeFeature()
+    @Test func deactivatingDropsTheModelAndActivatingAgainBuildsAFreshOne() throws {
+        let harness = Harness()
+        defer { harness.cleanUp() }
         let presenter = FakePresenter()
 
-        feature.activate(presenter: presenter)
-        let first = try? #require(feature.model)
+        harness.feature.activate(presenter: presenter)
+        let first = try #require(harness.feature.model)
 
-        feature.deactivate()
-        #expect(feature.model == nil)
+        harness.feature.deactivate()
+        #expect(harness.feature.model == nil)
 
-        feature.activate(presenter: presenter)
-        defer { feature.deactivate() }
-        #expect(feature.model != nil)
-        #expect(feature.model !== first)
+        harness.feature.activate(presenter: presenter)
+        #expect(harness.feature.model != nil)
+        #expect(harness.feature.model !== first)
         // Settings outlive the island: they are read by the menu whether it is on or off.
-        #expect(feature.model?.settings === feature.settings)
+        #expect(harness.feature.model?.settings === harness.feature.settings)
+    }
+
+    // MARK: - The catcher window
+
+    @Test func theCatcherIsOrderedInWithTheZonesAndOutWithThem() throws {
+        let harness = Harness()
+        defer { harness.cleanUp() }
+        harness.feature.activate(presenter: FakePresenter())
+
+        let model = try #require(harness.feature.model)
+        let catcher = try #require(harness.feature.catcher)
+        // A fixed panel rect: the test machine need not have a notch, and
+        // `currentPanelFrame()` would answer `.zero` there — which means "stay out".
+        let panel = CGRect(x: 700, y: 900, width: 280, height: 140)
+        model.panelFrameProvider = { panel }
+
+        #expect(!catcher.isVisible)
+
+        model.handle(.enteredHotRect)
+
+        // Ordered in synchronously, in the same turn the zones went up — no yield here,
+        // because that is exactly the guarantee the drop path depends on.
+        #expect(catcher.isVisible)
+        #expect(catcher.catcherView.panelFrame == panel)
+        // The window is the panel plus a little slack on every side.
+        #expect(catcher.frame == panel.insetBy(dx: -20, dy: -20))
+
+        model.handle(.ended)
+
+        #expect(!catcher.isVisible)
     }
 
     // MARK: - Panel geometry
@@ -112,7 +164,9 @@ private func makeFeature() -> (DropZonesFeature, URL) {
     // MARK: - The status-menu surface
 
     @Test func menuSettersWriteThroughWhileTheFeatureIsOff() {
-        let (feature, _) = makeFeature()
+        let harness = Harness()
+        defer { harness.cleanUp() }
+        let feature = harness.feature
 
         feature.setAirDropZone(false)
         feature.setStashZone(false)
@@ -128,8 +182,9 @@ private func makeFeature() -> (DropZonesFeature, URL) {
     }
 
     @Test func menuSettersGoThroughTheViewModelWhileTheFeatureIsOn() {
-        let (feature, _) = makeFeature()
-        defer { feature.deactivate() }
+        let harness = Harness()
+        defer { harness.cleanUp() }
+        let feature = harness.feature
         feature.activate(presenter: FakePresenter())
 
         feature.setAirDropZone(false)
