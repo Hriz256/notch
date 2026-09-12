@@ -180,7 +180,9 @@ public final class DropCatcherView: NSView {
     // MARK: - NSDraggingDestination
 
     public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        operation(for: sender)
+        let op = operation(for: sender)
+        logger.debug("draggingEntered → \(op.rawValue, privacy: .public) at \(NSStringFromPoint(self.panelPoint(of: sender)), privacy: .public) panelFrame=\(NSStringFromRect(self.panelFrame), privacy: .public)")
+        return op
     }
 
     public override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -194,7 +196,9 @@ public final class DropCatcherView: NSView {
     public override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { true }
 
     public override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        delegate?.catcher(self, dropped: sender, at: panelPoint(of: sender)) ?? false
+        let accepted = delegate?.catcher(self, dropped: sender, at: panelPoint(of: sender)) ?? false
+        logger.debug("performDragOperation → \(accepted, privacy: .public)")
+        return accepted
     }
 
     /// `.copy` over a card, nothing anywhere else.
