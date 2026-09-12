@@ -76,16 +76,31 @@ public final class SurfaceController {
 
     // MARK: Layout helpers
 
-    /// Island rect in screen coordinates for the current state.
+    /// Island rect in screen coordinates for the current state — the area the hover,
+    /// swipe and click monitors treat as "over the island".
+    ///
+    /// While the island is expanded the rect is grown to the largest expanded card in the
+    /// stack, not the card on screen. The cards differ in height (Music 160, Code 170, the
+    /// stash 124), so a swipe that lands on a shorter card left the pointer *below* the new
+    /// card, every following gesture was "outside" and the island read as frozen until the
+    /// pointer moved. Growing the rect costs nothing visible: the black shape stays the
+    /// card's own size, the extra band is transparent, and it only exists while hovering.
     private func islandScreenRect() -> CGRect {
         guard let geometry else { return .zero }
         let layout = IslandLayout.resolve(state: presenter.state, current: presenter.current, geometry: geometry)
+        var size = layout.size
+        if layout.mode == .expanded {
+            for card in presenter.stack where card.expanded != nil {
+                size.width = max(size.width, card.expandedSize.width)
+                size.height = max(size.height, card.expandedSize.height)
+            }
+        }
         let midX = geometry.notchRect.midX
         return CGRect(
-            x: midX - layout.size.width / 2,
-            y: geometry.screenFrame.maxY - layout.size.height,
-            width: layout.size.width,
-            height: layout.size.height
+            x: midX - size.width / 2,
+            y: geometry.screenFrame.maxY - size.height,
+            width: size.width,
+            height: size.height
         )
     }
 
