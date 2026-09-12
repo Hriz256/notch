@@ -176,7 +176,7 @@ private struct StashThumbnailTile: View {
                 StashDragSource(
                     files: [file],
                     store: model.store,
-                    observer: model.dragObserver,
+                    promises: model.promises,
                     onBegan: { model.dragOutBegan() },
                     onEnded: { model.dragOutEnded(completed: $0, files: .single(file.id)) }
                 )

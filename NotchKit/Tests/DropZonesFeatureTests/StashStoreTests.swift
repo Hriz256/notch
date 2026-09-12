@@ -219,7 +219,7 @@ private func exists(_ path: String) -> Bool {
         #expect(exists(a), "the original is still the user's file")
     }
 
-    @Test func loadTreatsAnUnreadableIndexAsEmptyAndRewritesIt() async throws {
+    @Test func loadTreatsAnUndecodableIndexAsEmptyAndRewritesIt() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try FileManager.default.createDirectory(at: fixture.base, withIntermediateDirectories: true)
@@ -231,6 +231,34 @@ private func exists(_ path: String) -> Bool {
         // The garbage is replaced, so the next load has nothing to complain about.
         let onDisk = try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: fixture.indexURL))
         #expect(onDisk == StashIndex())
+    }
+
+    /// The difference that matters: a file we cannot *decode* is repaired by overwriting
+    /// it, but a file we cannot *read* is very probably a perfectly good index behind a
+    /// transient failure, and overwriting it would lose every file in the stash for good.
+    @Test func loadLeavesAnIndexItCannotReadExactlyWhereItIs() async throws {
+        try #require(geteuid() != 0, "root can read a mode-000 file, so there is nothing to test")
+        let fixture = try Fixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fixture.indexURL.path)
+            fixture.cleanUp()
+        }
+        let a = try fixture.makeFile("a.txt")
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([a], action: .replace)
+        let bytesBefore = try Data(contentsOf: fixture.indexURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: fixture.indexURL.path)
+
+        let loaded = await store.load()
+
+        // The caller is told the stash is empty — we genuinely cannot say what is in it —
+        // but nothing has been thrown away.
+        #expect(loaded == StashIndex())
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fixture.indexURL.path)
+        #expect(try Data(contentsOf: fixture.indexURL) == bytesBefore, "a transient read failure must not rewrite the index")
+        #expect(exists(stashed.files[0].storedPath), "and must not touch the copies either")
+        // And once it is readable again the stash is simply back.
+        #expect(await store.load().files.map(\.name) == ["a.txt"])
     }
 
     @Test func loadOnAFreshMachineIsEmptyAndCreatesNothing() async throws {
@@ -336,6 +364,31 @@ private func exists(_ path: String) -> Bool {
         let written = try String(contentsOf: destination, encoding: .utf8)
         #expect(written == "alpha")
         #expect(exists(index.files[0].storedPath), "the stash keeps its copy")
+    }
+
+    /// The temporary name is `.notch-<UUID>` and carries no part of the destination's.
+    /// `.<name>.notch-<UUID>` added 44 bytes to a name that may be 255 bytes long, so a
+    /// drag-out of anything with a long name failed with `ENAMETOOLONG` before a byte was
+    /// copied — and the receiving app showed an error for a file that was right there.
+    @Test func writeHandlesANameTooLongToDecorate() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        // 250 bytes plus ".txt": legal on APFS, and 44 bytes short of the limit.
+        let name = String(repeating: "n", count: 250) + ".txt"
+        let a = try fixture.makeFile(name, contents: "alpha")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let index = await store.stash([a], action: .replace)
+        let destination = fixture.sources.appendingPathComponent("out", isDirectory: true)
+            .appendingPathComponent(name)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        try await store.write(file: index.files[0], to: destination)
+
+        #expect(try String(contentsOf: destination, encoding: .utf8) == "alpha")
     }
 
     @Test func writeOverwritesAnExistingDestination() async throws {

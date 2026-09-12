@@ -219,7 +219,7 @@ struct DropZonesViewsTests {
             baseDirectory: URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent("DropZonesViewsTests-\(UUID().uuidString)")
         )
-        var delegate: StashFilePromiseDelegate? = StashFilePromiseDelegate(store: store)
+        var delegate: StashFilePromiseDelegate? = StashFilePromiseDelegate(store: store, promises: DragOutPromiseTracker())
         let provider = StashFilePromiseProvider(
             file: StashedFile(name: "a.png", storedPath: "/tmp/a.png", bytes: 1),
             fileType: "public.png",

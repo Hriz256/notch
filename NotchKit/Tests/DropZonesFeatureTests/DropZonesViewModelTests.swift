@@ -818,6 +818,39 @@ private final class Harness {
         #expect(harness.model.index.files.map(\.name) == ["a.txt"])
     }
 
+    /// A stale settle has no card to take down, but it still owns the *phase*. Left at
+    /// `.settling` the model reads as "a drop is in flight" for ever: `.leftHotRect` and
+    /// `.ended` are both ignored while that is true, so the next drag would open a panel
+    /// that could never be closed again.
+    @Test func aStaleSettleClosesItsOwnPhaseInsteadOfWedgingTheModel() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        #expect(harness.model.phase == .settling)
+
+        // Both cards switched off from the menu while the settle card is up, and then the
+        // stash cleared: with no card left to draw, the panel comes down under the settle
+        // that is still armed for it.
+        harness.model.toggleAirDrop()
+        harness.model.toggleStashZone()
+        await harness.model.clearStash()
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.model.phase == .settling)
+
+        harness.clock.advance(by: .milliseconds(400))
+        #expect(harness.model.phase == .stashed)
+
+        // And the proof that it is not wedged: a later drag opens and closes normally.
+        harness.model.toggleStashZone()
+        harness.enterHotRect()
+        #expect(harness.model.phase == .hovering)
+        harness.model.handle(.leftHotRect)
+        harness.clock.advance(by: .milliseconds(300))
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.model.phase == .idle)
+    }
+
     @Test func aDropWithNoFilesIsTreatedAsADragThatJustEnded() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
@@ -1348,6 +1381,28 @@ private final class Harness {
         #expect(harness.clock.pendingCount == 0)
     }
 
+    /// A mouse-up the global monitors never saw — another application took the event, the
+    /// drag finished in another Space — leaves the mirror engaged with nothing to release
+    /// it. Rather than a second mechanism to detect that, the next drag adopts the mirror
+    /// that is already up and its own end releases it.
+    @Test func aDragWhoseEndWasMissedLeavesTheMirrorForTheNextOneToRelease() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        // A drag that begins and simply never reports an end.
+        harness.model.handle(.began)
+        harness.clock.advance(by: .seconds(30))
+        #expect(harness.presenter.mirrored == [true], "nothing releases it on its own")
+
+        harness.model.handle(.began)
+        harness.model.handle(.ended)
+        harness.clock.advance(by: DropZonesViewModel.mirrorRelease)
+
+        // Engaged once, released once: the second drag took the mirror over rather than
+        // swapping the windows under itself, and its end gave the pixels back.
+        #expect(harness.presenter.mirrored == [true, false])
+        #expect(harness.clock.pendingCount == 0)
+    }
+
     /// The feature being switched off mid-drag hands the island straight back: there is no
     /// panel left to collapse, and nobody to release the mirror later.
     @Test func stopReleasesTheMirror() throws {
@@ -1360,5 +1415,205 @@ private final class Harness {
 
         #expect(harness.presenter.mirrored == [true, false])
         #expect(harness.clock.pendingCount == 0)
+    }
+}
+
+// MARK: - Unredeemed file promises
+
+/// Stands in for the promises a real drag-out hands to a receiving application. No test
+/// can stage one — it would need a real drag — so the model's "wait for the bytes before
+/// deleting anything" rule is driven through this seam instead.
+@MainActor
+private final class FakePromiseTracker: DragOutPromiseTracking {
+    /// What the wait answers with: the files whose bytes were never asked for.
+    var unredeemed: Set<UUID> = []
+    /// While true the wait parks until ``release()``, which is the window a receiver that
+    /// has accepted the drop and not yet copied the file leaves open.
+    var holds = false
+    private(set) var waits = 0
+    private var gate: CheckedContinuation<Void, Never>?
+
+    func waitUntilSettled(timeout: Duration) async -> Set<UUID> {
+        waits += 1
+        if holds {
+            await withCheckedContinuation { gate = $0 }
+        }
+        return unredeemed
+    }
+
+    func release() {
+        gate?.resume()
+        gate = nil
+    }
+}
+
+/// The one way this feature could destroy the user's data: the drag-out session reports
+/// "completed" when the receiver *accepts* the drop, and a lazy receiver (Mail's compose
+/// window, anything Electron) asks for the bytes seconds later. Deleting on the poof's
+/// timer alone left `StashStore.write` copying a file that was no longer there.
+@Suite @MainActor struct DropZonesViewModelPromiseTests {
+
+    private func stash(_ names: [String], in harness: Harness) async throws {
+        harness.enterHotRect()
+        let urls = try names.map { try harness.makeFile($0) }
+        await harness.model.drop(urls: urls, on: .stash)
+        harness.clock.advance(by: .milliseconds(400))
+    }
+
+    @Test func aCompletedDragOutDeletesNothingUntilThePromisesAreWritten() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        tracker.holds = true
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let file = harness.model.index.files[0]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true)
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+
+        // The poof has played on time and the wait has started — and nothing is gone.
+        let waiting = await waitUntil { tracker.waits == 1 }
+        #expect(waiting)
+        #expect(harness.model.index.files.count == 1)
+        #expect(FileManager.default.fileExists(atPath: file.storedPath))
+        #expect(harness.presenter.live[peekID] != nil)
+        let held = await harness.store.load()
+        #expect(held.files.count == 1)
+
+        tracker.release()
+
+        let cleared = await waitUntil { harness.model.index.files.isEmpty }
+        #expect(cleared)
+        #expect(await waitUntil { harness.presenter.live[peekID] == nil })
+        #expect(harness.model.dragOutPhase == .idle)
+        let stored = await harness.store.load()
+        #expect(stored.files.isEmpty)
+    }
+
+    @Test func promisesNobodyEverRedeemedKeepTheirFiles() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let kept = harness.model.index.files[1]
+        // The receiver took "a.txt" and never asked for "b.txt": after the timeout the
+        // one it took goes and the one it did not stays.
+        tracker.unredeemed = [kept.id]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true)
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+
+        let settled = await waitUntil { harness.model.index.files.map(\.name) == ["b.txt"] }
+        #expect(settled)
+        #expect(FileManager.default.fileExists(atPath: kept.storedPath))
+        #expect(harness.presenter.live[peekID] != nil, "the card stays for the file that never left")
+        #expect(harness.model.dragOutPhase == .idle)
+        #expect(harness.model.poofingFileIDs.isEmpty)
+        let stored = await harness.store.load()
+        #expect(stored.files.map(\.name) == ["b.txt"])
+    }
+
+    @Test func oneTileWhosePromiseWasNeverRedeemedComesBack() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+        tracker.unredeemed = [taken.id]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true, files: .single(taken.id))
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+
+        let restored = await waitUntil { harness.model.poofingFileIDs.isEmpty }
+        #expect(restored, "the tile faded out on the way and has to come back with its file")
+        #expect(harness.model.index.files.count == 2)
+        #expect(FileManager.default.fileExists(atPath: taken.storedPath))
+        let stored = await harness.store.load()
+        #expect(stored.files.count == 2)
+    }
+
+    @Test func stoppingWhileWaitingForAPromisePresentsNothingAfterwards() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        tracker.holds = true
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+        harness.model.poofFile(id: taken.id)
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+        #expect(await waitUntil { tracker.waits == 1 })
+        let presentedBefore = harness.presenter.presented.count
+        let updatedBefore = harness.presenter.updated.count
+
+        harness.model.stop()
+        tracker.release()
+
+        // The removal resumes into a model that is finished: it touches neither the
+        // island nor the stash.
+        // Nothing to wait *for*, so the only honest test is to give the resumed work every
+        // chance to do something and find that it did not.
+        _ = await waitUntil(timeout: .milliseconds(200)) { false }
+        #expect(harness.presenter.presented.count == presentedBefore)
+        #expect(harness.presenter.updated.count == updatedBefore)
+        let stored = await harness.store.load()
+        #expect(stored.files.count == 2)
+    }
+}
+
+// MARK: - Switching the feature off mid-flight
+
+@Suite @MainActor struct DropZonesViewModelTeardownTests {
+
+    /// The copy is a real hop onto the store's actor, and the master switch can be thrown
+    /// while it is in flight. Everything after that `await` used to run anyway: the settle
+    /// card was re-presented and the peek armed on an island with no observer and no
+    /// catcher left to take them down again.
+    @Test func stoppingDuringTheCopyPresentsNothingAfterwards() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let file = try harness.makeFile("a.txt")
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+        harness.model.beforeStash = { [model = harness.model] in model.stop() }
+
+        await harness.model.drop(urls: [file], on: .stash)
+
+        #expect(harness.model.phase == .idle)
+        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(harness.presenter.liveCard(.background) == nil)
+        #expect(harness.presenter.liveCard(.alert) == nil)
+        #expect(harness.clock.pendingCount == 0, "no settle may be armed on a stopped model")
+
+        harness.clock.advance(by: .seconds(2))
+        #expect(harness.presenter.presented.count == 1, "only the zones card the drag opened")
+        #expect(harness.presenter.liveCard(.background) == nil)
+        // The user's files are not lost: they are on disk for the next activation to load.
+        let stored = await harness.store.load()
+        #expect(stored.files.map(\.name) == ["a.txt"])
+    }
+
+    @Test func stoppingWhileTheStashIsBeingClearedPresentsNothingAfterwards() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        harness.clock.advance(by: .milliseconds(400))
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+
+        harness.model.stop()
+        await harness.model.clearStash()
+
+        #expect(harness.model.index.files.isEmpty)
+        #expect(harness.presenter.dismissed.contains(peekID))
+        #expect(harness.presenter.liveCard(.background) == nil)
     }
 }

@@ -25,7 +25,7 @@ struct StashLeadingView: View {
                 StashDragSource(
                     files: model.index.files,
                     store: model.store,
-                    observer: model.dragObserver,
+                    promises: model.promises,
                     onBegan: { model.dragOutBegan() },
                     onEnded: { model.dragOutEnded(completed: $0) }
                 )

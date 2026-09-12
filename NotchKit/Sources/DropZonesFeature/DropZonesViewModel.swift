@@ -165,6 +165,16 @@ public final class DropZonesViewModel {
     public static let airDropDelay: Duration = .milliseconds(300)
     /// The poof after a completed drag-out, before the stash is emptied.
     public static let poofDuration: Duration = .milliseconds(250)
+    /// How long the stash waits for a receiver to redeem the promises a drag-out handed it
+    /// before deleting the files anyway.
+    ///
+    /// The poof still plays at ``poofDuration`` — the tile fades on time — but the copies
+    /// on disk are the user's only ones until the receiver has actually asked for the
+    /// bytes, and a lazy receiver (Mail's compose window, anything Electron) asks seconds
+    /// after accepting the drop. 15 s is long enough for a big file over a slow volume and
+    /// short enough that a receiver which crashed does not hold the stash for ever; when it
+    /// runs out the files nobody asked for are *kept* rather than deleted.
+    public static let promiseSettleTimeout: Duration = .seconds(15)
     /// How long after the panel comes down the island keeps drawing itself from the
     /// mirror window (`IslandPresenting.setSurfaceMirrored(_:)`).
     ///
@@ -255,11 +265,18 @@ public final class DropZonesViewModel {
     /// and stopped: no `draggingEntered`, and the drop falls through to whatever is
     /// behind the island.
     @ObservationIgnored public var onCatcherFrameChange: (@MainActor (CGRect?) -> Void)?
-    /// The observer a drag *out* of the stash flags for its lifetime, so the panel offers
-    /// the stash card alone rather than inviting the user to drop their own files back
-    /// where they came from. Set by the feature at activation, and weak because the
-    /// feature owns it; `nil` in tests and previews, where no drag can start.
-    @ObservationIgnored public weak var dragObserver: DragObserver?
+    /// A line describing the drop catcher's state, logged when a mouse-up over a card is
+    /// never followed by a drop. Set by the feature; `nil` in tests, where there is no
+    /// window to describe.
+    ///
+    /// The catcher is the one part of the path that can fail silently — a window AppKit
+    /// never considered for the drag delivers no `draggingEntered` and no drop, and looks
+    /// from here exactly like a user who let go a pixel outside the card.
+    @ObservationIgnored public var catcherDiagnostics: (@MainActor () -> String)?
+    /// The promises a drag out of the stash has handed to receiving applications. The
+    /// drag source registers them; the model waits on them before deleting anything (see
+    /// ``promiseSettleTimeout``).
+    @ObservationIgnored public let promises = DragOutPromiseTracker()
 
     @ObservationIgnored private let clock: any IslandClock
     /// The stash on disk. Exposed because the drag-out source has to hand its promise
@@ -292,6 +309,14 @@ public final class DropZonesViewModel {
     /// Set when a drag ends while the panel is still on screen: the mirror is released
     /// ``mirrorRelease`` after the panel comes down rather than straight away.
     @ObservationIgnored private var isMirrorReleasePending = false
+    /// Set by ``stop()`` and never cleared: the feature builds a fresh model on every
+    /// activation, so a stopped one is finished for good.
+    ///
+    /// Checked after every `await` in this class. A drop whose copy was still in flight
+    /// when the feature was switched off used to come back and present its settle card
+    /// into an island that no longer had a drag observer, a catcher or a way to dismiss
+    /// it — a card the user could not get rid of.
+    @ObservationIgnored private var isStopped = false
     @ObservationIgnored private var expiryToken: ScheduledToken?
     @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
     /// The two timers hand off to an actor, so each also owns a `Task`; held here so
@@ -304,6 +329,13 @@ public final class DropZonesViewModel {
     /// events into the window where `store.stash` is in flight. Never set in shipping
     /// code; `internal` so only `@testable` code can reach it.
     @ObservationIgnored var beforeStash: (@MainActor () async -> Void)?
+
+    /// Test seam. What the model waits on before deleting files a drag-out has taken;
+    /// ``promises`` in shipping code, a double in the tests, which cannot stage a real
+    /// file promise. `internal` so only `@testable` code can reach it.
+    @ObservationIgnored var promiseTracker: (any DragOutPromiseTracking)?
+
+    private var settlingPromises: any DragOutPromiseTracking { promiseTracker ?? promises }
 
     public init(
         presenter: any IslandPresenting,
@@ -424,7 +456,13 @@ public final class DropZonesViewModel {
         dropGraceToken = clock.schedule(after: Self.dropGrace) { [weak self] in
             guard let self else { return }
             dropGraceToken = nil
-            logger.info("no drop arrived within the grace; closing the zones")
+            // The catcher's own state goes in the same line: "no drop arrived" and "the
+            // catcher was never even asked" look identical from here, and only the second
+            // one is a bug in our window handling.
+            logger.info("""
+                no drop arrived within the grace; closing the zones — \
+                \(self.catcherDiagnostics?() ?? "no catcher attached", privacy: .public)
+                """)
             guard zonesID == showing, !isDropInFlight else { return }
             dismissZones()
             phase = .idle
@@ -443,6 +481,14 @@ public final class DropZonesViewModel {
     ///
     /// Without it the dragged file's thumbnail disappears behind the zones panel: the
     /// island's private SkyLight Space composites above the drag image (spec, "Known gap").
+    ///
+    /// This is also the release safety. A mouse-up the global monitors never saw — another
+    /// application taking the event, a drag finishing in another Space — leaves the mirror
+    /// engaged with nothing to release it. Rather than a second mechanism to detect that,
+    /// the *next* drag simply adopts the mirror that is already up (the guard below), and
+    /// its own `.ended` releases it the usual way. Nothing is visibly wrong in the
+    /// meantime: the mirror draws the same presenter as the primary, and the primary is
+    /// still there at alpha 0 taking every click.
     private func mirrorSurface() {
         cancelMirrorRelease()
         guard !isMirrored else { return }
@@ -602,6 +648,11 @@ public final class DropZonesViewModel {
 
         await beforeStash?()
         index = await store.stash(urls, action: action)
+        // The feature can be switched off while the copy is in flight. The files still go
+        // into the stash — the user dropped them, and the next activation's `loadStash()`
+        // will find them — but presenting anything from here would put a card on an island
+        // that no longer has a drag observer, a catcher, or any way to take it down.
+        guard !isStopped else { return }
         logger.info("""
             stashed \(urls.count, privacy: .public) file(s) by \(action.rawValue, privacy: .public); \
             stash now holds \(self.index.files.count, privacy: .public)
@@ -623,7 +674,15 @@ public final class DropZonesViewModel {
             // they land either way.
             refreshStash()
             armExpiry()
-            guard zonesID == showing else { return }
+            guard zonesID == showing else {
+                // Somebody else's card is on screen (or none is), so there is nothing here
+                // to take down — but the phase is still ours to close. Left at `.settling`
+                // it would keep ``isDropInFlight`` true for ever, and every later
+                // `.leftHotRect` and `.ended` would be ignored: the panel would come up on
+                // the next drag and never come down again.
+                if phase == .settling { phase = .stashed }
+                return
+            }
             dismissZones()
             phase = .stashed
         }
@@ -674,11 +733,47 @@ public final class DropZonesViewModel {
         }
     }
 
+    /// Empties the stash once the receiver actually has the bytes.
+    ///
+    /// The session reported `.completed` as soon as the receiving application *accepted*
+    /// the drop, which for a lazy receiver is long before it asks for the files. Deleting
+    /// here without waiting is how the user's only copy disappears (see
+    /// ``DragOutPromiseTracker``), so anything still outstanding holds the deletion up to
+    /// ``promiseSettleTimeout`` — and the files nobody ever asked for are kept.
     private func finishPoof() async {
-        await clearStash()
-        guard !Task.isCancelled else { return }
+        let unredeemed = await settlingPromises.waitUntilSettled(timeout: Self.promiseSettleTimeout)
+        guard !Task.isCancelled, !isStopped else { return }
+
+        if unredeemed.isEmpty {
+            await clearStash()
+        } else {
+            logger.error("""
+                keeping \(unredeemed.count, privacy: .public) of \
+                \(self.index.files.count, privacy: .public) stashed file(s): \
+                their promises were never redeemed
+                """)
+            await deleteRedeemed(keeping: unredeemed)
+        }
+        guard !Task.isCancelled, !isStopped else { return }
         dragOutPhase = .idle
         poofTask = nil
+    }
+
+    /// Takes out everything the receiver really took and leaves the rest of the pile where
+    /// it is, card and all.
+    private func deleteRedeemed(keeping unredeemed: Set<UUID>) async {
+        let taken = index.files.filter { !unredeemed.contains($0.id) }
+        for file in taken {
+            index = await store.remove(fileID: file.id)
+            guard !isStopped else { return }
+            thumbnails[file.id] = nil
+        }
+        guard !index.files.isEmpty else {
+            await stashBecameEmpty()
+            return
+        }
+        poofingFileIDs.removeAll()
+        refreshStash()
     }
 
     // MARK: - One file at a time
@@ -722,7 +817,20 @@ public final class DropZonesViewModel {
             poofingFileIDs.remove(id)
             return
         }
+        // The same wait a whole-stash drag-out does: this file may be exactly the one a
+        // receiver has accepted and not yet asked for. Costs nothing — one comparison —
+        // when nothing is outstanding, which is every menu-driven removal.
+        let unredeemed = await settlingPromises.waitUntilSettled(timeout: Self.promiseSettleTimeout)
+        guard !isStopped else { return }
+        guard !unredeemed.contains(id) else {
+            logger.error("keeping a stashed file: the receiver never asked for its bytes")
+            // The tile faded out on the way here; it comes back with the card.
+            poofingFileIDs.remove(id)
+            refreshStash()
+            return
+        }
         index = await store.remove(fileID: id)
+        guard !isStopped else { return }
         poofingFileIDs.remove(id)
         thumbnails[id] = nil
         logger.info("removed one file from the stash; \(self.index.files.count, privacy: .public) left")
@@ -743,7 +851,7 @@ public final class DropZonesViewModel {
     /// load that came back afterwards would present a peek for an island that is off.
     public func loadStash() async {
         let loaded = await store.load()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !isStopped else { return }
         index = loaded
         guard !index.files.isEmpty else { return }
         phase = .stashed
@@ -756,6 +864,7 @@ public final class DropZonesViewModel {
     public func clearStash() async {
         await store.clear()
         index = StashIndex()
+        guard !isStopped else { return }
         await stashBecameEmpty()
     }
 
@@ -768,6 +877,7 @@ public final class DropZonesViewModel {
         thumbnails.removeAll()
         poofingFileIDs.removeAll()
         await thumbnailProvider.clearCache()
+        guard !isStopped else { return }
         dismissStash()
         // A panel still up would now be drawing an empty stash.
         if isZonesShown, zones.isEmpty { dismissZones() }
@@ -815,6 +925,9 @@ public final class DropZonesViewModel {
 
     /// Drops both presentations and every timer. Called when the feature is switched off.
     public func stop() {
+        // First, so that anything already suspended on an `await` finds it set the moment
+        // it resumes and bails out instead of presenting into a dead island.
+        isStopped = true
         cancelLeave()
         cancelDropGrace()
         settleToken?.cancel()

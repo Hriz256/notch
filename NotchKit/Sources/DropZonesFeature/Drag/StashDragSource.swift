@@ -11,9 +11,7 @@ import os
 ///
 /// SwiftUI's own `.draggable` cannot do this: it offers one item per view and no file
 /// promises, whereas dragging the stash out has to hand the receiver *n* real files whose
-/// bytes are only copied if the drop is accepted — and has to tell `DragObserver` that the
-/// drag in flight is ours, so the zones panel offers the stash card alone instead of
-/// inviting the user to drop their own files back where they came from.
+/// bytes are only copied if the drop is accepted.
 ///
 /// It is an invisible **overlay** rather than a host for the thumbnails, which keeps the
 /// pixels under it pure SwiftUI: they stay crisp, they stay measurable by the render
@@ -22,8 +20,9 @@ import os
 struct StashDragSource: NSViewRepresentable {
     let files: [StashedFile]
     let store: StashStore
-    /// Weakly held by the view; `nil` in previews and render tests, where no drag can start.
-    let observer: DragObserver?
+    /// Where the session's unredeemed promises are counted, so the stash is not deleted
+    /// out from under a receiver that has not asked for the bytes yet.
+    let promises: DragOutPromiseTracker
     let onBegan: () -> Void
     let onEnded: (Bool) -> Void
 
@@ -40,7 +39,7 @@ struct StashDragSource: NSViewRepresentable {
     private func apply(to view: DragSourceView) {
         view.files = files
         view.store = store
-        view.observer = observer
+        view.promises = promises
         view.onBegan = onBegan
         view.onEnded = onEnded
     }
@@ -57,7 +56,7 @@ struct StashDragSource: NSViewRepresentable {
 final class DragSourceView: NSView, NSDraggingSource {
     var files: [StashedFile] = []
     var store: StashStore?
-    weak var observer: DragObserver?
+    var promises: DragOutPromiseTracker?
     var onBegan: () -> Void = {}
     var onEnded: (Bool) -> Void = { _ in }
 
@@ -126,11 +125,11 @@ final class DragSourceView: NSView, NSDraggingSource {
     }
 
     private func beginDrag(with event: NSEvent) {
-        guard let store else { return }
+        guard let store, let promises else { return }
         // One delegate for the whole session; every provider holds it strongly, because
         // `NSFilePromiseProvider.delegate` is weak and the promises are written long
         // after this method — and after the session — has returned.
-        let delegate = StashFilePromiseDelegate(store: store)
+        let delegate = StashFilePromiseDelegate(store: store, promises: promises)
 
         let origin = convert(event.locationInWindow, from: nil)
         let items: [NSDraggingItem] = files.enumerated().map { index, file in
@@ -160,6 +159,12 @@ final class DragSourceView: NSView, NSDraggingSource {
         }
 
         guard !items.isEmpty else { return }
+        // The session is going ahead, so from this moment every one of those promises is
+        // owed to somebody. Registered here rather than as each provider is built, so a
+        // session that is abandoned before it starts leaves nothing outstanding — and
+        // registered *before* `beginDraggingSession`, which is what makes the count
+        // impossible to read too late (the drop can be accepted inside that call).
+        for file in files { promises.register(fileID: file.id) }
         beginDraggingSession(with: items, event: event, source: self)
     }
 
@@ -184,9 +189,9 @@ final class DragSourceView: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-        // The observer is what stops the zones panel from offering the user their own files
-        // back; it must be set before the first `draggingUpdated` reaches the catcher.
-        observer?.isDragOutActive = true
+        // What stops the zones panel from offering the user their own files back: the view
+        // model's `dragOutPhase` drives `ZoneState.isDragOut`, and it must be set before
+        // the first `draggingUpdated` reaches the catcher.
         onBegan()
     }
 
@@ -198,8 +203,10 @@ final class DragSourceView: NSView, NSDraggingSource {
         // Nothing about the promises is torn down here. Finder enqueues
         // `receivePromisedFiles` asynchronously, so this routinely runs *before* a single
         // byte has been written; the providers on the pasteboard own the delegate and
-        // keep it alive for exactly as long as the promises can still be redeemed.
-        observer?.isDragOutActive = false
+        // keep it alive for exactly as long as the promises can still be redeemed — and
+        // ``DragOutPromiseTracker`` is what stops the view model deleting the files out
+        // from under a receiver that has not asked for them yet.
+        //
         // An empty operation is a cancelled drag — released over nothing, or over something
         // that refused it — and the stash must survive that untouched.
         onEnded(operation != [])
@@ -245,6 +252,9 @@ final class StashFilePromiseProvider: NSFilePromiseProvider {
 /// and at any time, which is what lets the copy be a plain `await`.
 final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
     private let store: StashStore
+    /// Where this session's promises are counted off as they are written. The stash is not
+    /// deleted while anything here is still outstanding (see ``DragOutPromiseTracker``).
+    private let promises: DragOutPromiseTracker
     private let logger = Logger(subsystem: "app.notch", category: "dropzones.dragout")
 
     /// One shared queue: the promises of a session are written concurrently on it, and it
@@ -252,13 +262,14 @@ final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
     /// otherwise block the island while they copy.
     private static let queue: OperationQueue = {
         let queue = OperationQueue()
-        queue.name = "app.notch.dropzones.promises"
+        queue.name = "app.notch.dropzones.dragout"
         queue.qualityOfService = .userInitiated
         return queue
     }()
 
-    init(store: StashStore) {
+    init(store: StashStore, promises: DragOutPromiseTracker) {
         self.store = store
+        self.promises = promises
     }
 
     func filePromiseProvider(
@@ -280,12 +291,13 @@ final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
             return
         }
         let store = store
+        let promises = promises
         let logger = logger
         let completion = UncheckedSendable(completionHandler)
         Task {
+            var thrown: (any Error)?
             do {
                 try await store.write(file: file, to: url)
-                completion.value(nil)
             } catch {
                 // The receiver shows its own error; ours is the only record of *why*, and
                 // the stash is deliberately left alone so nothing is lost.
@@ -293,8 +305,13 @@ final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
                     could not write \(file.name, privacy: .public) to the drop destination: \
                     \(error.localizedDescription, privacy: .public)
                     """)
-                completion.value(error)
+                thrown = error
             }
+            // Settled either way, and *before* the receiver is told: a failed write is
+            // still a promise nobody is waiting on any more, and a promise left standing
+            // would hold the stash's deletion for the full timeout.
+            await promises.settle(fileID: file.id)
+            completion.value(thrown)
         }
     }
 

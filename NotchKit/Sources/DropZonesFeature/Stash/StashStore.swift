@@ -47,14 +47,23 @@ public actor StashStore {
     ///
     /// Three things can have happened since the index was written: the TTL ran out
     /// (everything goes), a stored file was deleted behind our back (that entry
-    /// goes), or the file is unreadable (treated as an empty stash and rewritten on
-    /// the spot, so a corrupt `stash.json` is not re-read and re-logged forever).
-    /// Any pruning is persisted so the next load has nothing to do.
+    /// goes), or `stash.json` could not be turned into a `StashIndex` (treated as an
+    /// empty stash and rewritten on the spot, so a corrupt file is not re-read and
+    /// re-logged forever). Any pruning is persisted so the next load has nothing to do.
+    ///
+    /// A file that could not be *read* is the one case where nothing is written: see
+    /// ``readIndex()``.
     public func load() -> StashIndex {
-        guard var index = decodeIndex() else {
+        var index: StashIndex
+        switch readIndex() {
+        case let .index(decoded):
+            index = decoded
+        case .corrupt:
             let empty = StashIndex()
             writeIndex(empty)
             return empty
+        case .unreadable:
+            return StashIndex()
         }
 
         if index.isExpired(now: now()) {
@@ -142,13 +151,18 @@ public actor StashStore {
     /// Deleting first and copying second would destroy the receiver's file on a
     /// failed drag-out.
     ///
+    /// The temporary name carries no part of the destination's: a file name may be up to
+    /// 255 *bytes*, and `.<name>.notch-<UUID>` added 44 of them — so dragging out anything
+    /// with a long name (a saved web page, a photo library export) failed with
+    /// `ENAMETOOLONG` before a byte was copied. The UUID alone is unique enough.
+    ///
     /// Used by the drag-out file-promise delegate, which reports the thrown error
     /// to the receiving app; the stash itself is left untouched either way.
     public func write(file: StashedFile, to destination: URL) throws {
         let source = URL(fileURLWithPath: file.storedPath)
         let temporary = destination
             .deletingLastPathComponent()
-            .appendingPathComponent(".\(destination.lastPathComponent).notch-\(UUID().uuidString)")
+            .appendingPathComponent(".notch-\(UUID().uuidString)")
 
         do {
             try fileManager.copyItem(at: source, to: temporary)
@@ -233,16 +247,41 @@ public actor StashStore {
 
     // MARK: - The index file
 
-    /// The index on disk, or `nil` when there is a file and it cannot be read —
-    /// the one case the caller has to repair. A missing file is not a failure: a
-    /// fresh machine simply has an empty stash and nothing to write.
-    private func decodeIndex() -> StashIndex? {
-        guard fileManager.fileExists(atPath: indexURL.path) else { return StashIndex() }
+    /// What `stash.json` yielded.
+    private enum IndexRead {
+        /// The index on disk — or an empty one, on a machine that has never stashed
+        /// anything. Nothing to repair.
+        case index(StashIndex)
+        /// The bytes are there and are not a `StashIndex`. Rewriting an empty index over
+        /// them is the repair: a file we cannot decode we will never decode, and left
+        /// alone it is re-read and re-logged on every load for ever.
+        case corrupt
+        /// The bytes could not be read at all — permissions, a volume that went away, an
+        /// I/O error. **Nothing is written.** The index is very probably still perfectly
+        /// good, and rewriting an empty one over it would turn a transient failure into
+        /// the permanent loss of every file in the stash.
+        case unreadable
+    }
+
+    private func readIndex() -> IndexRead {
+        guard fileManager.fileExists(atPath: indexURL.path) else { return .index(StashIndex()) }
+
+        let data: Data
         do {
-            return try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: indexURL))
+            data = try Data(contentsOf: indexURL)
+        } catch {
+            logger.error("""
+                stash.json could not be read, leaving it alone: \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return .unreadable
+        }
+
+        do {
+            return .index(try JSONDecoder().decode(StashIndex.self, from: data))
         } catch {
             logger.error("stash.json unreadable, starting empty: \(error.localizedDescription, privacy: .public)")
-            return nil
+            return .corrupt
         }
     }
 
