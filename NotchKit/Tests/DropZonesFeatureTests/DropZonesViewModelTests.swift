@@ -682,9 +682,25 @@ private final class Harness {
         #expect(stored.files.allSatisfy { FileManager.default.fileExists(atPath: $0.storedPath) })
     }
 
-    @Test func theDefaultStashDropReplacesWhatWasThere() async throws {
+    /// Files accumulate by default: a stash the user drops a second file into and finds
+    /// emptied of the first is the one behaviour nobody expects.
+    @Test func theDefaultStashDropAddsToWhatWasThere() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        harness.clock.advance(by: .milliseconds(400))
+
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .stash)
+
+        #expect(harness.model.index.files.map(\.name) == ["a.txt", "b.txt"])
+    }
+
+    @Test func theStashDropActionSettingIsHonoured() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.settings.stashDropAction = .replace
         harness.enterHotRect()
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
         harness.clock.advance(by: .milliseconds(400))
@@ -695,20 +711,6 @@ private final class Harness {
         #expect(harness.model.index.files.map(\.name) == ["b.txt"])
     }
 
-    @Test func theStashDropActionSettingIsHonoured() async throws {
-        let harness = try Harness()
-        defer { harness.cleanUp() }
-        harness.settings.stashDropAction = .add
-        harness.enterHotRect()
-        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
-        harness.clock.advance(by: .milliseconds(400))
-
-        harness.enterHotRect()
-        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .stash)
-
-        #expect(harness.model.index.files.map(\.name) == ["a.txt", "b.txt"])
-    }
-
     @Test func theThirdZoneDoesTheOppositeAction() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
@@ -717,13 +719,13 @@ private final class Harness {
         harness.clock.advance(by: .milliseconds(400))
 
         harness.enterHotRect()
-        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .addToStash)
-        #expect(harness.model.index.files.map(\.name) == ["a.txt", "b.txt"])
+        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .replaceStash)
+        #expect(harness.model.index.files.map(\.name) == ["b.txt"])
 
         harness.clock.advance(by: .milliseconds(400))
         harness.enterHotRect()
-        await harness.model.drop(urls: [try harness.makeFile("c.txt")], on: .replaceStash)
-        #expect(harness.model.index.files.map(\.name) == ["c.txt"])
+        await harness.model.drop(urls: [try harness.makeFile("c.txt")], on: .addToStash)
+        #expect(harness.model.index.files.map(\.name) == ["b.txt", "c.txt"])
     }
 
     @Test func theStashPeekIsUpdatedInPlaceAcrossDrops() async throws {
@@ -974,7 +976,8 @@ private final class Harness {
         await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .stash)
 
         #expect(harness.model.dragOutPhase == .idle)
-        #expect(harness.model.index.files.map(\.name) == ["b.txt"])
+        // The default action adds, so the file the drag-out did not take is still there.
+        #expect(harness.model.index.files.map(\.name) == ["a.txt", "b.txt"])
     }
 
     /// A drag-out can start out of the peek while the previous drop is still settling.
@@ -1110,6 +1113,6 @@ private final class Harness {
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
         harness.clock.advance(by: .milliseconds(400))
 
-        #expect(harness.model.zones == [.airDrop, .stash, .addToStash])
+        #expect(harness.model.zones == [.airDrop, .stash, .replaceStash])
     }
 }

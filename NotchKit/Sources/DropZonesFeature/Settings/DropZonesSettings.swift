@@ -36,14 +36,14 @@ public final class DropZonesSettings {
     /// - Parameter defaults: injected so tests get a throw-away suite. A key that
     ///   has never been written keeps the spec's default; an unreadable drop
     ///   action (a hand-edited plist, a value from a future version) falls back to
-    ///   `.replace` rather than refusing to start.
+    ///   `.add` rather than refusing to start.
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         airdropValue = defaults.object(forKey: Self.airdropKey) as? Bool ?? true
         stashValue = defaults.object(forKey: Self.stashKey) as? Bool ?? true
         secondZoneValue = defaults.object(forKey: Self.secondZoneKey) as? Bool ?? false
         stashDropActionValue = defaults.string(forKey: Self.stashDropActionKey)
-            .flatMap(StashDropAction.init(rawValue:)) ?? .replace
+            .flatMap(StashDropAction.init(rawValue:)) ?? .add
     }
 
     // MARK: - Settings
@@ -76,8 +76,12 @@ public final class DropZonesSettings {
         }
     }
 
-    /// What a drop on the main stash card does (default `.replace`); the third
-    /// card, when it is shown, does the other one.
+    /// What a drop on the main stash card does (default `.add`); the third card,
+    /// when it is shown, does the other one.
+    ///
+    /// Seam's own default is Replace, but a stash the user drops a second file into
+    /// and finds emptied of the first is the one behaviour nobody expects — files
+    /// accumulate. "Replace" stays a menu row away, and a card of its own.
     public var stashDropAction: StashDropAction {
         get { stashDropActionValue }
         set {

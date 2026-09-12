@@ -6,7 +6,7 @@ private func state(
     airdrop: Bool = true,
     stash: Bool = true,
     secondZone: Bool = false,
-    stashDropAction: StashDropAction = .replace,
+    stashDropAction: StashDropAction = .add,
     stashHasFiles: Bool = false,
     isDragOut: Bool = false
 ) -> ZoneState {

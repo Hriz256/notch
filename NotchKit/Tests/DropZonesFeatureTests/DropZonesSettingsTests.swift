@@ -25,7 +25,7 @@ final class DropZonesSettingsTests {
         #expect(settings.airdrop)
         #expect(settings.stash)
         #expect(!settings.secondZone)
-        #expect(settings.stashDropAction == .replace)
+        #expect(settings.stashDropAction == .add)
     }
 
     @Test func writesUseTheSpecKeys() {
@@ -55,10 +55,10 @@ final class DropZonesSettingsTests {
         #expect(settings.stashDropAction == .add)
     }
 
-    @Test func anUnreadableDropActionFallsBackToReplace() {
+    @Test func anUnreadableDropActionFallsBackToTheDefault() {
         defaults.set("nonsense", forKey: "dropzones.stashDropAction")
 
-        #expect(DropZonesSettings(defaults: defaults).stashDropAction == .replace)
+        #expect(DropZonesSettings(defaults: defaults).stashDropAction == .add)
     }
 
     @Test func valuesSurviveANewInstance() {
