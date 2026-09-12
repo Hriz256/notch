@@ -1,0 +1,150 @@
+import CoreGraphics
+import DropZonesShared
+import Foundation
+import Testing
+
+@testable import DropZonesFeature
+
+/// The numbers and strings the drop-zone views are built from.
+///
+/// Everything here is checkable without a renderer; `StashLayoutRenderTests` covers the
+/// half that only a bitmap can answer.
+@MainActor
+@Suite("Drop-zone view values")
+struct DropZonesViewsTests {
+
+    // MARK: - Card chrome
+
+    @Test("Each zone card draws the symbol the spec names, and AirDrop draws none")
+    func cardSymbols() {
+        // AirDrop has no public SF Symbol, which is why `AirDropGlyph` exists.
+        #expect(ZoneCardView.symbol(for: .airDrop) == nil)
+        #expect(ZoneCardView.symbol(for: .stash) == "tray.and.arrow.down.fill")
+        #expect(ZoneCardView.symbol(for: .addToStash) == "plus.rectangle.on.rectangle")
+        #expect(ZoneCardView.symbol(for: .replaceStash) == "arrow.triangle.2.circlepath")
+    }
+
+    @Test("The card chrome is the dashed blue rectangle the design asks for")
+    func cardChrome() {
+        #expect(ZoneCardView.cornerRadius == 12)
+        #expect(ZoneCardView.strokeWidth == 1.5)
+        #expect(ZoneCardView.dash == [4, 4])
+        #expect(ZoneCardView.iconSize == 26)
+        #expect(ZoneCardView.labelSize == 12)
+        #expect(ZoneCardView.labelSpacing == 8)
+        #expect(ZoneCardView.headerSize == 13)
+    }
+
+    @Test("The label on each card is the shared title, so the panel and the menus agree")
+    func cardLabels() {
+        #expect(ZoneTitle.label(.airDrop, fileCount: 0) == "AirDrop")
+        #expect(ZoneTitle.label(.stash, fileCount: 0) == "File Stash")
+        #expect(ZoneTitle.label(.stash, fileCount: 1) == "1 File")
+        #expect(ZoneTitle.label(.stash, fileCount: 3) == "3 Files")
+        #expect(ZoneTitle.label(.addToStash, fileCount: 2) == "Add to Stash")
+        #expect(ZoneTitle.label(.replaceStash, fileCount: 2) == "Replace Stash")
+    }
+
+    @Test("The stash caption is the count and the size, as the hover card shows it")
+    func captionText() {
+        // The size itself is `ByteCountFormatter`'s, and its decimal separator follows the
+        // user's locale — the assertion is about the count, the noun and the separator.
+        #expect(StashCaption.text(count: 1, bytes: 89_000)
+            == "1 file \u{00B7} \(ByteFormatting.fileSize(89_000))")
+        #expect(StashCaption.text(count: 3, bytes: 1_200_000)
+            == "3 files \u{00B7} \(ByteFormatting.fileSize(1_200_000))")
+        #expect(ByteFormatting.fileSize(89_000) == "89 KB")
+    }
+
+    // MARK: - The AirDrop glyph
+
+    @Test("The AirDrop glyph is three arcs around a dot, with a gap at the bottom")
+    func airDropGeometry() {
+        #expect(AirDropGlyph.designSize == 28)
+        #expect(AirDropGlyph.waveRadii == [5.5, 9, 12.5])
+        #expect(AirDropGlyph.dotRadius == 2.2)
+        #expect(AirDropGlyph.lineWidth == 1.5)
+        // 125° → 415° leaves 70° open, centred on 90° — straight down in SwiftUI's y-down
+        // space, which is where the dot sits.
+        #expect(AirDropGlyph.endAngle - AirDropGlyph.startAngle == 290)
+        let gapCentre = (AirDropGlyph.startAngle + AirDropGlyph.endAngle) / 2 - 180
+        #expect(gapCentre == 90)
+    }
+
+    // MARK: - The thumbnail fan
+
+    @Test("The two stack presets are the sizes the spec names")
+    func stackTokens() {
+        let compact = ThumbnailStackTokens.compact
+        #expect(compact.thumbSize == 22)
+        #expect(compact.rotations == [-9, 0, 9])
+        #expect(compact.scales == [1, 0.94, 0.88])
+        #expect(compact.cornerRadius == 4)
+
+        let large = ThumbnailStackTokens.large
+        #expect(large.thumbSize == 48)
+        #expect(large.rotations == [-10, 0, 10])
+        #expect(large.scales == [1, 0.94, 0.88])
+        #expect(large.cornerRadius == 6)
+
+        #expect(ThumbnailStackTokens.depthOffset == 2)
+    }
+
+    @Test("The newest file is upright on top and the ones behind it lean out either way")
+    func fanAngles() {
+        let tokens = ThumbnailStackTokens.compact
+        #expect(tokens.rotation(depth: 0) == 0)
+        #expect(tokens.rotation(depth: 1) == -9)
+        #expect(tokens.rotation(depth: 2) == 9)
+        // A fourth card is never drawn, but asking must not trap.
+        #expect(tokens.rotation(depth: 5) == 9)
+
+        #expect(tokens.scale(depth: 0) == 1)
+        #expect(tokens.scale(depth: 1) == 0.94)
+        #expect(tokens.scale(depth: 2) == 0.88)
+        #expect(tokens.scale(depth: 9) == 0.88)
+    }
+
+    @Test("The stack never draws more than three cards")
+    func stackIsCappedAtThree() {
+        #expect(ThumbnailStack.maximumCards == 3)
+    }
+
+    // MARK: - The count badge and the caption row
+
+    @Test("The count circle is the 18 pt outlined badge from the reference")
+    func countCircle() {
+        #expect(FileCountCircle.diameter == 18)
+        #expect(FileCountCircle.lineWidth == 1.5)
+    }
+
+    @Test("The caption row's centre lands 26 pt below the notch")
+    func captionPosition() {
+        // The row is laid out under a notch-height peek row, so its centre is
+        // `gap + height / 2` below the notch's bottom edge.
+        let centre = StashExpandedView.captionGap + StashExpandedView.captionHeight / 2
+        #expect(centre == 26)
+    }
+
+    // MARK: - Drag out
+
+    @Test("A promise advertises the file's own type, and falls back rather than refusing")
+    func promiseFileTypes() {
+        func type(_ name: String) -> String {
+            DragSourceView.fileType(for: StashedFile(name: name, storedPath: "/tmp/\(name)", bytes: 1))
+        }
+        #expect(type("Screenshot.png") == "public.png")
+        #expect(type("notes.txt") == "public.plain-text")
+        // No extension at all: there is nothing to look a type up by, so the promise
+        // offers raw bytes rather than refusing to drag.
+        #expect(type("Makefile") == "public.data")
+    }
+
+    @Test("The drag image is the 32 pt cascade the spec describes")
+    func dragImageCascade() {
+        #expect(DragSourceView.iconSide == 32)
+        #expect(DragSourceView.dragThreshold == 4)
+        #expect(DragOutPolicy.dragImageOffset(index: 0) == CGPoint(x: 0, y: 0))
+        #expect(DragOutPolicy.dragImageOffset(index: 2) == CGPoint(x: 8, y: -8))
+    }
+}

@@ -48,6 +48,9 @@ public struct SurfaceView: View {
             content(layout: layout, current: current)
                 .islandFrame(size: layout.size, minimum: floor, alignment: .top)
                 .clipShape(NotchShape(topRadius: 0, bottomRadius: layout.bottomRadius))
+                // Features whose expanded view reproduces the peek's geometry need the
+                // notch's measurements, and only this layer knows them.
+                .environment(\.notchSize, floor)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(animation, value: layout)

@@ -191,9 +191,16 @@ public final class DropZonesViewModel {
     /// it knows the island's geometry; `nil` until then, which makes ``catcherFrameNeeded``
     /// `nil` too, so the catcher is never ordered in at a frame nobody has computed.
     @ObservationIgnored public var panelFrameProvider: (@MainActor () -> CGRect)?
+    /// The observer a drag *out* of the stash flags for its lifetime, so the panel offers
+    /// the stash card alone rather than inviting the user to drop their own files back
+    /// where they came from. Set by the feature at activation, and weak because the
+    /// feature owns it; `nil` in tests and previews, where no drag can start.
+    @ObservationIgnored public weak var dragObserver: DragObserver?
 
     @ObservationIgnored private let clock: any IslandClock
-    @ObservationIgnored private let store: StashStore
+    /// The stash on disk. Exposed because the drag-out source has to hand its promise
+    /// delegate the one object allowed to touch the stash directory.
+    @ObservationIgnored public let store: StashStore
     @ObservationIgnored private let thumbnailProvider: ThumbnailProvider
     @ObservationIgnored private let airDrop: @MainActor ([URL]) -> Bool
     @ObservationIgnored private let viewFactory: DropZonesViewFactory
