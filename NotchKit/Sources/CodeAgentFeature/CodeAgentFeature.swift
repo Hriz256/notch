@@ -166,7 +166,10 @@ public final class CodeAgentFeature: IslandFeature {
     private func makeProviders() -> [any UsageProvider] {
         let installed = CodeSettings.detectInstalledAgents(home: home)
         var providers: [any UsageProvider] = [
-            ClaudeUsageProvider(home: home, claudeVersion: { await ClaudeVersionDetector.detect() })
+            ClaudeUsageProvider(
+                home: home,
+                claudeVersion: { [home] in await ClaudeVersionDetector.detect(home: home) }
+            )
         ]
         if installed.contains(.codex) { providers.append(CodexUsageProvider(home: home)) }
         if installed.contains(.cursor) { providers.append(CursorUsageProvider(home: home)) }

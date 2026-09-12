@@ -1,5 +1,6 @@
 import CodeAgentShared
 import Foundation
+import os
 
 /// `GET https://api.anthropic.com/api/oauth/usage` with Claude Code's own OAuth token.
 public final class ClaudeUsageProvider: UsageProvider {
@@ -12,34 +13,76 @@ public final class ClaudeUsageProvider: UsageProvider {
     private let session: URLSession
     private let home: URL
     private let claudeVersion: @Sendable () async -> String
+    private let credentials: @Sendable (URL, Date) -> Result<ClaudeCredentials.Token, UsageError>
     private let logger = UsageLog.logger("claude")
 
+    private struct VersionState: Sendable {
+        var resolved: String?
+        var isDetecting = false
+    }
+
+    private let version = OSAllocatedUnfairLock(initialState: VersionState())
+
+    /// - Parameter credentials: the token lookup, injected so tests never touch the real
+    ///   Keychain.
     public init(
         session: URLSession = .shared,
         home: URL,
-        claudeVersion: @escaping @Sendable () async -> String
+        claudeVersion: @escaping @Sendable () async -> String,
+        credentials: @escaping @Sendable (URL, Date) -> Result<ClaudeCredentials.Token, UsageError>
+            = { ClaudeCredentials.load(home: $0, now: $1) }
     ) {
         self.session = session
         self.home = home
         self.claudeVersion = claudeVersion
+        self.credentials = credentials
+    }
+
+    /// The `User-Agent` version for *this* request, starting the detection if it has not run.
+    ///
+    /// `claude --version` boots Node and is budgeted 20 s, so awaiting it would push the
+    /// first usage bars of every cold launch out by that much. The endpoint only cares that
+    /// the UA looks like Claude Code, so the request goes out with the fallback now and the
+    /// detected version takes over from the next poll on.
+    private func userAgentVersion() -> String {
+        let shouldDetect = version.withLock { state -> Bool in
+            guard state.resolved == nil, !state.isDetecting else { return false }
+            state.isDetecting = true
+            return true
+        }
+        if shouldDetect {
+            let detect = claudeVersion
+            let version = version
+            Task.detached(priority: .utility) {
+                let resolved = await detect()
+                version.withLock {
+                    $0.resolved = resolved
+                    $0.isDetecting = false
+                }
+            }
+        }
+        return version.withLock { $0.resolved } ?? ClaudeVersionDetector.fallback
     }
 
     public func fetch() async throws(UsageError) -> AgentUsage {
         let now = Date()
         let token: ClaudeCredentials.Token
-        switch ClaudeCredentials.load(home: home, now: now) {
+        switch credentials(home, now) {
         case .success(let value): token = value
         case .failure(let error): throw error
         }
 
         var request = URLRequest(url: Self.endpoint)
         request.timeoutInterval = Self.timeout
+        // Quota is the one thing that must never be read out of a cache: a stale 200 would
+        // draw a bar that is minutes or hours behind the real window.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue(Self.betaHeader, forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // Mandatory: without it the request lands in a punishing rate-limit bucket that
         // returns sticky 429s with no Retry-After (claude-code#31637).
-        request.setValue("claude-code/\(await claudeVersion())", forHTTPHeaderField: "User-Agent")
+        request.setValue("claude-code/\(userAgentVersion())", forHTTPHeaderField: "User-Agent")
 
         let data: Data
         let response: URLResponse
@@ -95,12 +138,11 @@ public enum ClaudeVersionDetector {
         }
     }
 
-    public static func detect() async -> String {
-        await Cache.shared.version { await probe() }
+    public static func detect(home: URL = URL(fileURLWithPath: NSHomeDirectory())) async -> String {
+        await Cache.shared.version { await probe(home: home) }
     }
 
-    private static func probe() async -> String {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
+    static func probe(home: URL) async -> String {
         guard let executable = await ExecutableLocator.find("claude", home: home),
               let output = await ProcessRunner.output(
                   executable: executable,

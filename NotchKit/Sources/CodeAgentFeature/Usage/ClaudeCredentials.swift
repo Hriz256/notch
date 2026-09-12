@@ -30,7 +30,17 @@ public enum ClaudeCredentials {
 
     /// Keychain first, then the pre-migration `~/.claude/.credentials.json` fallback.
     public static func load(home: URL, now: Date) -> Result<Token, UsageError> {
-        let token = keychainPayload().flatMap(parse(payload:))
+        load(home: home, now: now, keychain: keychainPayload)
+    }
+
+    /// - Parameter keychain: the Keychain lookup, injected so tests can decline it. A test
+    ///   that read the real Keychain would pick up the developer's own Claude Code token.
+    static func load(
+        home: URL,
+        now: Date,
+        keychain: () -> Data?
+    ) -> Result<Token, UsageError> {
+        let token = keychain().flatMap(parse(payload:))
             ?? filePayload(home: home).flatMap(parse(payload:))
 
         guard let token else { return .failure(.notSignedIn) }
@@ -61,7 +71,7 @@ public enum ClaudeCredentials {
     // MARK: - Parsing
 
     /// Some 2.1.x installs write an item holding only `mcpOAuth` — treated as "not signed in".
-    private static func parse(payload: Data) -> Token? {
+    static func parse(payload: Data) -> Token? {
         guard let root = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
               let oauth = root["claudeAiOauth"] as? [String: Any],
               let accessToken = oauth["accessToken"] as? String,

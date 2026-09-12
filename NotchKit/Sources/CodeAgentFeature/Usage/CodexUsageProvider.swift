@@ -39,11 +39,14 @@ public final class CodexUsageProvider: UsageProvider {
             box.terminate(dueToTimeout: true)
         }
 
-        // The exchange is blocking pipe I/O, so it runs off the cooperative pool.
-        // Only `Data` crosses back — `[String: Any]` is not `Sendable`.
-        let reply = await Task.detached(priority: .utility) { Self.exchange(box) }.value
+        // The exchange is blocking pipe I/O, so it runs on the process queue rather than on
+        // the cooperative pool. Only `Data` crosses back — `[String: Any]` is not `Sendable`.
+        let reply = await ProcessQueue.run { Self.exchange(box) }
         watchdog.cancel()
-        box.terminate()
+        // `app-server` is a long-lived server, not a one-shot command: it exits only because
+        // Notch asks it to, so the reap (and its SIGKILL escalation) is the only thing
+        // standing between a failed poll and an accumulating pile of Codex processes.
+        await ProcessQueue.run { box.reap() }
 
         guard let reply else {
             if box.timedOut {

@@ -36,6 +36,8 @@ public final class CursorUsageProvider: UsageProvider {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = Self.timeout
+        // A cached 200 would draw a request count that is a poll or more out of date.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // `<userId>%3A%3A<token>` — the `::` separator stays percent-encoded inside the value.
         request.setValue(

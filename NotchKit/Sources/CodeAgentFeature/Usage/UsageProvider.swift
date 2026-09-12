@@ -45,28 +45,57 @@ enum ExecutableLocator {
 /// `waitUntilExit()` and reads on the *reading* end of a pipe are used — all documented
 /// as safe to call from another thread — so the unchecked promise holds.
 final class ProcessBox: @unchecked Sendable {
+    /// How long a terminated process is given to exit before it is killed outright.
+    static let terminationGrace: TimeInterval = 2
+
     let process = Process()
     let stdout = Pipe()
     let stdin = Pipe()
-    private let lock = OSAllocatedUnfairLock(initialState: false)
+
+    private struct State: Sendable {
+        var timedOut = false
+        var launched = false
+    }
+
+    private let lock = OSAllocatedUnfairLock(initialState: State())
 
     /// True once the watchdog killed the process, so callers can report a timeout
     /// rather than "closed before answering".
-    var timedOut: Bool { lock.withLock { $0 } }
+    var timedOut: Bool { lock.withLock { $0.timedOut } }
 
     func launch(_ executable: URL, arguments: [String], attachStdin: Bool) throws {
         process.executableURL = executable
         process.arguments = arguments
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        // `/dev/null` rather than a `Pipe()` nobody reads: a child that writes more than one
+        // pipe buffer of diagnostics to stderr blocks forever on the write, and the app then
+        // waits out the whole watchdog for an answer that was already on its way.
+        process.standardError = FileHandle.nullDevice
         if attachStdin { process.standardInput = stdin }
         try process.run()
+        lock.withLock { $0.launched = true }
     }
 
     func terminate(dueToTimeout: Bool = false) {
-        if dueToTimeout { lock.withLock { $0 = true } }
-        guard process.isRunning else { return }
+        if dueToTimeout { lock.withLock { $0.timedOut = true } }
+        guard lock.withLock({ $0.launched }), process.isRunning else { return }
         process.terminate()
+    }
+
+    /// Terminates the child and reaps it, so every exit path leaves no zombie behind.
+    ///
+    /// SIGTERM is a request: `codex app-server` in the middle of a network call does not
+    /// always honour it, so after ``terminationGrace`` the process is killed outright. The
+    /// closing `waitUntilExit` is what actually reaps the entry from the process table.
+    ///
+    /// Blocking — call it only from ``ProcessQueue``.
+    func reap() {
+        guard lock.withLock({ $0.launched }) else { return }
+        if process.isRunning { process.terminate() }
+        let deadline = Date().addingTimeInterval(Self.terminationGrace)
+        while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
     }
 
     func write(_ line: String) throws {
@@ -91,9 +120,24 @@ final class ProcessBox: @unchecked Sendable {
     func readAllOutput() -> Data {
         (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
     }
+}
 
-    func waitUntilExit() {
-        process.waitUntilExit()
+/// The one thread every blocking `Process` call is allowed to occupy.
+///
+/// Pipe reads and `waitUntilExit()` block, and the cooperative pool has exactly one thread
+/// per core with no way to reclaim a blocked one: a CLI that hangs for the whole watchdog
+/// would take a core's worth of concurrency with it — `Task.detached` does not change that,
+/// it only picks which pool thread is lost. A dedicated serial queue cannot starve anything
+/// else, and serializing the exchanges costs nothing: they are seconds apart.
+enum ProcessQueue {
+    private static let queue = DispatchQueue(label: "app.notch.code.process", qos: .utility)
+
+    /// Runs one blocking body on the process queue. Never call it from inside another
+    /// `ProcessQueue.run` — the queue is serial, and that would deadlock.
+    static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: body()) }
+        }
     }
 }
 
@@ -112,13 +156,10 @@ enum ProcessRunner {
             try await Task.sleep(for: timeout)
             box.terminate(dueToTimeout: true)
         }
-        defer { watchdog.cancel() }
 
-        let data = await Task.detached(priority: .utility) { () -> Data in
-            let data = box.readAllOutput()
-            box.waitUntilExit()
-            return data
-        }.value
+        let data = await ProcessQueue.run { box.readAllOutput() }
+        watchdog.cancel()
+        await ProcessQueue.run { box.reap() }
 
         return String(data: data, encoding: .utf8)
     }
