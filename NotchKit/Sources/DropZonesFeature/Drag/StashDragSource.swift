@@ -69,6 +69,16 @@ final class DragSourceView: NSView, NSDraggingSource {
 
     private var mouseDownPoint: NSPoint?
 
+    /// Flipped so that the y axis runs the way the spec's cascade is written.
+    ///
+    /// `NSDraggingItem.setDraggingFrame(_:contents:)` takes a rect in *this* view's
+    /// coordinate system, and an ordinary `NSView` is y-up, where the spec's
+    /// `(4·i, −4·i)` would step each icon right and *down*-screen — the opposite of the
+    /// fan the reference recording shows. Flipping the view makes −y up-screen, so the
+    /// one set of offsets in `DragOutPolicy` reads correctly here and in the SwiftUI
+    /// stack it is drawn to match.
+    override var isFlipped: Bool { true }
+
     // MARK: Mouse
 
     /// The island is a non-activating panel: without this the first click after the app
@@ -95,7 +105,12 @@ final class DragSourceView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         mouseDownPoint = nil
-        // A press that never became a drag is a click on the island, which expands it.
+        // Passed up the responder chain rather than swallowed. It does *not* reach the
+        // SwiftUI content under this overlay: that content never saw the matching
+        // `mouseDown` — we claimed it in `hitTest` so the drag could start — and
+        // SwiftUI's tap gesture needs the pair. A press on the thumbnails that never
+        // became a drag is therefore inert, while the island's own tap-to-expand still
+        // works everywhere around them.
         super.mouseUp(with: event)
     }
 
@@ -112,21 +127,25 @@ final class DragSourceView: NSView, NSDraggingSource {
 
     private func beginDrag(with event: NSEvent) {
         guard let store else { return }
+        // One delegate for the whole session; every provider holds it strongly, because
+        // `NSFilePromiseProvider.delegate` is weak and the promises are written long
+        // after this method — and after the session — has returned.
         let delegate = StashFilePromiseDelegate(store: store)
-        // Kept alive for the session: `NSFilePromiseProvider` holds its delegate weakly,
-        // and the promise is written long after this method returns.
-        promiseDelegate = delegate
 
         let origin = convert(event.locationInWindow, from: nil)
         let items: [NSDraggingItem] = files.enumerated().map { index, file in
-            let provider = StashFilePromiseProvider(fileType: Self.fileType(for: file), delegate: delegate)
-            provider.file = file
+            let provider = StashFilePromiseProvider(
+                file: file,
+                fileType: Self.fileType(for: file),
+                delegate: delegate
+            )
             let item = NSDraggingItem(pasteboardWriter: provider)
 
             let icon = NSWorkspace.shared.icon(forFile: file.storedPath)
             icon.size = NSSize(width: Self.iconSide, height: Self.iconSide)
-            // The cascade steps right and up per item (`DragOutPolicy`), measured from the
-            // pointer so the stack is under the cursor rather than at the view's corner.
+            // The cascade steps right and up-screen per item (`DragOutPolicy`), measured
+            // from the pointer so the stack is under the cursor rather than at the view's
+            // corner. `−4` is up because this view is flipped; see `isFlipped`.
             let offset = DragOutPolicy.dragImageOffset(index: index)
             item.setDraggingFrame(
                 CGRect(
@@ -143,9 +162,6 @@ final class DragSourceView: NSView, NSDraggingSource {
         guard !items.isEmpty else { return }
         beginDraggingSession(with: items, event: event, source: self)
     }
-
-    /// Strong reference for the life of one session; see `beginDrag`.
-    private var promiseDelegate: StashFilePromiseDelegate?
 
     /// The UTI the promise advertises. Falling back to `public.data` rather than refusing
     /// keeps an extensionless file draggable — the receiver gets bytes and a name, which is
@@ -179,8 +195,11 @@ final class DragSourceView: NSView, NSDraggingSource {
         endedAt screenPoint: NSPoint,
         operation: NSDragOperation
     ) {
+        // Nothing about the promises is torn down here. Finder enqueues
+        // `receivePromisedFiles` asynchronously, so this routinely runs *before* a single
+        // byte has been written; the providers on the pasteboard own the delegate and
+        // keep it alive for exactly as long as the promises can still be redeemed.
         observer?.isDragOutActive = false
-        promiseDelegate = nil
         // An empty operation is a cancelled drag — released over nothing, or over something
         // that refused it — and the stash must survive that untouched.
         onEnded(operation != [])
@@ -189,13 +208,33 @@ final class DragSourceView: NSView, NSDraggingSource {
 
 // MARK: - Promises
 
-/// A promise that remembers which stashed file it is for.
+/// A promise that remembers which stashed file it is for, and keeps its delegate alive.
 ///
 /// `NSFilePromiseProvider` hands its delegate nothing but itself, and one delegate serves
-/// every item in the session, so the file has to ride along on the provider.
+/// every item in the session, so the file has to ride along on the provider — as a `let`,
+/// so that the value the promise queue reads is the one the main actor wrote.
+///
+/// The `delegateStrong` reference is the load-bearing part: `NSFilePromiseProvider.delegate`
+/// is **weak**, and the bytes are written when the receiver redeems the promise, which can
+/// be long after the dragging session ended (Finder queues the copy). The pasteboard owns
+/// the provider for as long as the promise stands, so the provider is the right place to
+/// anchor the delegate's lifetime — anchoring it to the session instead left the provider
+/// delegate-less and the file silently never written.
 final class StashFilePromiseProvider: NSFilePromiseProvider {
-    /// Set immediately after `init`, on the main actor, and only read afterwards.
-    nonisolated(unsafe) var file: StashedFile?
+    let file: StashedFile
+    private let delegateStrong: StashFilePromiseDelegate
+
+    /// `super.init()` rather than `super.init(fileType:delegate:)`: AppKit implements the
+    /// latter by calling `[self init]`, which in a Swift subclass with stored properties
+    /// traps on the `init()` we cannot meaningfully provide. The two properties it would
+    /// have set are set here instead, before the provider leaves this method.
+    init(file: StashedFile, fileType: String, delegate: StashFilePromiseDelegate) {
+        self.file = file
+        self.delegateStrong = delegate
+        super.init()
+        self.fileType = fileType
+        self.delegate = delegate
+    }
 }
 
 /// Writes a stashed file to wherever the receiving application asked for it.
@@ -226,7 +265,7 @@ final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
         _ filePromiseProvider: NSFilePromiseProvider,
         fileNameForType fileType: String
     ) -> String {
-        (filePromiseProvider as? StashFilePromiseProvider)?.file?.name ?? "File"
+        (filePromiseProvider as? StashFilePromiseProvider)?.file.name ?? "File"
     }
 
     func filePromiseProvider(
@@ -234,6 +273,8 @@ final class StashFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
         writePromiseTo url: URL,
         completionHandler: @escaping (Error?) -> Void
     ) {
+        // Anything but our own provider is a programming error, not a drag we can serve;
+        // the receiver is told rather than left waiting for bytes that never come.
         guard let file = (filePromiseProvider as? StashFilePromiseProvider)?.file else {
             completionHandler(CocoaError(.fileNoSuchFile))
             return

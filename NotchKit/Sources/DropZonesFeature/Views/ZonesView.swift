@@ -13,9 +13,9 @@ import SwiftUI
 /// The panel is drawn in **island** coordinates: `SurfaceView` pushes expanded content
 /// below the notch so features never draw where the hardware hides them, but the panel's
 /// coordinate space has to stay the island's for the hit test to agree with it, so that
-/// padding is cancelled here. The top 18 pt of each card does sit behind the notch as a
-/// result — which is exactly what the reference frames show, a card that starts at the
-/// notch's bottom edge.
+/// padding is cancelled here. What keeps the cards out from under the hardware is
+/// `ZoneLayout.topInset`, which starts them 2 pt below the notch's bottom edge — exactly
+/// where the reference frames put the top dash.
 struct ZonesView: View {
     let model: DropZonesViewModel
 
@@ -48,29 +48,26 @@ struct ZonesView: View {
         model.phase == .settling || model.pendingURLs != nil
     }
 
+    /// The card rect comes from `ZoneLayout` rather than from insets spelled out again
+    /// here: the settle card lands exactly where the stash card the user just dropped on
+    /// was, so the panel reads as that card growing to full width.
     private var settleSlot: ZoneLayout.Slot {
-        let inset = ZoneLayout.inset
-        return ZoneLayout.Slot(
-            zone: .stash,
-            frame: CGRect(
-                x: inset,
-                y: inset,
-                width: ZoneLayout.panelSize.width - 2 * inset,
-                height: ZoneLayout.panelSize.height - 2 * inset
-            ),
-            isTargeted: false
-        )
+        ZoneLayout.Slot(zone: .stash, frame: ZoneLayout.contentRect, isTargeted: false)
     }
 
     private var cards: [ZoneLayout.Slot] {
         isSettling ? [settleSlot] : model.layout.slots
     }
 
-    /// What the settle card counts. The stash index catches up a moment after the drop, so
-    /// until it does the card counts the files still being copied — the user dropped three
-    /// files and must see "3 Files" at once, not "0 Files" and then a jump.
+    /// What the settle card counts.
+    ///
+    /// Until the copy finishes there is no index to count, so the card counts the files
+    /// still in flight — the user dropped three files and must see "3 Files" at once, not
+    /// "0 Files" and then a jump. The moment the copy lands, the index is the truth and
+    /// the pending list is stale: a drop that *replaced* a fuller stash must not keep
+    /// showing the old, larger count, which is what taking the larger of the two did.
     private var settleCount: Int {
-        max(model.pendingURLs?.count ?? 0, model.index.files.count)
+        model.pendingURLs?.count ?? model.index.files.count
     }
 
     @ViewBuilder
@@ -81,7 +78,6 @@ struct ZonesView: View {
             files: model.index.files,
             thumbnails: model.thumbnails,
             otherTargeted: model.targeted != nil && !slot.isTargeted,
-            topInset: max(0, notchSize.height - slot.frame.minY),
             isEntering: isSettling
         )
     }

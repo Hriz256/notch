@@ -233,10 +233,6 @@ struct StashLayoutRenderTests {
         try #require(NotchGeometry(metrics: metrics))
     }
 
-    static func notch(_ geometry: NotchGeometry) -> CGSize {
-        CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
-    }
-
     /// Where each peek slot's centre must be, in the rendered view's coordinates.
     static func leadingSlotCentre(_ geometry: NotchGeometry) -> CGFloat {
         windowSize.width / 2 - geometry.notchWidth / 2 - IslandLayout.peekSlotWidth / 2
@@ -322,15 +318,16 @@ struct StashLayoutRenderTests {
         try await harness.stash(["Screenshot.png"])
 
         let geometry = try Self.geometry()
-        guard let image = try Self.renderPeek(
-            leading: AnyView(StashLeadingView(model: harness.model)),
-            trailing: AnyView(Color.clear)
-        ) else { return }
+        let image = try #require(
+            try Self.renderPeek(
+                leading: AnyView(StashLeadingView(model: harness.model)),
+                trailing: AnyView(Color.clear)
+            ),
+            "the renderer produced no bitmap"
+        )
 
         let region = try #require(scan(image, matches: Ink.isRed),
                                   "no thumbnail in the rendered island at all")
-        // A 22 pt tile at 2× is 1936 device pixels; far under that means it was clipped.
-        #expect(region.count >= 600, "only \(region.count) thumbnail pixels rendered")
         // A 22 pt tile at 2× is 1936 device pixels; far under that means it was clipped.
         #expect(region.count >= 1500, "only \(region.count) thumbnail pixels rendered")
         #expect(abs(region.maxX - region.minX - ThumbnailStackTokens.compact.thumbSize) <= 2,
@@ -351,10 +348,13 @@ struct StashLayoutRenderTests {
         try await harness.stash(["a.png", "b.png"])
 
         let geometry = try Self.geometry()
-        guard let image = try Self.renderPeek(
-            leading: AnyView(Color.clear),
-            trailing: AnyView(StashTrailingView(model: harness.model))
-        ) else { return }
+        let image = try #require(
+            try Self.renderPeek(
+                leading: AnyView(Color.clear),
+                trailing: AnyView(StashTrailingView(model: harness.model))
+            ),
+            "the renderer produced no bitmap"
+        )
 
         let region = try #require(scan(image, matches: Ink.isBlue),
                                   "no count badge in the rendered island at all")
@@ -376,10 +376,13 @@ struct StashLayoutRenderTests {
         try await harness.stash(["Screenshot.png"])
 
         let geometry = try Self.geometry()
-        guard let image = try Self.renderExpanded(
-            AnyView(StashExpandedView(model: harness.model)),
-            size: DropZonesViewModel.stashExpandedSize
-        ) else { return }
+        let image = try #require(
+            try Self.renderExpanded(
+                AnyView(StashExpandedView(model: harness.model)),
+                size: DropZonesViewModel.stashExpandedSize
+            ),
+            "the renderer produced no bitmap"
+        )
 
         let stack = try #require(scan(image, matches: Ink.isRed),
                                  "no thumbnail in the rendered expanded card")
@@ -405,10 +408,13 @@ struct StashLayoutRenderTests {
         try await harness.stash(["Screenshot.png"])
 
         let geometry = try Self.geometry()
-        guard let image = try Self.renderExpanded(
-            AnyView(StashExpandedView(model: harness.model)),
-            size: DropZonesViewModel.stashExpandedSize
-        ) else { return }
+        let image = try #require(
+            try Self.renderExpanded(
+                AnyView(StashExpandedView(model: harness.model)),
+                size: DropZonesViewModel.stashExpandedSize
+            ),
+            "the renderer produced no bitmap"
+        )
 
         // Everything blue below the notch is the caption's tray glyph.
         let caption = try #require(
@@ -422,22 +428,12 @@ struct StashLayoutRenderTests {
 
     // MARK: The zones panel
 
-    /// Renders the panel exactly the way `SurfaceView` places expanded content — padded
-    /// below the notch, which `ZonesView` cancels so its coordinates stay the island's.
-    static func renderZones(_ model: DropZonesViewModel, notch: CGSize) -> CGImage? {
-        render(
-            ZStack(alignment: .top) {
-                Color.black
-                ZonesView(model: model)
-                    .environment(\.notchSize, notch)
-                    .padding(.top, notch.height)
-                    .frame(
-                        width: ZoneLayout.panelSize.width,
-                        height: ZoneLayout.panelSize.height,
-                        alignment: .top
-                    )
-            }
-        )
+    /// Renders the zones panel the way the island really shows it: as expanded content
+    /// of the real `SurfaceView`, which is also where the notch padding it cancels — and
+    /// the `\.notchSize` it reads — come from. Building the padding by hand here would
+    /// have let the two drift apart without a test noticing.
+    static func renderZones(_ model: DropZonesViewModel) throws -> CGImage? {
+        try renderExpanded(AnyView(ZonesView(model: model)), size: ZoneLayout.panelSize)
     }
 
     /// The horizontal runs of blue ink, one per card: the dashed border spans each card's
@@ -502,10 +498,9 @@ struct StashLayoutRenderTests {
         let geometry = try Self.geometry()
         harness.model.handle(.enteredHotRect)
 
-        guard let image = Self.renderZones(harness.model, notch: Self.notch(geometry)) else { return }
+        let image = try #require(try Self.renderZones(harness.model), "the renderer produced no bitmap")
         let runs = Self.cardRuns(image)
-        #expect(runs.count == 2, "expected two card regions, found \(runs.count): \(runs)")
-        guard runs.count == 2 else { return }
+        try #require(runs.count == 2, "expected two card regions, found \(runs.count): \(runs)")
 
         let widths = runs.map { $0.max - $0.min }
         #expect(abs(widths[0] - widths[1]) <= 2,
@@ -516,26 +511,54 @@ struct StashLayoutRenderTests {
                 "the first card starts at \(runs[0].min - panelLeft) pt into the panel")
         #expect(abs(runs[1].min - runs[0].max - ZoneLayout.gap) <= 2,
                 "the gap between the cards measured \(runs[1].min - runs[0].max) pt")
+
+        // Vertically: the top dash clears the physical notch — the whole point of
+        // `ZoneLayout.topInset` — and the bottom one keeps the panel's 14 pt inset.
+        let band = try #require(scan(image, matches: Ink.isBlue), "no card ink at all")
+        #expect(band.minY >= geometry.notchHeight,
+                "the cards start at \(band.minY) pt, under the \(geometry.notchHeight) pt notch")
+        #expect(abs(band.minY - ZoneLayout.topInset) <= 2,
+                "the top dash is at \(band.minY) pt, expected \(ZoneLayout.topInset) pt")
+        let bottom = ZoneLayout.panelSize.height - ZoneLayout.inset
+        #expect(abs(band.maxY - bottom) <= 2,
+                "the bottom dash is at \(band.maxY) pt, expected \(bottom) pt")
     }
 
     @Test("Targeting a card widens it to 65 % against the other's 35 %")
     func targetingWidensTheCard() throws {
         let harness = try RenderHarness()
         defer { harness.cleanUp() }
-        let geometry = try Self.geometry()
         harness.model.handle(.enteredHotRect)
         // Panel points, origin top-left: the AirDrop card spans x 14…136.
         #expect(harness.model.targeted(at: CGPoint(x: 70, y: 70)) == .airDrop)
 
-        guard let image = Self.renderZones(harness.model, notch: Self.notch(geometry)) else { return }
+        let image = try #require(try Self.renderZones(harness.model), "the renderer produced no bitmap")
         let runs = Self.cardRuns(image)
-        #expect(runs.count == 2, "expected two card regions, found \(runs.count): \(runs)")
-        guard runs.count == 2 else { return }
+        try #require(runs.count == 2, "expected two card regions, found \(runs.count): \(runs)")
 
         let widths = runs.map { $0.max - $0.min }
         let share = widths[0] / (widths[0] + widths[1])
         #expect(abs(share - 0.65) <= 0.04,
                 "the targeted card took \(share * 100) % of the two (expected 65 %)")
+    }
+
+    @Test("The stash card's large fan fits between the notch and the card's bottom edge")
+    func stashCardFanFitsInsideTheCard() async throws {
+        // The card band lost 20 pt when it moved out from under the notch, and the 48 pt
+        // fan over a 13 pt header is what has to fit in what is left of it.
+        let harness = try RenderHarness()
+        defer { harness.cleanUp() }
+        try await harness.stash(["a.png", "b.png"])
+        harness.model.handle(.enteredHotRect)
+
+        let image = try #require(try Self.renderZones(harness.model), "the renderer produced no bitmap")
+        let fan = try #require(scan(image, matches: Ink.isRed), "the stash card drew no thumbnails")
+        // A 48 pt tile at 2× is 9216 device pixels; far under that means it was clipped.
+        #expect(fan.count >= 6000, "only \(fan.count) thumbnail pixels rendered")
+        #expect(fan.minY >= ZoneLayout.topInset,
+                "the fan starts at \(fan.minY) pt, above the card's top edge")
+        #expect(fan.maxY <= ZoneLayout.panelSize.height - ZoneLayout.inset,
+                "the fan runs to \(fan.maxY) pt, past the card's bottom edge")
     }
 
     @Test("A completed drag-out poofs the stash content away")
@@ -544,20 +567,26 @@ struct StashLayoutRenderTests {
         defer { harness.cleanUp() }
         try await harness.stash(["Screenshot.png"])
 
-        guard let before = try Self.renderPeek(
-            leading: AnyView(StashLeadingView(model: harness.model)),
-            trailing: AnyView(Color.clear)
-        ) else { return }
+        let before = try #require(
+            try Self.renderPeek(
+                leading: AnyView(StashLeadingView(model: harness.model)),
+                trailing: AnyView(Color.clear)
+            ),
+            "the renderer produced no bitmap"
+        )
         #expect(scan(before, matches: Ink.isRed) != nil, "no thumbnail before the drag-out")
 
         harness.model.dragOutBegan()
         harness.model.dragOutEnded(completed: true)
         #expect(harness.model.dragOutPhase == .completed)
 
-        guard let after = try Self.renderPeek(
-            leading: AnyView(StashLeadingView(model: harness.model)),
-            trailing: AnyView(Color.clear)
-        ) else { return }
+        let after = try #require(
+            try Self.renderPeek(
+                leading: AnyView(StashLeadingView(model: harness.model)),
+                trailing: AnyView(Color.clear)
+            ),
+            "the renderer produced no bitmap"
+        )
         // The poof's end state is opacity 0: whatever the animation is doing mid-flight,
         // a view rendered from scratch in this phase is already gone.
         #expect(scan(after, matches: Ink.isRed) == nil,
@@ -566,15 +595,18 @@ struct StashLayoutRenderTests {
 
     @Test("The AirDrop glyph draws something")
     func airDropGlyphRendersInk() throws {
-        guard let image = Self.render(
-            ZStack {
-                Color.black
-                AirDropGlyph().frame(width: 26, height: 26)
-            }
-        ) else { return }
+        let image = try #require(
+            Self.render(
+                ZStack {
+                    Color.black
+                    AirDropGlyph().frame(width: AirDropGlyph.designSize, height: AirDropGlyph.designSize)
+                }
+            ),
+            "the renderer produced no bitmap"
+        )
         let region = try #require(scan(image, matches: Ink.isBlue), "the AirDrop glyph drew nothing")
         #expect(region.count >= 200, "only \(region.count) glyph pixels rendered")
-        // Three arcs up to r 12.5 in a 26 pt box: the ink has to be most of it.
+        // Three arcs up to r 12.5 in the 28 pt design box: the ink has to be most of it.
         #expect(region.maxX - region.minX >= 18, "the glyph measured \(region.maxX - region.minX) pt across")
     }
 }

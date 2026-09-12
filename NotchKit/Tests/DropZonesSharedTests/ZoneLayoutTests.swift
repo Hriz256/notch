@@ -18,11 +18,12 @@ private func expectFrame(
     #expect(abs(slot.frame.height - height) < 0.001, "height", sourceLocation: sourceLocation)
 }
 
-/// Content rect of the 280×140 panel with a 14 pt inset: (14, 14, 252, 112).
+/// Content rect of the 280×140 panel: 14 pt in at the sides and the bottom, 34 pt at
+/// the top so the cards clear the notch — (14, 34, 252, 92).
 private let contentX: CGFloat = 14
-private let contentY: CGFloat = 14
+private let contentY: CGFloat = 34
 private let contentWidth: CGFloat = 252
-private let cardHeight: CGFloat = 112
+private let cardHeight: CGFloat = 92
 /// Right edge every layout must end on, whatever the split.
 private let contentMaxX: CGFloat = 266
 
@@ -33,6 +34,9 @@ private let contentMaxX: CGFloat = 266
     @Test func constantsMatchTheVisualSpec() {
         #expect(ZoneLayout.panelSize == CGSize(width: 280, height: 140))
         #expect(ZoneLayout.inset == 14)
+        // The notch's 32 pt plus the 2 pt of black under it the reference frames show.
+        #expect(ZoneLayout.topInset == 34)
+        #expect(ZoneLayout.contentRect == CGRect(x: 14, y: 34, width: 252, height: 92))
         #expect(ZoneLayout.gap == 8)
         #expect(ZoneLayout.targetedScale == 1.02)
     }
@@ -56,8 +60,8 @@ private let contentMaxX: CGFloat = 266
         #expect(layout.slots.map(\.zone) == [.airDrop, .stash])
         #expect(layout.slots.allSatisfy { !$0.isTargeted })
         // available = 252 − 8 = 244 → 122 each.
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 122, height: 112)
-        expectFrame(layout.slots[1], x: 144, y: 14, width: 122, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 122, height: 92)
+        expectFrame(layout.slots[1], x: 144, y: 34, width: 122, height: 92)
     }
 
     @Test func threeZonesUntargetedSplitInThirds() {
@@ -66,9 +70,9 @@ private let contentMaxX: CGFloat = 266
         #expect(layout.slots.allSatisfy { !$0.isTargeted })
         // available = 252 − 16 = 236 → 78.6667 each.
         let width = 236.0 / 3.0
-        expectFrame(layout.slots[0], x: 14, y: 14, width: width, height: 112)
-        expectFrame(layout.slots[1], x: 14 + width + 8, y: 14, width: width, height: 112)
-        expectFrame(layout.slots[2], x: 14 + 2 * (width + 8), y: 14, width: width, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: width, height: 92)
+        expectFrame(layout.slots[1], x: 14 + width + 8, y: 34, width: width, height: 92)
+        expectFrame(layout.slots[2], x: 14 + 2 * (width + 8), y: 34, width: width, height: 92)
         #expect(abs(layout.slots[2].frame.maxX - contentMaxX) < 0.001)
     }
 
@@ -86,16 +90,16 @@ private let contentMaxX: CGFloat = 266
         let layout = ZoneLayout.resolve(zones: [.airDrop, .stash], targeted: .airDrop)
         #expect(layout.slots.map(\.isTargeted) == [true, false])
         // 0.65 · 244 = 158.6, 0.35 · 244 = 85.4.
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 158.6, height: 112)
-        expectFrame(layout.slots[1], x: 180.6, y: 14, width: 85.4, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 158.6, height: 92)
+        expectFrame(layout.slots[1], x: 180.6, y: 34, width: 85.4, height: 92)
         #expect(abs(layout.slots[1].frame.maxX - contentMaxX) < 0.001)
     }
 
     @Test func twoZonesTargetingTheSecondSplitsThirtyFiveSixtyFive() {
         let layout = ZoneLayout.resolve(zones: [.airDrop, .stash], targeted: .stash)
         #expect(layout.slots.map(\.isTargeted) == [false, true])
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 85.4, height: 112)
-        expectFrame(layout.slots[1], x: 107.4, y: 14, width: 158.6, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 85.4, height: 92)
+        expectFrame(layout.slots[1], x: 107.4, y: 34, width: 158.6, height: 92)
         #expect(abs(layout.slots[1].frame.maxX - contentMaxX) < 0.001)
     }
 
@@ -104,9 +108,9 @@ private let contentMaxX: CGFloat = 266
             zones: [.airDrop, .stash, .addToStash], targeted: .airDrop)
         #expect(layout.slots.map(\.isTargeted) == [true, false, false])
         // 0.45 · 236 = 106.2, 0.275 · 236 = 64.9.
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 106.2, height: 112)
-        expectFrame(layout.slots[1], x: 128.2, y: 14, width: 64.9, height: 112)
-        expectFrame(layout.slots[2], x: 201.1, y: 14, width: 64.9, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 106.2, height: 92)
+        expectFrame(layout.slots[1], x: 128.2, y: 34, width: 64.9, height: 92)
+        expectFrame(layout.slots[2], x: 201.1, y: 34, width: 64.9, height: 92)
         #expect(abs(layout.slots[2].frame.maxX - contentMaxX) < 0.001)
     }
 
@@ -114,9 +118,9 @@ private let contentMaxX: CGFloat = 266
         let layout = ZoneLayout.resolve(
             zones: [.airDrop, .stash, .addToStash], targeted: .stash)
         #expect(layout.slots.map(\.isTargeted) == [false, true, false])
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 64.9, height: 112)
-        expectFrame(layout.slots[1], x: 86.9, y: 14, width: 106.2, height: 112)
-        expectFrame(layout.slots[2], x: 201.1, y: 14, width: 64.9, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 64.9, height: 92)
+        expectFrame(layout.slots[1], x: 86.9, y: 34, width: 106.2, height: 92)
+        expectFrame(layout.slots[2], x: 201.1, y: 34, width: 64.9, height: 92)
         #expect(abs(layout.slots[2].frame.maxX - contentMaxX) < 0.001)
     }
 
@@ -124,9 +128,9 @@ private let contentMaxX: CGFloat = 266
         let layout = ZoneLayout.resolve(
             zones: [.airDrop, .stash, .addToStash], targeted: .addToStash)
         #expect(layout.slots.map(\.isTargeted) == [false, false, true])
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 64.9, height: 112)
-        expectFrame(layout.slots[1], x: 86.9, y: 14, width: 64.9, height: 112)
-        expectFrame(layout.slots[2], x: 159.8, y: 14, width: 106.2, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 64.9, height: 92)
+        expectFrame(layout.slots[1], x: 86.9, y: 34, width: 64.9, height: 92)
+        expectFrame(layout.slots[2], x: 159.8, y: 34, width: 106.2, height: 92)
         #expect(abs(layout.slots[2].frame.maxX - contentMaxX) < 0.001)
     }
 
@@ -135,8 +139,8 @@ private let contentMaxX: CGFloat = 266
         // must not skew the widths or light up a card.
         let layout = ZoneLayout.resolve(zones: [.airDrop, .stash], targeted: .replaceStash)
         #expect(layout.slots.allSatisfy { !$0.isTargeted })
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 122, height: 112)
-        expectFrame(layout.slots[1], x: 144, y: 14, width: 122, height: 112)
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 122, height: 92)
+        expectFrame(layout.slots[1], x: 144, y: 34, width: 122, height: 92)
     }
 
     // MARK: - Tiling
@@ -181,6 +185,16 @@ private let contentMaxX: CGFloat = 266
         #expect(layout.hitTest(CGPoint(x: 140, y: 134)) == nil)   // bottom inset
     }
 
+    @Test func theNotchBandBelongsToNoCard() {
+        // The panel's top 34 pt are the hardware and the 2 pt of black under it: a
+        // card that started at the side inset would have its first 18 pt invisible,
+        // and a drop released on the notch would land on a zone nobody could see.
+        let layout = ZoneLayout.resolve(zones: [.airDrop, .stash], targeted: nil)
+        #expect(layout.hitTest(CGPoint(x: 75, y: 20)) == nil)
+        #expect(layout.hitTest(CGPoint(x: 75, y: 33)) == nil)
+        #expect(layout.hitTest(CGPoint(x: 75, y: 40)) == .airDrop)
+    }
+
     @Test func hitTestOutsideThePanelIsNil() {
         let layout = ZoneLayout.resolve(zones: [.airDrop, .stash], targeted: nil)
         #expect(layout.hitTest(CGPoint(x: -20, y: 70)) == nil)
@@ -207,8 +221,10 @@ private let contentMaxX: CGFloat = 266
     @Test func resolveHonoursACustomSize() {
         let layout = ZoneLayout.resolve(
             zones: [.airDrop, .stash], targeted: nil, size: CGSize(width: 380, height: 200))
-        // available = 380 − 28 − 8 = 344 → 172 each; height = 200 − 28 = 172.
-        expectFrame(layout.slots[0], x: 14, y: 14, width: 172, height: 172)
-        expectFrame(layout.slots[1], x: 194, y: 14, width: 172, height: 172)
+        // available = 380 − 28 − 8 = 344 → 172 each; height = 200 − 34 − 14 = 152.
+        expectFrame(layout.slots[0], x: 14, y: 34, width: 172, height: 152)
+        expectFrame(layout.slots[1], x: 194, y: 34, width: 172, height: 152)
+        #expect(ZoneLayout.contentRect(for: CGSize(width: 380, height: 200))
+            == CGRect(x: 14, y: 34, width: 352, height: 152))
     }
 }

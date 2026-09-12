@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import DropZonesShared
 import Foundation
@@ -140,11 +141,41 @@ struct DropZonesViewsTests {
         #expect(type("Makefile") == "public.data")
     }
 
+    @Test("A promise provider keeps its delegate alive after the drag has let go of it")
+    func promiseProviderOwnsItsDelegate() {
+        // `NSFilePromiseProvider.delegate` is weak, and Finder writes the promise on its
+        // own schedule — routinely after `draggingSession(_:endedAt:operation:)` has run.
+        // If the session were the only owner, the provider would be delegate-less by the
+        // time the receiver asked for the bytes and the file would never be written.
+        let store = StashStore(
+            baseDirectory: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("DropZonesViewsTests-\(UUID().uuidString)")
+        )
+        var delegate: StashFilePromiseDelegate? = StashFilePromiseDelegate(store: store)
+        let provider = StashFilePromiseProvider(
+            file: StashedFile(name: "a.png", storedPath: "/tmp/a.png", bytes: 1),
+            fileType: "public.png",
+            delegate: delegate!
+        )
+        // Every other reference is gone — this is the drag ending.
+        delegate = nil
+
+        // A weak property reads `nil` the moment its object is deallocated, so this is a
+        // statement about the delegate's lifetime, not about a stale pointer.
+        #expect(provider.delegate != nil, "the promise lost its delegate when the drag ended")
+        #expect(provider.file.name == "a.png")
+        #expect(provider.fileType == "public.png")
+    }
+
     @Test("The drag image is the 32 pt cascade the spec describes")
     func dragImageCascade() {
         #expect(DragSourceView.iconSide == 32)
         #expect(DragSourceView.dragThreshold == 4)
         #expect(DragOutPolicy.dragImageOffset(index: 0) == CGPoint(x: 0, y: 0))
+        // Right and *up-screen*: the offsets are read in `DragSourceView`'s coordinate
+        // space, which the view flips so that −y is up, as `setDraggingFrame` takes its
+        // rect in the source view's own coordinates.
         #expect(DragOutPolicy.dragImageOffset(index: 2) == CGPoint(x: 8, y: -8))
+        #expect(DragSourceView().isFlipped)
     }
 }

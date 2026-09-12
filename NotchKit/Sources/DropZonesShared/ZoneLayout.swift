@@ -15,8 +15,15 @@ import Foundation
 public struct ZoneLayout: Equatable, Sendable {
     /// The panel's size in points; the island animates to this while zones show.
     public static let panelSize = CGSize(width: 280, height: 140)
-    /// Margin between the panel's edge and the cards on every side.
+    /// Margin between the panel's edge and the cards on the sides and the bottom.
     public static let inset: CGFloat = 14
+    /// Margin above the cards: the physical notch's 32 pt plus the 2 pt of black the
+    /// reference frames show between the hardware's bottom edge and the top dash.
+    ///
+    /// The panel's coordinate space starts at the island's top — the drop catcher
+    /// hit-tests it there — so the notch is *inside* the panel, and a card inset by
+    /// `inset` at the top would have its first 18 pt hidden behind the hardware.
+    public static let topInset: CGFloat = 34
     /// Horizontal space between neighbouring cards.
     public static let gap: CGFloat = 8
     /// How much the views grow the targeted card; the frame itself is unscaled
@@ -36,6 +43,24 @@ public struct ZoneLayout: Equatable, Sendable {
             self.frame = frame
             self.isTargeted = isTargeted
         }
+    }
+
+    /// The rect the cards tile, inside the standard 280×140 panel: (14, 34, 252, 92).
+    ///
+    /// The one place the card band is defined. Views that draw something other than a
+    /// resolved slot — the settle card above all — take their frame from here rather
+    /// than recomputing the insets, so nothing can sit a few points off the cards the
+    /// drop catcher is hit-testing.
+    public static var contentRect: CGRect { contentRect(for: panelSize) }
+
+    /// ``contentRect`` for a panel of any size.
+    public static func contentRect(for size: CGSize) -> CGRect {
+        CGRect(
+            x: inset,
+            y: topInset,
+            width: size.width - 2 * inset,
+            height: size.height - topInset - inset
+        )
     }
 
     /// The cards left to right, in the order `zones()` produced them.
@@ -68,10 +93,11 @@ public struct ZoneLayout: Equatable, Sendable {
 
         let count = zones.count
         let targetedIndex = targeted.flatMap { zones.firstIndex(of: $0) }
-        let height = size.height - 2 * inset
-        let available = size.width - 2 * inset - gap * CGFloat(count - 1)
+        let content = contentRect(for: size)
+        let height = content.height
+        let available = content.width - gap * CGFloat(count - 1)
 
-        var x = inset
+        var x = content.minX
         var slots: [Slot] = []
         slots.reserveCapacity(count)
         for (index, zone) in zones.enumerated() {
@@ -79,7 +105,7 @@ public struct ZoneLayout: Equatable, Sendable {
             slots.append(
                 Slot(
                     zone: zone,
-                    frame: CGRect(x: x, y: inset, width: width, height: height),
+                    frame: CGRect(x: x, y: content.minY, width: width, height: height),
                     isTargeted: index == targetedIndex
                 )
             )

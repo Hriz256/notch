@@ -27,8 +27,10 @@ public enum DragOutPolicy {
 
     /// Where the `index`-th 32×32 icon sits in the cascade, relative to the first.
     ///
-    /// Each further icon steps right and up-screen by 4 pt, which in the flipped
-    /// drag-image space reads as the fanned-out stack the stack view already draws.
+    /// Each further icon steps right and up-screen by 4 pt, reading as the fanned-out
+    /// stack the thumbnails already draw. `NSDraggingItem.setDraggingFrame(_:contents:)`
+    /// takes its rect in the *source view's* coordinates, so "up" here means −y only
+    /// because that view is flipped — see `DragSourceView.isFlipped`.
     public static func dragImageOffset(index: Int) -> CGPoint {
         CGPoint(x: 4 * index, y: -4 * index)
     }

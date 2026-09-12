@@ -20,9 +20,6 @@ struct ZoneCardView: View {
     let thumbnails: [UUID: Thumbnail]
     /// Whether some *other* card is the drop target, which dims this one.
     var otherTargeted = false
-    /// How much of the card's top the physical notch covers. The stash card's header has
-    /// to clear it; a plain card's icon and label sit low enough not to care.
-    var topInset: CGFloat = 0
     /// Whether the thumbnails should play their entrance — true for the settle card.
     var isEntering = false
 
@@ -72,14 +69,14 @@ struct ZoneCardView: View {
                     tokens: .large,
                     isEntering: isEntering
                 )
+                // Keyed on what it is showing, so a second drop while the settle card is
+                // still up builds a new stack and replays the 1.12 entrance instead of
+                // swapping the tiles silently under a stack that has already settled.
+                .id(files.map(\.id))
             }
-            // Centred in what the user can actually see: the top of the card is behind
-            // the notch, and a header centred in the whole card would be hidden by it.
-            .padding(.top, topInset)
         } else {
             VStack(spacing: Self.labelSpacing) {
                 icon
-                    .frame(width: Self.iconSize, height: Self.iconSize)
                 Text(ZoneTitle.label(slot.zone, fileCount: fileCount))
                     .font(.system(size: Self.labelSize, weight: .semibold))
                     .foregroundStyle(Palette.blue)
@@ -107,8 +104,12 @@ struct ZoneCardView: View {
             Image(systemName: symbol)
                 .font(.system(size: Self.iconSize * 0.85, weight: .medium))
                 .foregroundStyle(Palette.blue)
+                .frame(width: Self.iconSize, height: Self.iconSize)
         } else {
+            // The glyph's own design box, so its radii and stroke are the spec's
+            // absolute 5.5 / 9 / 12.5 / 1.5 rather than those numbers scaled by 26/28.
             AirDropGlyph()
+                .frame(width: AirDropGlyph.designSize, height: AirDropGlyph.designSize)
         }
     }
 
