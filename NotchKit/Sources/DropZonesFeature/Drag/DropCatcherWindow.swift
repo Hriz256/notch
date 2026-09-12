@@ -72,6 +72,15 @@ public final class DropCatcherWindow: NSPanel {
     /// as the panel widens under the cursor.
     public func show(frame: CGRect) {
         setFrame(frame, display: false)
+        // A `panelFrame` nobody set is the one failure mode of this window that is
+        // completely silent: every hit test lands at a screen-absolute coordinate,
+        // no zone is ever under the cursor, and the drop is refused with no sign of
+        // why. The catcher's frame always contains the panel, so it is the sane
+        // default — the owner still overwrites it with the real panel rect, and an
+        // explicit value is never clobbered.
+        if catcherView.panelFrame == .zero {
+            catcherView.panelFrame = frame
+        }
         ignoresMouseEvents = false
         // `orderFrontRegardless` rather than `orderFront`: the app is an
         // accessory and is never the active one, and an ordinary `orderFront`
@@ -104,6 +113,13 @@ public final class DropCatcherView: NSView {
     /// catcher's idea of "over the stash card" the same as the one the user sees,
     /// even when the catcher's own frame is larger than the panel.
     public var panelFrame: CGRect = .zero
+
+    private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
+
+    /// `panelFrame` is defaulted by `DropCatcherWindow.show(frame:)`, so a zero one
+    /// here means the view is receiving drags without ever having been shown —
+    /// worth exactly one line in the log, not one per mouse move.
+    private var didWarnAboutMissingPanelFrame = false
 
     /// `.fileURL` and the promise types are the payloads we read; `.URL` is
     /// registered too because some sources hand a file over under it. `.png` and
@@ -140,8 +156,17 @@ public final class DropCatcherView: NSView {
     /// Where this drag is, in panel coordinates. `draggingLocation` is in the
     /// destination *window's* coordinates, so it goes through the window first.
     private func panelPoint(of info: any NSDraggingInfo) -> CGPoint {
+        warnIfPanelFrameIsMissing()
         let screen = window?.convertPoint(toScreen: info.draggingLocation) ?? info.draggingLocation
         return panelPoint(fromScreen: screen)
+    }
+
+    /// Logs the silent failure once per view, from whichever dragging callback
+    /// notices it first.
+    private func warnIfPanelFrameIsMissing() {
+        guard panelFrame == .zero, !didWarnAboutMissingPanelFrame else { return }
+        didWarnAboutMissingPanelFrame = true
+        logger.error("catcher received a drag with no panelFrame — every hit test will miss")
     }
 
     // MARK: - NSDraggingDestination

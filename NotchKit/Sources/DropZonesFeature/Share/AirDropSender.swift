@@ -17,7 +17,10 @@ public enum AirDropSender {
     @MainActor
     public static func send(_ urls: [URL]) -> Bool {
         guard !urls.isEmpty else {
-            logger.error("AirDrop asked for with no files")
+            // Not an error: a drop that yielded nothing (an unreadable payload, a
+            // promise that never arrived) reaches here in the ordinary course of
+            // things, and the caller already treats `false` as "do nothing".
+            logger.debug("AirDrop asked for with no files")
             return false
         }
         guard let service = NSSharingService(named: .sendViaAirDrop) else {

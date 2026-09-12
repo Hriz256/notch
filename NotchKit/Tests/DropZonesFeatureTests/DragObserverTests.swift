@@ -74,3 +74,84 @@ import Testing
         #expect(!DragObserver.hotRect(for: .zero).contains(CGPoint.zero))
     }
 }
+
+/// `start()`/`stop()` — what the monitors *cost*, rather than what they see.
+///
+/// A real drag is out of reach for a test, but the bookkeeping around the
+/// monitors is not, and it is where the expensive mistakes live: monitors left
+/// installed for the life of the process, or installed twice so every event is
+/// handled sixteen times.
+///
+/// A private pasteboard throughout: a test must never touch the real `.drag`
+/// pasteboard, which belongs to whatever the user is dragging right now.
+@MainActor @Suite struct DragObserverLifecycleTests {
+
+    /// AppKit wants its shared application before `NSEvent` monitors are installed.
+    private static let application: NSApplication = .shared
+
+    private func makeObserver() -> DragObserver {
+        _ = Self.application
+        return DragObserver(
+            hotRect: { CGRect(x: 0, y: 0, width: 300, height: 121) },
+            pasteboard: NSPasteboard(name: .init("app.notch.tests.\(UUID().uuidString)"))
+        )
+    }
+
+    @Test func startInstallsEightMonitorsAndStopRemovesThemAll() {
+        let observer = makeObserver()
+        #expect(observer.monitorCount == 0)
+
+        observer.start()
+
+        // Four masks × (global + local). A refused global monitor (`.flagsChanged`
+        // without Accessibility trust) returns nil and is dropped, so this is also
+        // the assertion that no permission is needed for any of them.
+        #expect(observer.monitorCount == 8)
+
+        observer.stop()
+
+        #expect(observer.monitorCount == 0)
+    }
+
+    @Test func startIsIdempotentAndTheCycleCanBeRepeated() {
+        let observer = makeObserver()
+
+        observer.start()
+        observer.start()
+        #expect(observer.monitorCount == 8, "a second start must not double-register")
+
+        observer.stop()
+        observer.stop()
+        #expect(observer.monitorCount == 0, "stop is safe to call twice")
+
+        observer.start()
+        #expect(observer.monitorCount == 8)
+        observer.stop()
+        #expect(observer.monitorCount == 0)
+    }
+
+    @Test func stopClearsTheDragOutFlag() {
+        // `StashDragSource` sets this for the life of one drag out of the stash.
+        // Latched `true` across a stop it would hide every zone but the stash for
+        // the rest of the session.
+        let observer = makeObserver()
+        observer.start()
+        observer.isDragOutActive = true
+
+        observer.stop()
+
+        #expect(!observer.isDragOutActive)
+    }
+
+    @Test func anObserverThatIsDroppedTakesItsMonitorsWithIt() {
+        // `NSEvent` owns the monitors with no reference back to us, so a dropped
+        // observer would otherwise leave eight handlers running for the session.
+        // All this can assert is that the isolated `deinit` runs without tripping
+        // the concurrency checks — and that the process survives it.
+        do {
+            let observer = makeObserver()
+            observer.start()
+            #expect(observer.monitorCount == 8)
+        }
+    }
+}

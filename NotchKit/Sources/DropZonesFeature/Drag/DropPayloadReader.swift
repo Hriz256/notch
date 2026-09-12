@@ -84,8 +84,15 @@ public enum DropPayloadReader {
         queue.name = "app.notch.dropzones.promises"
         queue.qualityOfService = .userInitiated
 
+        // One `<UUID>` folder for the whole drop, not one per receiver: the
+        // promises of a single drop are the files the user dropped together, they
+        // already have distinct names from their source, and a shared folder is
+        // what makes the drop one unit to clean up. Two *drags* still never
+        // collide, which is what the UUID is for.
+        let destination = makeStagingFolder(in: stagingRoot)
+
         for receiver in receivers {
-            guard let destination = makeStagingFolder(in: stagingRoot) else {
+            guard let destination else {
                 collector.received(nil, error: nil)
                 continue
             }

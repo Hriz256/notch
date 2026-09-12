@@ -131,6 +131,33 @@ import Testing
         window.hide()
     }
 
+    @Test func showDefaultsAnUnsetPanelFrameToItsOwn() {
+        // Without this the view converts every drag against `.zero`: the hit test
+        // lands hundreds of points away, no zone is ever under the cursor and the
+        // drop is refused with nothing in the log to say why. The catcher's frame
+        // always contains the panel, so it is the safe default.
+        let window = makeWindow()
+        let frame = CGRect(x: 700, y: 900, width: 320, height: 180)
+
+        window.show(frame: frame)
+        defer { window.hide() }
+
+        #expect(window.catcherView.panelFrame == frame)
+    }
+
+    @Test func showLeavesAPanelFrameTheOwnerSetAlone() {
+        // The real one is the *panel's* rect, which is smaller than the catcher's
+        // and is what the zone layout is measured in; show() must never clobber it.
+        let window = makeWindow()
+        let panel = CGRect(x: 720, y: 940, width: 280, height: 140)
+        window.catcherView.panelFrame = panel
+
+        window.show(frame: CGRect(x: 700, y: 900, width: 320, height: 180))
+        defer { window.hide() }
+
+        #expect(window.catcherView.panelFrame == panel)
+    }
+
     // MARK: - Coordinates
 
     @Test func screenPointsBecomePanelPointsWithTheOriginAtTheTopLeft() {
@@ -218,6 +245,16 @@ import Testing
         let window = makeWindow()
 
         #expect(!window.catcherView.performDragOperation(FakeDraggingInfo()))
+    }
+
+    @Test func aDragWithNoDelegateIsRefusedRatherThanAccepted() {
+        // The window is ordered in before the feature attaches itself, and an
+        // unowned catcher offering `.copy` would swallow drops into nothing.
+        let window = makeWindow()
+        let info = FakeDraggingInfo()
+
+        #expect(window.catcherView.draggingEntered(info) == [])
+        #expect(window.catcherView.draggingUpdated(info) == [])
     }
 
     @Test func itDoesNotAskForPeriodicUpdates() {

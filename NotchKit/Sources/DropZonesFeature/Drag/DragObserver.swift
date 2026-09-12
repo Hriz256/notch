@@ -60,6 +60,12 @@ public final class DragObserver {
     /// Every crossing the detector reports, with the cursor's screen location at
     /// that moment (origin bottom-left) — the view model needs it to decide which
     /// screen the zones belong on.
+    ///
+    /// The location is real only for the outputs that come from a mouse-*dragged*
+    /// event — `.enteredHotRect` and `.leftHotRect`, the two that need it. `.ended`
+    /// and `.cancelled` report `.zero`, because reading `NSEvent.mouseLocation` is
+    /// a WindowServer round trip and those events fire on an idle machine (design
+    /// §5: nothing but an `Int` comparison until a mouse-down).
     public var onEvent: ((DragDetector.Output, CGPoint) -> Void)?
 
     /// Set by `StashDragSource` for the life of a drag that started from our own
@@ -157,18 +163,43 @@ public final class DragObserver {
         logger.debug("drag monitors installed: \(self.monitors.count, privacy: .public)/8")
     }
 
-    /// Removes every monitor. Safe to call twice.
+    /// How many monitors are installed: 8 while running, 0 when stopped. Exposed
+    /// for the lifecycle test, which is the only thing about `start()`/`stop()`
+    /// that can be checked without a trackpad.
+    public var monitorCount: Int { monitors.count }
+
+    /// Removes every monitor and forgets the gesture in flight. Safe to call twice.
+    ///
+    /// `isDragOutActive` is reset too: it is set by `StashDragSource` for the life
+    /// of one drag out of the stash, and a stop mid-drag (the feature being
+    /// disabled, the island going away) would otherwise leave it latched `true`
+    /// forever, permanently hiding every zone but the stash.
     public func stop() {
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors = []
         detector = DragDetector(hotRect: .zero)
+        isDragOutActive = false
+    }
+
+    /// The monitors are process-wide: `NSEvent` keeps them alive with no reference
+    /// to us, so an observer that is simply dropped would leave eight handlers
+    /// running for the rest of the session (each a no-op through the `weak self`,
+    /// but each still a delivered event). `isolated deinit` (SE-0371) lets the
+    /// teardown run on the main actor, where `stop()` lives.
+    isolated deinit {
+        stop()
     }
 
     // MARK: - Events
 
+    /// One monitored event, at the cost the design budgets for it.
+    ///
+    /// `NSEvent.mouseLocation` is a WindowServer round trip, so it is read *only*
+    /// in the two branches whose outputs carry it. `.flagsChanged` in particular
+    /// fires whenever the user so much as taps ⌘ with no drag anywhere, and it is
+    /// delivered to eight monitors; reading the cursor there would spend the whole
+    /// idle budget on an answer nobody looks at.
     private func handle(_ event: NSEvent) {
-        let location = NSEvent.mouseLocation
-
         switch event.type {
         case .leftMouseDown:
             // A fresh detector per press: the hot rect is two `CGRect`s of
@@ -176,9 +207,11 @@ public final class DragObserver {
             // a screen that was resized, rearranged or unplugged since the last
             // drag without any notification plumbing.
             detector = DragDetector(hotRect: hotRect())
-            emit(detector.receive(.mouseDown(changeCount: pasteboard.changeCount)), at: location)
+            // `.mouseDown` is always `.none`, so the location is never used.
+            emit(detector.receive(.mouseDown(changeCount: pasteboard.changeCount)), at: .zero)
 
         case .leftMouseDragged:
+            let location = NSEvent.mouseLocation
             emit(
                 detector.receive(
                     .dragged(
@@ -191,10 +224,10 @@ public final class DragObserver {
             )
 
         case .leftMouseUp:
-            emit(detector.receive(.mouseUp), at: location)
+            emit(detector.receive(.mouseUp), at: .zero)
 
         case .flagsChanged:
-            emit(detector.receive(.flagsChanged), at: location)
+            emit(detector.receive(.flagsChanged), at: .zero)
 
         default:
             break

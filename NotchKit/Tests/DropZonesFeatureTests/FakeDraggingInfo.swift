@@ -20,6 +20,14 @@ final class FakeDraggingInfo: NSObject, NSDraggingInfo {
         super.init()
     }
 
+    /// A uniquely named pasteboard is a global pasteboard server object that
+    /// outlives the process unless it is released, so every fake takes its own
+    /// back down. (A caller-supplied pasteboard is released too — no test passes
+    /// one it wants to keep.)
+    deinit {
+        pasteboard.releaseGlobally()
+    }
+
     /// In the destination window's coordinates, origin bottom-left — the one
     /// value besides the pasteboard that the catcher view reads.
     var draggingLocation: NSPoint = .zero
