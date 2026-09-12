@@ -1,6 +1,7 @@
 import SwiftUI
 import os
 import CodeAgentFeature
+import DropZonesFeature
 import IslandCore
 import MusicFeature
 
@@ -13,6 +14,9 @@ final class AppCoordinator {
     /// Held by name as well as by the registry: the status menu talks to its settings and
     /// hook installer directly, which the type-erased `any IslandFeature` cannot offer.
     let codeFeature = CodeAgentFeature()
+    /// Held by name for the same reason: the status menu reads its settings, and clears or
+    /// reveals the stash through it.
+    let dropZonesFeature = DropZonesFeature()
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "coordinator")
     private var demoID: PresentationID?
 
@@ -27,6 +31,7 @@ final class AppCoordinator {
         surface.start()
         registry.register(MusicFeature(), enabledByDefault: true)
         registry.register(codeFeature, enabledByDefault: true)
+        registry.register(dropZonesFeature, enabledByDefault: true)
     }
 
     func stop() {

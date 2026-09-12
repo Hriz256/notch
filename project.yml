@@ -36,6 +36,10 @@ targets:
         product: CodeAgentShared
       - package: NotchKit
         product: CodeAgentFeature
+      - package: NotchKit
+        product: DropZonesShared
+      - package: NotchKit
+        product: DropZonesFeature
       - target: NotchHelper
         embed: true
       - target: NotchHook

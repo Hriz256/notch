@@ -18,7 +18,9 @@
 		781D25019837B25A2851270A /* StatusMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 519D0FBC833BFF2AF2734FEB /* StatusMenu.swift */; };
 		7D5C91F22526A4C108217F06 /* IslandCore in Frameworks */ = {isa = PBXBuildFile; productRef = F895EF8C9149EBD34AD43592 /* IslandCore */; };
 		934470EC2C43C99B3282F3CA /* NowPlayingClient in Frameworks */ = {isa = PBXBuildFile; productRef = CC162D9B08D12B5B9594B85D /* NowPlayingClient */; };
+		9C775EFC741E584DC7FA8AF6 /* DropZonesFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 3F3D6A74A2FE70266083FB69 /* DropZonesFeature */; };
 		A5825EDFD2DCA7412387B2A7 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F2FE5918224B67254B48200 /* main.swift */; };
+		A839E2B4D268944A63724227 /* DropZonesShared in Frameworks */ = {isa = PBXBuildFile; productRef = E6EB92EFB351170024AC64B0 /* DropZonesShared */; };
 		B43F26D6509739FF522B4A78 /* NowPlayingMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06540FCB14095033083D616D /* NowPlayingMonitor.swift */; };
 		B52632015D34FE21EF8A2B00 /* NotchHook in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 5FF62D36E173953E3E8BF85C /* NotchHook */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BB24D36D386F615B47DA300F /* NotchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F4D8F01E19567B2DCC6E11 /* NotchApp.swift */; };
@@ -95,6 +97,8 @@
 				24BB646E8280BF7005276E3B /* MusicFeature in Frameworks */,
 				56B5776667C7E45D3FEA321A /* CodeAgentShared in Frameworks */,
 				BBAB5256C3DADA48460F9648 /* CodeAgentFeature in Frameworks */,
+				A839E2B4D268944A63724227 /* DropZonesShared in Frameworks */,
+				9C775EFC741E584DC7FA8AF6 /* DropZonesFeature in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -231,6 +235,8 @@
 				9235D02F51730FDDF3FF6482 /* MusicFeature */,
 				2C424E7A0E798F12935DE146 /* CodeAgentShared */,
 				7B546792D2D9807311111AA2 /* CodeAgentFeature */,
+				E6EB92EFB351170024AC64B0 /* DropZonesShared */,
+				3F3D6A74A2FE70266083FB69 /* DropZonesFeature */,
 			);
 			productName = Notch;
 			productReference = 6F1407BD23453DE2A470B1EF /* Notch.app */;
@@ -605,6 +611,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = NowPlayingShared;
 		};
+		3F3D6A74A2FE70266083FB69 /* DropZonesFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DropZonesFeature;
+		};
 		7B546792D2D9807311111AA2 /* CodeAgentFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CodeAgentFeature;
@@ -616,6 +626,10 @@
 		CC162D9B08D12B5B9594B85D /* NowPlayingClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NowPlayingClient;
+		};
+		E6EB92EFB351170024AC64B0 /* DropZonesShared */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DropZonesShared;
 		};
 		F44BCEC83FD7477A81328C6C /* NowPlayingShared */ = {
 			isa = XCSwiftPackageProductDependency;

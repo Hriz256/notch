@@ -1,6 +1,8 @@
 import SwiftUI
 import CodeAgentFeature
 import CodeAgentShared
+import DropZonesFeature
+import DropZonesShared
 import IslandCore
 import MusicFeature
 
@@ -11,7 +13,7 @@ struct StatusMenu: View {
 
     var body: some View {
         ForEach(coordinator.registry.features, id: \.id) { feature in
-            Toggle(feature.id.rawValue.capitalized, isOn: Binding(
+            Toggle(Self.title(for: feature.id), isOn: Binding(
                 get: { coordinator.registry.isEnabled(feature.id) },
                 set: { coordinator.registry.setEnabled(feature.id, $0) }
             ))
@@ -21,6 +23,7 @@ struct StatusMenu: View {
         Divider()
         cards
         codingAgents
+        dropZones
         Divider()
         // Reloading is a no-op while music is off, so the button reflects that rather than looking
         // like it did something.
@@ -33,6 +36,12 @@ struct StatusMenu: View {
         #endif
         Button("Quit Notch") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    /// The master-switch row's label. `capitalized` on the raw id reads correctly for
+    /// "music" and "code"; "dropzones" is the one id that stands for two words.
+    private static func title(for id: FeatureID) -> String {
+        id == DropZonesViewModel.featureID ? DropZonesViewModel.displayTitle : id.rawValue.capitalized
     }
 
     /// The same card list the island's own menu shows, reachable when the pointer is
@@ -94,5 +103,41 @@ struct StatusMenu: View {
                     .disabled(true)
             }
         }
+    }
+
+    /// Mirrors the island's Drop Zones context menu. The zones panel is only ever on screen
+    /// during a drag, so this is the one place those settings can actually be reached with
+    /// the pointer — the context menu on the panel would need a third hand.
+    private var dropZones: some View {
+        Menu(DropZonesViewModel.displayTitle) {
+            Toggle("AirDrop zone", isOn: Binding(
+                get: { coordinator.dropZonesFeature.settings.airdrop },
+                set: { coordinator.dropZonesFeature.setAirDropZone($0) }
+            ))
+            Toggle("File Stash zone", isOn: Binding(
+                get: { coordinator.dropZonesFeature.settings.stash },
+                set: { coordinator.dropZonesFeature.setStashZone($0) }
+            ))
+            Toggle("Offer the other action as a third zone", isOn: Binding(
+                get: { coordinator.dropZonesFeature.settings.secondZone },
+                set: { coordinator.dropZonesFeature.setSecondZone($0) }
+            ))
+            Picker("When stash has files", selection: Binding(
+                get: { coordinator.dropZonesFeature.settings.stashDropAction },
+                set: { coordinator.dropZonesFeature.setStashDropAction($0) }
+            )) {
+                Text("Replace").tag(StashDropAction.replace)
+                Text("Add").tag(StashDropAction.add)
+            }
+            Divider()
+            // Both rows need a live view model; "Clear stash" additionally needs something
+            // to clear, and its greyed-out state doubles as "there is nothing in there".
+            Button("Reveal stash in Finder") { coordinator.dropZonesFeature.revealStash() }
+                .disabled(coordinator.dropZonesFeature.model == nil)
+            Button("Clear stash") { coordinator.dropZonesFeature.clearStash() }
+                .disabled(coordinator.dropZonesFeature.stashIsEmpty)
+        }
+        // Switched off, none of this has any effect until the feature comes back.
+        .disabled(!coordinator.registry.isEnabled(DropZonesViewModel.featureID))
     }
 }
