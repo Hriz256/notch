@@ -408,6 +408,23 @@ private func allCommands(_ json: String) throws -> [String] {
         #expect(HookConfigEditor.removeCodex(configTOML: "") == "")
     }
 
+    /// A config saved with Windows line endings leaves a `\r` on every marker line; trimming
+    /// only `.whitespaces` would miss it and leave the stale block sitting next to the new one.
+    @Test func removeFindsMarkersInACRLFConfig() {
+        let installed = HookConfigEditor.installCodex(
+            configTOML: Fixture.codexConfigPlain, command: Fixture.notchCodexCommand)
+        let crlf = installed.replacingOccurrences(of: "\n", with: "\r\n")
+
+        let stripped = HookConfigEditor.removeCodex(configTOML: crlf)
+        #expect(!stripped.contains(HookConfigEditor.codexBeginMarker))
+        #expect(!stripped.contains("notch-hook codex"))
+        #expect(stripped.contains("[features]"))  // the user's own content survives
+
+        // And a re-install over CRLF content leaves exactly one managed block.
+        let reinstalled = HookConfigEditor.installCodex(configTOML: crlf, command: Fixture.notchCodexCommand)
+        #expect(reinstalled.components(separatedBy: HookConfigEditor.codexBeginMarker).count - 1 == 1)
+    }
+
     @Test func removeLeavesSeamsBlockAlone() {
         #expect(HookConfigEditor.removeCodex(configTOML: Fixture.codexConfigWithSeam)
             == Fixture.codexConfigWithSeam)

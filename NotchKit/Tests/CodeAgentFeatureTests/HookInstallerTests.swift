@@ -55,7 +55,7 @@ final class HookInstallerTests {
 
     // MARK: - Install
 
-    @Test func installCreatesMissingClaudeSettingsWithTheCommandAndABackup() throws {
+    @Test func installCreatesMissingClaudeSettingsWithTheCommand() throws {
         let subject = installer()
         try subject.install(.claude)
 
@@ -63,11 +63,13 @@ final class HookInstallerTests {
         #expect(text.contains("/Applications/Notch.app/Contents/MacOS/notch-hook claude"))
         #expect(text.contains(HookConfigEditor.marker))
         #expect(text.contains("PermissionRequest"))
-        #expect(backupExists(.claude))
+        // Nothing existed to back up, so no `.notch.bak` is left behind.
+        #expect(!backupExists(.claude))
         #expect(subject.state[.claude] == .installed)
     }
 
     @Test func installIsIdempotentByteForByte() throws {
+        try write("{\"model\" : \"opus\"}", .claude)
         let subject = installer()
         try subject.install(.claude)
         let first = try read(.claude)
@@ -157,6 +159,106 @@ final class HookInstallerTests {
         #expect(!text.contains("hooks = false"))
         #expect(text.contains("web_search = true"))
         #expect(text.components(separatedBy: "[features]").count - 1 == 1)
+    }
+
+    /// A header only Codex's parser would recognize — a trailing comment, inner spaces —
+    /// must be reused, not shadowed by a second `[features]` table.
+    @Test(arguments: ["[features]  # notes", "[ features ]", "\t[features]\t"])
+    func codexReusesAFeaturesHeaderWhateverItsSpelling(header: String) throws {
+        try write("\(header)\nweb_search = true\n\n[tui]\nx = 1\n", .codex)
+
+        let subject = installer()
+        try subject.install(.codex)
+        try subject.install(.codex)
+
+        let text = try read(.codex)
+        #expect(text.contains(header))
+        #expect(HookInstaller.isValidCodexConfig(text))
+        #expect(text.components(separatedBy: "hooks = true").count - 1 == 1)
+        // No second table was appended: the only header is the one the user wrote.
+        #expect(text.split(whereSeparator: \.isNewline).count(where: { HookInstaller.isFeaturesHeader(String($0)) }) == 1)
+        #expect(text.contains("web_search = true"))
+        #expect(subject.state[.codex] == .installed)
+    }
+
+    /// `features.hooks = …` at the root is the dotted spelling of the same key: declaring a
+    /// `[features]` table next to it is the duplicate definition TOML rejects.
+    @Test func codexRewritesARootLevelDottedHooksKeyInPlace() throws {
+        try write("features.hooks = false\nfeatures.web_search = true\n\n[tui]\nx = 1\n", .codex)
+
+        let subject = installer()
+        try subject.install(.codex)
+
+        let text = try read(.codex)
+        #expect(text.contains("features.hooks = true"))
+        #expect(!text.contains("features.hooks = false"))
+        #expect(!text.contains("[features]"))
+        #expect(text.contains("features.web_search = true"))
+        #expect(HookInstaller.isValidCodexConfig(text))
+        #expect(subject.state[.codex] == .installed)
+    }
+
+    @Test func codexInstallIsIdempotentOnADottedHooksKey() throws {
+        try write("features.hooks = true\n", .codex)
+        let subject = installer()
+        try subject.install(.codex)
+        let first = try read(.codex)
+        try subject.install(.codex)
+        #expect(try read(.codex) == first)
+    }
+
+    /// A config that already declares `[features]` twice cannot be made valid by an edit, so
+    /// nothing is written and the menu says so.
+    @Test func codexConfigThatWouldStayInvalidIsNotWritten() throws {
+        let broken = "[features]\nweb_search = true\n\n[features]\nhooks = false\n"
+        try write(broken, .codex)
+
+        let subject = installer()
+        #expect(throws: HookInstaller.InstallError.codexConfigInvalid) { try subject.install(.codex) }
+
+        #expect(try read(.codex) == broken)
+        #expect(subject.state[.codex] == .failed("config.toml would become invalid"))
+    }
+
+    @Test func codexSanityCheckRejectsDuplicateBlocksAndTables() {
+        let command = "/Applications/Notch.app/Contents/MacOS/notch-hook codex"
+        let good = HookConfigEditor.installCodex(
+            configTOML: HookInstaller.ensuringCodexHooksFeature(""), command: command)
+        #expect(HookInstaller.isValidCodexConfig(good))
+        // Two managed blocks, or two ways of enabling the feature, are both rejected.
+        #expect(!HookInstaller.isValidCodexConfig(good + "\n" + good))
+        #expect(!HookInstaller.isValidCodexConfig("features.hooks = true\n" + good))
+        #expect(!HookInstaller.isValidCodexConfig(good.replacingOccurrences(of: "[features]", with: "")))
+    }
+
+    // MARK: - File hygiene
+
+    /// An atomic write replaces the inode; a config the user locked down to 0600 must not
+    /// come back readable by everyone.
+    @Test func installPreservesPosixPermissionsOnTheConfigAndTheBackup() throws {
+        try write("{}", .claude)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: url(.claude).path)
+
+        try installer().install(.claude)
+
+        #expect(mode(url(.claude)) == 0o600)
+        #expect(mode(url(.claude).appendingPathExtension("notch.bak")) == 0o600)
+    }
+
+    /// A config Notch created itself has no previous content, so a `.notch.bak` full of the
+    /// placeholder would only confuse a later restore.
+    @Test func installDoesNotBackUpAConfigThatDidNotExist() throws {
+        let subject = installer()
+        try subject.install(.codex)
+
+        #expect(!backupExists(.codex))
+        #expect(subject.state[.codex] == .installed)
+    }
+
+    private func mode(_ url: URL) -> Int? {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.posixPermissions] as? NSNumber)?.intValue
     }
 
     // MARK: - Failure

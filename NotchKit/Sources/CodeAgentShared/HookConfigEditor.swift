@@ -165,15 +165,19 @@ public enum HookConfigEditor {
 
     /// Drops the marked lines plus any blank lines immediately before them, so repeated installs
     /// cannot accumulate whitespace. An unterminated block is removed through the end of the file.
+    ///
+    /// Marker lines are trimmed of whitespace *and newlines*: a config saved with CRLF endings
+    /// leaves a trailing `\r` on every line, which would otherwise stop the markers from
+    /// matching and leave the old block in place next to the new one.
     private static func removeBlock(_ text: String, begin: String, end: String) -> String {
         guard text.contains(begin) else { return text }
         var kept: [Substring] = []
         var inside = false
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for line in lines(of: text) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if !inside, trimmed == begin {
                 inside = true
-                while let last = kept.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                while let last = kept.last, last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     kept.removeLast()
                 }
                 continue
@@ -185,6 +189,14 @@ public enum HookConfigEditor {
             kept.append(line)
         }
         return kept.joined(separator: "\n")
+    }
+
+    /// Splits on any line terminator. `split(separator: "\n")` cannot be used: Swift treats
+    /// `"\r\n"` as a *single* `Character`, so a CRLF file would come back as one long line and
+    /// the block markers would never match. The price is that editing a CRLF config normalizes
+    /// it to LF — which TOML accepts, and which beats leaving a stale block behind.
+    public static func lines(of text: String) -> [Substring] {
+        text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
     }
 
     private static func tomlEscape(_ value: String) -> String {

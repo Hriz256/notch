@@ -21,6 +21,13 @@ public final class HookInstaller {
         case failed(String)
     }
 
+    /// Failures raised by the installer itself rather than by a content transform.
+    public enum InstallError: Error, Equatable, Sendable {
+        /// The rewritten `config.toml` failed the post-edit sanity check. Nothing is written:
+        /// a Codex config that does not load is strictly worse than no hooks at all.
+        case codexConfigInvalid
+    }
+
     /// `~` in production, a temp directory in tests.
     public let homeDirectory: URL
     /// Directory holding `notch-hook`, i.e. `Bundle.main.bundleURL/Contents/MacOS`.
@@ -101,7 +108,8 @@ public final class HookInstaller {
     public func install(_ agent: Agent) throws {
         let url = configURL(for: agent)
         do {
-            let original = (try? String(contentsOf: url, encoding: .utf8)) ?? Self.minimalConfig(for: agent)
+            let existing = try? String(contentsOf: url, encoding: .utf8)
+            let original = existing ?? Self.minimalConfig(for: agent)
             let updated: String
             switch agent {
             case .claude:
@@ -112,9 +120,13 @@ public final class HookInstaller {
                 // `[features] hooks = true` has to sit outside the managed block: the table
                 // may already exist elsewhere in config.toml and TOML forbids re-declaring it.
                 let base = Self.ensuringCodexHooksFeature(HookConfigEditor.removeCodex(configTOML: original))
-                updated = HookConfigEditor.installCodex(configTOML: base, command: command(for: agent))
+                let candidate = HookConfigEditor.installCodex(configTOML: base, command: command(for: agent))
+                // Codex refuses to start on a config that declares `[features]` twice, so the
+                // result is checked before it reaches the disk rather than after.
+                guard Self.isValidCodexConfig(candidate) else { throw InstallError.codexConfigInvalid }
+                updated = candidate
             }
-            try write(updated, to: url, original: original)
+            try write(updated, to: url, original: existing)
             if agent == .codex { codexNeedsTrust = true }
             state[agent] = .installed
             logger.info("installed hooks for \(agent.rawValue, privacy: .public)")
@@ -142,7 +154,7 @@ public final class HookInstaller {
             case .codex: updated = HookConfigEditor.removeCodex(configTOML: original)
             case .cursor: updated = try HookConfigEditor.removeCursor(hooksJSON: original)
             }
-            try write(updated, to: url, original: original)
+            try write(updated, to: url, original: original)  // the file exists: `original` was read from it
             if agent == .codex { codexNeedsTrust = false }
             state[agent] = .notInstalled
             logger.info("removed hooks for \(agent.rawValue, privacy: .public)")
@@ -157,16 +169,33 @@ public final class HookInstaller {
     // MARK: - File I/O
 
     /// Atomic write, preceded by a one-time backup of whatever was there before.
-    private func write(_ text: String, to url: URL, original: String) throws {
+    ///
+    /// - Parameter original: the content read off disk, or `nil` when there was no file. A
+    ///   config Notch creates itself has nothing worth backing up, so no `.notch.bak` is left
+    ///   behind for it.
+    ///
+    /// An atomic write replaces the inode, which resets the mode to the process umask; a
+    /// config the user had chmod-ed to 0600 must not come back world-readable, so the original
+    /// permissions are re-applied to both files afterwards.
+    private func write(_ text: String, to url: URL, original: String?) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
+        let permissions = (try? manager.attributesOfItem(atPath: url.path))?[.posixPermissions] as? NSNumber
+
         let backup = url.appendingPathExtension("notch.bak")
-        if !manager.fileExists(atPath: backup.path) {
+        if let original, !manager.fileExists(atPath: backup.path) {
             try Data(original.utf8).write(to: backup, options: .atomic)
+            applyPermissions(permissions, to: backup)
         }
         guard text != original || !manager.fileExists(atPath: url.path) else { return }
         try Data(text.utf8).write(to: url, options: .atomic)
+        applyPermissions(permissions, to: url)
+    }
+
+    private func applyPermissions(_ permissions: NSNumber?, to url: URL) {
+        guard let permissions else { return }
+        try? FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
     }
 
     /// Minimal valid content for a config Notch has to create (spec §4).
@@ -205,7 +234,8 @@ public final class HookInstaller {
     }
 
     private func reason(for error: any Error, agent: Agent) -> String {
-        switch error as? HookConfigError {
+        if case .codexConfigInvalid = error as? InstallError { return "config.toml would become invalid" }
+        return switch error as? HookConfigError {
         case .invalidJSON:
             "\(displayPath(agent)) is not valid JSON"
         case .invalidStructure(let path):
@@ -225,15 +255,25 @@ public final class HookInstaller {
 
     // MARK: - Codex feature flag
 
-    /// Ensures `hooks = true` inside a `[features]` table, creating the table at the end
-    /// of the file when it is missing. Codex ignores `[hooks]` without this flag.
+    /// Ensures Codex's `hooks` feature flag is on, whichever spelling the file already uses:
+    /// a root-level dotted `features.hooks = …` is rewritten in place, an existing
+    /// `[features]` table gets `hooks = true` inside it, and only a file with neither gets a
+    /// fresh table appended. Codex ignores `[hooks]` without this flag, and refuses to load a
+    /// config that declares `[features]` — or `features.hooks` — twice.
     ///
     /// Called on config text that has no managed block, so the table always ends up
     /// *before* the block that `installCodex` appends.
     static func ensuringCodexHooksFeature(_ toml: String) -> String {
-        var lines = toml.components(separatedBy: "\n")
-        guard let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[features]" })
-        else {
+        var lines = HookConfigEditor.lines(of: toml).map(String.init)
+
+        // The dotted key defines the same value as the table would; writing a `[features]`
+        // table next to it is exactly the duplicate definition TOML forbids.
+        if let dotted = rootDottedHooksIndex(in: lines) {
+            lines[dotted] = "features.hooks = true"
+            return lines.joined(separator: "\n")
+        }
+
+        guard let header = lines.firstIndex(where: { isFeaturesHeader($0) }) else {
             var base = toml
             while base.hasSuffix("\n") || base.hasSuffix("\r") { base.removeLast() }
             let table = "[features]\nhooks = true\n"
@@ -242,7 +282,7 @@ public final class HookInstaller {
 
         var index = header + 1
         while index < lines.count {
-            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            let trimmed = trimmed(lines[index])
             if trimmed.hasPrefix("[") { break }  // next table: the key is not there
             if isHooksKey(trimmed) {
                 lines[index] = "hooks = true"
@@ -254,10 +294,48 @@ public final class HookInstaller {
         return lines.joined(separator: "\n")
     }
 
+    /// Last line of defence before `config.toml` is written: the edit must leave the file with
+    /// exactly one way of enabling the feature (a `[features]` table *or* the dotted key, never
+    /// both and never two of either) and exactly one managed block.
+    static func isValidCodexConfig(_ toml: String) -> Bool {
+        let lines = HookConfigEditor.lines(of: toml).map(String.init)
+        let headers = lines.count(where: { isFeaturesHeader($0) })
+        let dotted = rootDottedHooksIndex(in: lines) == nil ? 0 : 1
+        guard headers + dotted == 1 else { return false }
+        return occurrences(of: HookConfigEditor.codexBeginMarker, in: toml) == 1
+            && occurrences(of: HookConfigEditor.codexEndMarker, in: toml) == 1
+    }
+
+    private static func occurrences(of needle: String, in text: String) -> Int {
+        text.components(separatedBy: needle).count - 1
+    }
+
+    /// `[features]`, tolerating outer and inner whitespace and a trailing comment —
+    /// `[ features ]` and `[features]  # quota` are the same table.
+    static func isFeaturesHeader(_ line: String) -> Bool {
+        trimmed(line).firstMatch(of: /^\[[ \t]*features[ \t]*\][ \t]*(#.*)?$/) != nil
+    }
+
+    /// Index of a root-level `features.hooks = …` line, i.e. one that appears before any
+    /// table header. The same spelling under another table means something else entirely.
+    private static func rootDottedHooksIndex(in lines: [String]) -> Int? {
+        for (index, line) in lines.enumerated() {
+            let line = trimmed(line)
+            if line.hasPrefix("[") { return nil }
+            if line.firstMatch(of: /^features[ \t]*\.[ \t]*hooks[ \t]*=/) != nil { return index }
+        }
+        return nil
+    }
+
     /// `hooks = …`, tolerating spacing but not `hooks_something = …`.
     private static func isHooksKey(_ trimmed: String) -> Bool {
         guard trimmed.hasPrefix("hooks") else { return false }
         let rest = trimmed.dropFirst("hooks".count).drop { $0 == " " || $0 == "\t" }
         return rest.first == "="
+    }
+
+    /// Whitespace *and newlines*, so a CRLF file's trailing `\r` cannot defeat a match.
+    private static func trimmed(_ line: String) -> String {
+        line.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
