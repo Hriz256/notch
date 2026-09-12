@@ -51,6 +51,27 @@ private func makePresentation(
 
 @MainActor
 struct IslandPresenterTests {
+    @Test("stackOrder sorts the pages by feature, and ties in `current` still go to the newest card")
+    func stackOrderSortsPagesByFeature() {
+        let p = IslandPresenter(clock: ManualClock())
+        p.stackOrder = [FeatureID("music"), FeatureID("code"), FeatureID("dropzones")]
+        let stash = makePresentation(feature: "dropzones")
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code")
+        let other = makePresentation(feature: "weather")
+        p.present(stash)
+        p.present(music)
+        p.present(other)
+        p.present(code)
+
+        #expect(p.stack.map(\.featureID) == [music, code, stash, other].map(\.featureID))
+        // The newest card of the top priority is still what is shown, not the first page.
+        #expect(p.current?.id == code.id)
+        #expect(p.selectedIndex == 1)
+        p.cycle(.next)
+        #expect(p.current?.id == stash.id)
+    }
+
     @Test func emptyQueueIsCollapsed() {
         let p = IslandPresenter(clock: ManualClock())
         #expect(p.state == .collapsed)

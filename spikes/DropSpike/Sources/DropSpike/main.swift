@@ -267,7 +267,25 @@ final class PromiseDelegate: NSObject, NSFilePromiseProviderDelegate, @unchecked
         let statusLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 1)
 
         space = SkyLightSpace()
-        if ProcessInfo.processInfo.environment["DROPSPIKE_OVERLAP"] != nil {
+        if ProcessInfo.processInfo.environment["DROPSPIKE_ALPHA"] != nil {
+            // Round 3: does a normal-space window that becomes visible DURING a drag draw
+            // under or over the drag image? B starts at alpha 0 and becomes 1 after 5 s;
+            // C is created and ordered in only after 8 s.
+            let left = NSRect(x: f.midX - 410, y: y, width: 400, height: 160)
+            let right = NSRect(x: f.midX + 10, y: y, width: 400, height: 160)
+            plainPanel = makePanel(left, title: "B · NORMAL alpha 0→1 at 5 s", level: statusLevel)
+            plainPanel!.alphaValue = 0
+            log("ALPHA layout: B(\(plainPanel!.windowNumber)) alpha 0; C appears at 8 s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [self] in
+                plainPanel?.alphaValue = 1
+                log("B alpha → 1")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [self] in
+                let c = makePanel(right, title: "C · NORMAL created at 8 s", level: statusLevel)
+                extraPanels = [c]
+                log("C ordered in: \(c.windowNumber)")
+            }
+        } else if ProcessInfo.processInfo.environment["DROPSPIKE_OVERLAP"] != nil {
             // Round 2: private-space panels stacked exactly over normal-space panels.
             // Left pair: A ignores mouse events. Right pair: C does not.
             let left = NSRect(x: f.midX - 410, y: y, width: 400, height: 160)

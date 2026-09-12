@@ -22,6 +22,9 @@ final class AppCoordinator {
 
     init() {
         let presenter = IslandPresenter(clock: TaskClock())
+        // Pages in a fixed order whatever arrives first: a stash restored at launch must
+        // not push Music off the first dot.
+        presenter.stackOrder = [MusicViewModel.featureID, CodeAgentViewModel.featureID, DropZonesViewModel.featureID]
         self.presenter = presenter
         self.registry = FeatureRegistry(presenter: presenter)
         self.surface = SurfaceController(presenter: presenter)

@@ -50,6 +50,29 @@ public final class IslandPresenter: IslandPresenting {
     /// could no longer swipe back to Music. Only a presentation that expires on its own
     /// (the 4 s completion alert) is a true interruption.
     public var stack: [Presentation] {
+        let sticky = stickyCards
+        guard !stackOrder.isEmpty else { return sticky }
+        // A stable sort: cards whose feature is not in `stackOrder` keep their insertion
+        // order and come after the ones that are.
+        return sticky.enumerated().sorted { a, b in
+            let ra = stackOrder.firstIndex(of: a.element.featureID) ?? stackOrder.count
+            let rb = stackOrder.firstIndex(of: b.element.featureID) ?? stackOrder.count
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// The order the cards take in the stack, by feature — the pages the dots count and
+    /// the user swipes through. The app sets it once (Music, Code, Drop Zones, …).
+    ///
+    /// Without it the pages were ordered by *arrival*, and a stash restored from disk at
+    /// launch put Drop Zones on the first dot ahead of Music, which reads as wrong every
+    /// time the app starts. Which card is *shown* is still decided by arrival (see
+    /// ``current``): the newest card of the top priority wins, so a fresh drop still
+    /// brings its own card forward.
+    public var stackOrder: [FeatureID] = []
+
+    /// The sticky cards in insertion order — the order ``current`` decides ties in.
+    private var stickyCards: [Presentation] {
         queue.filter { $0.ttl == nil }
     }
 
@@ -84,7 +107,7 @@ public final class IslandPresenter: IslandPresenting {
     public var current: Presentation? {
         if let alert = transientAlert { return alert }
         if let pinnedID, let pinned = stack.first(where: { $0.id == pinnedID }) { return pinned }
-        return winner(in: stack)
+        return winner(in: stickyCards)
     }
 
     public var state: IslandState {
@@ -146,7 +169,7 @@ public final class IslandPresenter: IslandPresenting {
     var selectedIndex: Int? {
         let stack = stack
         if let pinnedID, let index = stack.firstIndex(where: { $0.id == pinnedID }) { return index }
-        guard let winner = winner(in: stack) else { return nil }
+        guard let winner = winner(in: stickyCards) else { return nil }
         return stack.firstIndex { $0.id == winner.id }
     }
 
