@@ -8,11 +8,12 @@ import os
 
 /// Builds the island views for the Drop Zones feature. Injected so the view model is
 /// testable without SwiftUI rendering, exactly like `CodeViewFactory`.
+///
+/// The zones panel is not in here: it is no longer an island presentation at all, but a
+/// view the drop catcher's own window draws (``ZonesPanelView``), built by the feature
+/// once at activation rather than per showing.
 @MainActor
 public struct DropZonesViewFactory {
-    /// The expanded panel while a drag is over the notch: the cards, and — once a
-    /// drop has landed — the full-width settle card.
-    public var zones: (DropZonesViewModel) -> AnyView
     /// Peek leading slot: the thumbnail stack.
     public var stashLeading: (DropZonesViewModel) -> AnyView
     /// Peek trailing slot: the file-count circle.
@@ -21,12 +22,10 @@ public struct DropZonesViewFactory {
     public var stashExpanded: (DropZonesViewModel) -> AnyView
 
     public init(
-        zones: @escaping (DropZonesViewModel) -> AnyView,
         stashLeading: @escaping (DropZonesViewModel) -> AnyView,
         stashTrailing: @escaping (DropZonesViewModel) -> AnyView,
         stashExpanded: @escaping (DropZonesViewModel) -> AnyView
     ) {
-        self.zones = zones
         self.stashLeading = stashLeading
         self.stashTrailing = stashTrailing
         self.stashExpanded = stashExpanded
@@ -35,7 +34,6 @@ public struct DropZonesViewFactory {
     /// Draws nothing. `Color.clear` rather than `EmptyView` so a placeholder card
     /// still occupies its slot in layout tests.
     public static let placeholder = DropZonesViewFactory(
-        zones: { _ in AnyView(Color.clear) },
         stashLeading: { _ in AnyView(Color.clear) },
         stashTrailing: { _ in AnyView(Color.clear) },
         stashExpanded: { _ in AnyView(Color.clear) }
@@ -93,22 +91,23 @@ public struct AnimationState: Equatable, Sendable {
     }
 }
 
-/// Turns drag events, drops and the stash on disk into the two island presentations
-/// (spec §3.2).
+/// Turns drag events, drops and the stash on disk into the zones panel and the island's
+/// stash card (spec §3.2).
 ///
-/// Two presentations, never more:
+/// Two things are on screen, never more:
 ///
-/// - **the zones** — a `.alert` `.expanded` card, 280×140, alive only while a drag is
-///   over the notch. Its id is fresh per showing (each drag is its own card, and a new
-///   id is what gives the panel a clean entrance), but within one showing it is updated
-///   in place: targeting a card must widen it, not blink the panel away and back.
-/// - **the stash** — a `.background` peek that lives as long as there are files in the
-///   stash, updated in place as files and thumbnails change.
+/// - **the zones** — the 280×140 panel, alive only while a drag is over the notch. It is
+///   *not* an island presentation: the island's private Space composites above the
+///   system's drag image, so a panel drawn there hides the thumbnail in the user's hand.
+///   The catcher window draws it instead (``ZonesPanelView``) and the island is
+///   suppressed to the bare notch for the duration. This model only says whether it is up
+///   (``isZonesShown``) and what is in it; the view observes the rest.
+/// - **the stash** — a `.background` peek presented on the island, which lives as long as
+///   there are files in the stash and is updated in place as files and thumbnails change.
 ///
 /// The view model owns no windows. `DragObserver` feeds it `handle(_:)`, the catcher
 /// window asks it `targeted(at:)` / `drop(urls:on:)`, and it calls
-/// ``onCatcherFrameChange`` — synchronously, before the panel is presented — so the
-/// feature can order that window in.
+/// ``onCatcherFrameChange`` — synchronously — so the feature can order that window in.
 @MainActor
 @Observable
 public final class DropZonesViewModel {
@@ -136,8 +135,15 @@ public final class DropZonesViewModel {
     /// drop, and every drop was refused: the cards highlighted, Finder showed the copy
     /// badge, and nothing was ever stashed. Seam holds the panel open the same way.
     public static let dropGrace: Duration = .milliseconds(500)
-    /// How long the "N Files" settle card plays before the island collapses.
+    /// How long the "N Files" settle card plays before the panel collapses.
     public static let settleDelay: Duration = .milliseconds(400)
+    /// How long the catcher window stays up after the zones are dismissed.
+    ///
+    /// The window *is* the panel now, so it has to outlive the collapse it is animating:
+    /// the shape starts shrinking back into the notch the moment ``isZonesShown`` flips,
+    /// and ordering the window out in that same turn would make the panel disappear
+    /// instead. Comfortably longer than the choreographer's 0.38 s collapse spring.
+    public static let dismissAnimation: Duration = .milliseconds(450)
     /// The pause between the zones collapsing and the AirDrop sheet appearing.
     public static let airDropDelay: Duration = .milliseconds(300)
     /// The poof after a completed drag-out, before the stash is emptied.
@@ -153,8 +159,8 @@ public final class DropZonesViewModel {
     public private(set) var targeted: Zone?
     /// Thumbnails by ``StashedFile/id``, filled in the background after the index changes.
     public private(set) var thumbnails: [UUID: Thumbnail] = [:]
-    /// Whether the zones presentation is on screen. Stored rather than derived from the
-    /// presentation id so views observe it.
+    /// Whether the zones panel is up. ``ZonesPanelView`` animates on exactly this: true
+    /// grows the black shape out of the notch, false shrinks it back in.
     public private(set) var isZonesShown = false
 
     /// The cards to draw, derived from the settings, the stash and the drag in flight.
@@ -237,10 +243,14 @@ public final class DropZonesViewModel {
 
     // MARK: - Private state
 
-    @ObservationIgnored private var zonesID: PresentationID?
+    /// Identifies the current *showing* of the panel. A timer armed during one showing
+    /// checks it before tearing anything down, so a settle or a grace that belongs to a
+    /// drag which is already history cannot close the panel a later drag opened.
+    @ObservationIgnored private var showingID: UUID?
     @ObservationIgnored private var stashID: PresentationID?
     @ObservationIgnored private var leaveToken: ScheduledToken?
     @ObservationIgnored private var dropGraceToken: ScheduledToken?
+    @ObservationIgnored private var dismissToken: ScheduledToken?
     @ObservationIgnored private var settleToken: ScheduledToken?
     @ObservationIgnored private var airDropToken: ScheduledToken?
     @ObservationIgnored private var poofToken: ScheduledToken?
@@ -359,12 +369,12 @@ public final class DropZonesViewModel {
         cancelDropGrace()
         // The grace belongs to *this* showing. A panel that has since been dismissed and
         // re-presented for a new drag is somebody else's card to take down.
-        let showing = zonesID
+        let showing = showingID
         dropGraceToken = clock.schedule(after: Self.dropGrace) { [weak self] in
             guard let self else { return }
             dropGraceToken = nil
             logger.info("no drop arrived within the grace; closing the zones")
-            guard zonesID == showing, !isDropInFlight else { return }
+            guard showingID == showing, !isDropInFlight else { return }
             dismissZones()
             phase = .idle
         }
@@ -394,7 +404,6 @@ public final class DropZonesViewModel {
         guard zone != targeted else { return zone }
         targeted = zone
         phase = zone.map(StashPhase.targeted) ?? .hovering
-        showZones()
         return zone
     }
 
@@ -404,7 +413,6 @@ public final class DropZonesViewModel {
         guard isZonesShown, targeted != nil else { return }
         targeted = nil
         phase = .hovering
-        showZones()
     }
 
     /// Handles a drop the catcher already read into file URLs.
@@ -482,7 +490,6 @@ public final class DropZonesViewModel {
         cancelLeave()
         targeted = nil
         phase = .dropped(pending: urls)
-        refreshZones()
 
         await beforeStash?()
         index = await store.stash(urls, action: action)
@@ -491,7 +498,6 @@ public final class DropZonesViewModel {
             stash now holds \(self.index.files.count, privacy: .public)
             """)
         phase = .settling
-        refreshZones()
         refreshThumbnails()
 
         settleToken?.cancel()
@@ -499,7 +505,7 @@ public final class DropZonesViewModel {
         // in is gone by the time it fires — dismissed by a later AirDrop drop, replaced
         // by a fresh panel for a new drag — tearing down whatever is on screen now would
         // take someone else's card with it.
-        let showing = zonesID
+        let showing = showingID
         settleToken = clock.schedule(after: Self.settleDelay) { [weak self] in
             guard let self else { return }
             settleToken = nil
@@ -507,7 +513,7 @@ public final class DropZonesViewModel {
             // they land either way.
             refreshStash()
             armExpiry()
-            guard zonesID == showing else { return }
+            guard showingID == showing else { return }
             dismissZones()
             phase = .stashed
         }
@@ -601,24 +607,22 @@ public final class DropZonesViewModel {
 
     // MARK: - Settings
 
+    /// No redraw is asked for: ``zones`` is derived from the settings, which are
+    /// `@Observable`, so a panel that is up re-derives its cards on its own.
     public func toggleAirDrop() {
         settings.airdrop.toggle()
-        refreshZones()
     }
 
     public func toggleStashZone() {
         settings.stash.toggle()
-        refreshZones()
     }
 
     public func toggleSecondZone() {
         settings.secondZone.toggle()
-        refreshZones()
     }
 
     public func setStashDropAction(_ action: StashDropAction) {
         settings.stashDropAction = action
-        refreshZones()
     }
 
     // MARK: - Teardown
@@ -643,7 +647,9 @@ public final class DropZonesViewModel {
         thumbnailTask?.cancel()
         thumbnailTask = nil
         thumbnails.removeAll()
-        dismissZones()
+        // The catcher goes out in this same turn rather than after the collapse: there is
+        // nobody left to watch the animation, and the feature is closing the window.
+        dismissZones(animated: false)
         dismissStash()
         // Unconditional, unlike `dismissZones`'s own call: a feature switched off with no
         // panel up must still not leave the island hidden.
@@ -652,60 +658,61 @@ public final class DropZonesViewModel {
         dragOutPhase = .idle
     }
 
-    // MARK: - The zones presentation
+    // MARK: - The zones panel
 
+    /// Puts the panel up: the island goes down to the bare notch and the catcher window —
+    /// which is what actually draws the cards — comes up over it.
+    ///
+    /// Idempotent. Every later change inside one showing (targeting a card, a drop
+    /// settling, a card switched off in the menu) reaches the view through observation,
+    /// so there is nothing to re-present.
     private func showZones() {
-        let id = zonesID ?? PresentationID()
-        let isNewShowing = zonesID == nil
-        if isNewShowing {
-            zonesID = id
-            isZonesShown = true
-            // The island's private Space composites above Finder's drag-image window, so
-            // anything the island draws hides the thumbnail the user is dragging — and
-            // moving the window into the user's Space does not change that. The island
-            // therefore goes down to the bare notch for the length of the drag and the
-            // catcher window draws the panel instead; `dismissZones` gives it back.
-            islandPresenter.setSurfaceSuppressed(true)
-            // The catcher goes up first, before the SwiftUI card is built and presented:
-            // see ``onCatcherFrameChange``. Presenting is the most expensive thing that
-            // happens during a drag, and a window ordered in after it can miss the drop.
-            onCatcherFrameChange?(catcherFrameNeeded)
-        }
-        let presentation = Presentation(
-            id: id,
-            featureID: Self.featureID,
-            title: Self.displayTitle,
-            priority: .alert,
-            style: .expanded,
-            leading: AnyView(EmptyView()),
-            trailing: AnyView(EmptyView()),
-            expanded: viewFactory.zones(self),
-            expandedSize: Self.zonesSize
-        )
-        if isNewShowing {
-            islandPresenter.present(presentation)
-        } else {
-            islandPresenter.update(presentation)
-        }
-    }
-
-    /// Rebuilds the panel in place; a no-op when it is not on screen, so state changes
-    /// that happen while idle never open it.
-    private func refreshZones() {
-        guard zonesID != nil else { return }
-        showZones()
-    }
-
-    private func dismissZones() {
-        targeted = nil
-        guard let zonesID else { return }
-        islandPresenter.dismiss(zonesID)
-        self.zonesID = nil
-        isZonesShown = false
-        // Nothing to catch for any more; `catcherFrameNeeded` is `nil` from here.
+        // A drag arriving inside the 450 ms the window is held open for the last one's
+        // collapse re-uses that window rather than watching it vanish under the cursor.
+        cancelDismissHold()
+        guard !isZonesShown else { return }
+        showingID = UUID()
+        isZonesShown = true
+        // Before the window goes up, so the island is already out of the way in the frame
+        // the panel first appears in.
+        islandPresenter.setSurfaceSuppressed(true)
+        // Synchronous, in this same turn: the catcher's frame contains the whole hot
+        // rect, so by the time the window appears the cursor is usually already inside
+        // it — and AppKit only picks a drag's destination when the drag *moves*. A window
+        // ordered in a turn later would miss a cursor that entered the notch and stopped.
         onCatcherFrameChange?(catcherFrameNeeded)
-        // The drag is over: the island comes back to whatever it was showing.
+    }
+
+    /// Takes the panel down. The shape starts shrinking into the notch at once and the
+    /// island grows back out of it — both black, both over the notch, so the hand-over
+    /// is invisible — and the window that draws the shrinking shape follows it out one
+    /// ``dismissAnimation`` later.
+    ///
+    /// - Parameter animated: `false` orders the window out in this same turn. Teardown
+    ///   only: there is nobody left to watch the collapse.
+    private func dismissZones(animated: Bool = true) {
+        targeted = nil
+        cancelDismissHold()
+        guard isZonesShown else { return }
+        isZonesShown = false
+        showingID = nil
         islandPresenter.setSurfaceSuppressed(false)
+        guard animated else {
+            onCatcherFrameChange?(nil)
+            return
+        }
+        dismissToken = clock.schedule(after: Self.dismissAnimation) { [weak self] in
+            guard let self else { return }
+            dismissToken = nil
+            // Nothing to catch for any more; `catcherFrameNeeded` has been `nil` since
+            // the flag flipped.
+            onCatcherFrameChange?(nil)
+        }
+    }
+
+    private func cancelDismissHold() {
+        dismissToken?.cancel()
+        dismissToken = nil
     }
 
     private func cancelLeave() {

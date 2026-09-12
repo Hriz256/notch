@@ -1,5 +1,6 @@
 import AppKit
 import DropZonesShared
+import SwiftUI
 import Testing
 @testable import DropZonesFeature
 
@@ -28,15 +29,70 @@ import Testing
         #expect(window.backingType == .buffered)
     }
 
-    @Test func itIsCompletelyInvisible() {
-        // The island draws the zones; this window only catches the drop. An alpha
-        // of 0 still receives dragging messages (verified by the spike).
+    @Test func itDrawsOnlyWhatThePanelPaints() {
+        // This window *is* the panel — the island's private space composites above the
+        // drag image, so it cannot draw one — but the panel is 280×140 inside a rect
+        // 20 pt larger on every side, and the rest of that rect has to stay see-through.
         let window = makeWindow()
 
-        #expect(window.alphaValue == 0)
+        #expect(window.alphaValue == 1)
         #expect(!window.isOpaque)
         #expect(window.backgroundColor == .clear)
         #expect(!window.hasShadow)
+    }
+
+    // MARK: - The panel view
+
+    @Test func thePanelViewFillsTheCatcherViewWithoutTakingItsDrags() {
+        // The panel is a *subview* of the registered destination view: AppKit hands a
+        // drag to the nearest ancestor registered for the types, and this one registers
+        // none, so the drop still lands on the catcher. Get this wrong and the cards are
+        // drawn over a window that refuses every drop.
+        let window = makeWindow()
+        let panel = PanelHostingView(rootView: Color.clear)
+
+        window.setPanelView(panel)
+
+        #expect(window.panelView === panel)
+        #expect(panel.superview === window.catcherView)
+        #expect(panel.frame == window.catcherView.bounds)
+        #expect(panel.autoresizingMask == [.width, .height])
+        #expect(panel.registeredDraggedTypes.isEmpty)
+        // And it is invisible to the mouse, so the window's 320×180 rect over the menu
+        // bar swallows nothing while a drag is in the air.
+        #expect(panel.hitTest(NSPoint(x: 10, y: 10)) == nil)
+    }
+
+    @Test func dragsStillReachTheCatcherWithThePanelViewInPlace() {
+        let window = makeWindow()
+        let frame = CGRect(x: 700, y: 900, width: 280, height: 140)
+        window.show(frame: frame)
+        defer { window.hide() }
+        window.catcherView.panelFrame = frame
+        window.setPanelView(PanelHostingView(rootView: Color.clear))
+
+        let delegate = RecordingCatcherDelegate(zone: .stash)
+        window.catcherView.delegate = delegate
+        let info = FakeDraggingInfo()
+        info.draggingLocation = CGPoint(x: 140, y: 70)
+
+        #expect(window.catcherView.draggingEntered(info) == .copy)
+        #expect(window.catcherView.performDragOperation(info))
+        #expect(delegate.targetedPoints.first == CGPoint(x: 140, y: 70))
+        #expect(delegate.droppedPoints == [CGPoint(x: 140, y: 70)])
+    }
+
+    @Test func installingASecondPanelViewReplacesTheFirst() {
+        let window = makeWindow()
+        let first = PanelHostingView(rootView: Color.clear)
+        let second = PanelHostingView(rootView: Color.clear)
+
+        window.setPanelView(first)
+        window.setPanelView(second)
+
+        #expect(window.panelView === second)
+        #expect(first.superview == nil)
+        #expect(window.catcherView.subviews.count == 1)
     }
 
     @Test func itSitsOneLevelAboveTheIsland() {

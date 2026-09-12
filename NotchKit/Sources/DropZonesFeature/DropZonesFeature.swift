@@ -20,10 +20,11 @@ import os
 ///   two drags needs no notification plumbing;
 /// - the `DragObserver` feeds `handle(_:)` and is handed *to* the model as well, because a
 ///   drag that started from our own stash must not be offered the stash card again;
-/// - the `DropCatcherWindow` is ordered in and out from the model's
-///   ``DropZonesViewModel/onCatcherFrameChange``, so the only window that can swallow a
-///   drop exists over the notch exactly while the zones are drawn there — and is in place
-///   before the panel they are drawn in is presented.
+/// - the `DropCatcherWindow` gets the view that draws the zones panel
+///   (``ZonesPanelView``), built once here rather than per showing, and is ordered in and
+///   out from the model's ``DropZonesViewModel/onCatcherFrameChange``, so the one window
+///   that draws the cards and receives the drop exists over the notch exactly while a
+///   drag is there.
 @MainActor
 @Observable
 public final class DropZonesFeature: IslandFeature {
@@ -131,6 +132,14 @@ public final class DropZonesFeature: IslandFeature {
         let catcher = DropCatcherWindow()
         let bridge = CatcherBridge(model: model, stagingRoot: Self.stagingRoot)
         catcher.catcherView.delegate = bridge
+        // The panel is this window's content from here on: the island no longer draws it
+        // (its private Space composites above the drag image), so the window that takes
+        // the drop is also the one that shows what the drop will land on.
+        catcher.setPanelView(
+            PanelHostingView(
+                rootView: ZonesPanelView(model: model, notchSize: Self.currentNotchSize())
+            )
+        )
         // Direct and synchronous: the model calls this as the zones go up, in the same
         // main-actor turn, before the panel is presented.
         model.onCatcherFrameChange = { [weak self] frame in self?.setCatcherFrame(frame) }
@@ -176,6 +185,19 @@ public final class DropZonesFeature: IslandFeature {
         ScreenMetrics.current().flatMap(NotchGeometry.init(metrics:))?.screenFrame ?? .zero
     }
 
+    /// The physical notch, which is the size the panel grows out of and shrinks back to.
+    ///
+    /// Read once, at activation, unlike the two rects above: it is the *start* of an
+    /// animation rather than a hit target, so a stale value on a machine whose screen
+    /// changed mid-session costs a slightly wrong opening frame and nothing else. The
+    /// default is the 14"/16" MacBook Pro notch, the only hardware this feature runs on.
+    private static func currentNotchSize() -> CGSize {
+        guard let geometry = ScreenMetrics.current().flatMap(NotchGeometry.init(metrics:)) else {
+            return NotchSizeKey.defaultValue
+        }
+        return CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
+    }
+
     // MARK: - The catcher window
 
     /// Orders the catcher in over the panel, or out when there is no panel to catch for.
@@ -197,7 +219,10 @@ public final class DropZonesFeature: IslandFeature {
         catcher.show(frame: frame.insetBy(dx: -Self.catcherSlack, dy: -Self.catcherSlack))
     }
 
-    private static let catcherSlack: CGFloat = 20
+    /// How far the catcher's window extends past the panel on every side. Read by
+    /// ``ZonesPanelView``, which has to place the panel that same distance from its own
+    /// top and left edge for the cards to land where the hit test expects them.
+    static let catcherSlack: CGFloat = 20
 
     // MARK: - Status-menu surface
 

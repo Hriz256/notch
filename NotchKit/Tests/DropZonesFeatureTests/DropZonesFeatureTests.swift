@@ -3,6 +3,21 @@ import Foundation
 import IslandCore
 import SwiftUI
 import Testing
+
+/// Polls `condition` on the main actor until it holds or the timeout runs out. The
+/// feature owns a real `TaskClock`, so its timers cannot be advanced by hand.
+@MainActor
+private func waitUntil(
+    timeout: Duration = .seconds(5),
+    _ condition: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while ContinuousClock.now < deadline {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return condition()
+}
 @testable import DropZonesFeature
 
 /// Records presentations without drawing anything; the feature's tests only need to know
@@ -102,7 +117,7 @@ private final class Harness {
 
     // MARK: - The catcher window
 
-    @Test func theCatcherIsOrderedInWithTheZonesAndOutWithThem() throws {
+    @Test func theCatcherIsOrderedInWithTheZonesAndOutWithThem() async throws {
         let harness = Harness()
         defer { harness.cleanUp() }
         harness.feature.activate(presenter: FakePresenter())
@@ -115,6 +130,10 @@ private final class Harness {
         model.panelFrameProvider = { panel }
 
         #expect(!catcher.isVisible)
+        // The window draws the panel, so the feature gives it the view at activation
+        // rather than per showing.
+        #expect(catcher.panelView != nil)
+        #expect(catcher.panelView?.superview === catcher.catcherView)
 
         model.handle(.enteredHotRect)
 
@@ -123,11 +142,17 @@ private final class Harness {
         #expect(catcher.isVisible)
         #expect(catcher.catcherView.panelFrame == panel)
         // The window is the panel plus a little slack on every side.
-        #expect(catcher.frame == panel.insetBy(dx: -20, dy: -20))
+        #expect(catcher.frame == panel.insetBy(dx: -DropZonesFeature.catcherSlack,
+                                               dy: -DropZonesFeature.catcherSlack))
 
         model.handle(.ended)
 
-        #expect(!catcher.isVisible)
+        // The panel is shrinking back into the notch inside this window, so it stays up
+        // for the length of that animation and only then goes out. The feature runs on a
+        // real `TaskClock`, so this is a real wait.
+        #expect(catcher.isVisible)
+        let hidden = await waitUntil { !catcher.isVisible }
+        #expect(hidden)
     }
 
     // MARK: - Panel geometry

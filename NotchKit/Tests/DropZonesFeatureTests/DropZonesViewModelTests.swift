@@ -146,6 +146,9 @@ private final class Harness {
     let settings: DropZonesSettings
     let store: StashStore
     let model: DropZonesViewModel
+    /// Every `onCatcherFrameChange` call, in order: the catcher window is the only thing
+    /// that draws the panel now, so when it goes up and comes down *is* the panel.
+    var catcherFrames: [CGRect?] = []
 
     init(now: @escaping @Sendable () -> Date = { start }) throws {
         root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -169,6 +172,12 @@ private final class Harness {
             viewFactory: .placeholder,
             now: now
         )
+        model.onCatcherFrameChange = { [weak self] frame in self?.catcherFrames.append(frame) }
+    }
+
+    /// Lets the panel's collapse play out, which is what finally orders the catcher out.
+    func finishDismissAnimation() {
+        clock.advance(by: DropZonesViewModel.dismissAnimation)
     }
 
     @discardableResult
@@ -193,52 +202,54 @@ private final class Harness {
 
 @Suite @MainActor struct DropZonesViewModelZonesTests {
 
-    @Test func enteringTheHotRectPresentsTheZones() throws {
+    /// The panel is not an island card at all any more: the catcher's window draws it,
+    /// and the island goes down to the bare notch underneath.
+    @Test func enteringTheHotRectPutsTheZonesUp() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
+        let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
+        harness.model.panelFrameProvider = { frame }
 
         harness.enterHotRect()
 
-        let card = try #require(harness.presenter.presented.first)
-        #expect(harness.presenter.presented.count == 1)
-        #expect(card.featureID == DropZonesViewModel.featureID)
-        #expect(card.title == DropZonesViewModel.displayTitle)
-        #expect(card.priority == .alert)
-        #expect(card.style == .expanded)
-        #expect(card.expandedSize == CGSize(width: 280, height: 140))
-        #expect(harness.model.phase == .hovering)
         #expect(harness.model.isZonesShown)
+        #expect(harness.model.phase == .hovering)
         #expect(harness.model.zones == [.airDrop, .stash])
+        #expect(harness.presenter.suppressions == [true])
+        #expect(harness.catcherFrames == [frame])
+        // Nothing is presented on the island: the stash peek is the only card this
+        // feature ever puts there, and there is nothing in the stash.
+        #expect(harness.presenter.presented.isEmpty)
     }
 
-    @Test func enteringTwiceUpdatesRatherThanPresentingAgain() throws {
+    @Test func enteringTwiceIsStillOneShowing() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
+        harness.model.panelFrameProvider = { CGRect(x: 500, y: 600, width: 280, height: 140) }
 
         harness.enterHotRect()
         harness.enterHotRect()
 
-        #expect(harness.presenter.presented.count == 1)
-        #expect(harness.presenter.updated.count == 1)
-        #expect(harness.presenter.updated.first?.id == harness.presenter.presented.first?.id)
-        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
+        // Neither the island nor the window is touched a second time: everything inside
+        // one showing reaches the panel through observation.
+        #expect(harness.presenter.suppressions == [true])
+        #expect(harness.catcherFrames.count == 1)
     }
 
     @Test func leavingDismissesAfterTheDebounceAndNotBefore() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
 
         harness.model.handle(.leftHotRect)
         harness.clock.advance(by: .milliseconds(299))
-        #expect(harness.presenter.dismissed.isEmpty)
         #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(1))
-        #expect(harness.presenter.dismissed == [id])
         #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .idle)
+        #expect(harness.presenter.suppressions == [true, false])
     }
 
     @Test func reEnteringWithinTheDebounceCancelsTheDismiss() throws {
@@ -251,23 +262,30 @@ private final class Harness {
         harness.enterHotRect()
         harness.clock.advance(by: .seconds(2))
 
-        #expect(harness.presenter.dismissed.isEmpty)
         #expect(harness.model.isZonesShown)
-        #expect(harness.presenter.presented.count == 1)
+        #expect(harness.presenter.suppressions == [true])
     }
 
     @Test func aDragThatEndsWithoutADropDismissesAtOnce() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
+        harness.model.panelFrameProvider = { CGRect(x: 500, y: 600, width: 280, height: 140) }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
 
         // Nothing is targeted, so no drop can be on its way: no grace is owed.
         harness.model.handle(.ended)
 
-        #expect(harness.presenter.dismissed == [id])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .idle)
         #expect(harness.model.catcherFrameNeeded == nil)
+        // The island is back at once; only the window that draws the shrinking panel is
+        // still up, and nothing but that hold is left on the clock.
+        #expect(harness.presenter.suppressions == [true, false])
+        #expect(harness.catcherFrames.count == 1)
+        #expect(harness.clock.pendingCount == 1)
+
+        harness.finishDismissAnimation()
+        #expect(harness.catcherFrames == [CGRect(x: 500, y: 600, width: 280, height: 140), nil])
         #expect(harness.clock.pendingCount == 0)
     }
 
@@ -280,22 +298,23 @@ private final class Harness {
         let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
         harness.model.panelFrameProvider = { frame }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
         _ = harness.model.targeted(at: stashPoint)
 
         harness.model.handle(.ended)
 
         harness.clock.advance(by: .milliseconds(499))
-        #expect(harness.presenter.dismissed.isEmpty)
         #expect(harness.model.isZonesShown)
         // The catcher is still over the panel — which is the whole point.
         #expect(harness.model.catcherFrameNeeded == frame)
 
         harness.clock.advance(by: .milliseconds(1))
-        #expect(harness.presenter.dismissed == [id])
         #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .idle)
         #expect(harness.model.catcherFrameNeeded == nil)
+        // The window itself outlives the panel's collapse by exactly one animation.
+        #expect(harness.catcherFrames == [frame])
+        harness.finishDismissAnimation()
+        #expect(harness.catcherFrames == [frame, nil])
     }
 
     /// The drop AppKit was holding on to arrives inside the grace: it cancels it and the
@@ -304,7 +323,6 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
         _ = harness.model.targeted(at: stashPoint)
         harness.model.handle(.ended)
 
@@ -317,7 +335,7 @@ private final class Harness {
         #expect(harness.clock.pendingCount == 1)
 
         harness.clock.advance(by: .milliseconds(400))
-        #expect(harness.presenter.dismissed == [id])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .stashed)
     }
 
@@ -335,7 +353,8 @@ private final class Harness {
         #expect(harness.model.index.files.isEmpty)
         #expect(harness.model.phase == .idle)
         #expect(harness.presenter.liveCard(.background) == nil)
-        #expect(harness.clock.pendingCount == 0)
+        // Only the catcher's hold is left.
+        #expect(harness.clock.pendingCount == 1)
         let stored = await harness.store.load()
         #expect(stored.files.isEmpty)
     }
@@ -346,13 +365,13 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
         _ = harness.model.targeted(at: stashPoint)
 
         harness.model.handle(.cancelled)
 
-        #expect(harness.presenter.dismissed == [id])
         #expect(!harness.model.isZonesShown)
+        #expect(harness.clock.pendingCount == 1)  // the catcher's hold, and nothing else
+        harness.finishDismissAnimation()
         #expect(harness.clock.pendingCount == 0)
     }
 
@@ -368,7 +387,6 @@ private final class Harness {
         harness.enterHotRect()
         harness.clock.advance(by: .seconds(2))
 
-        #expect(harness.presenter.dismissed.isEmpty)
         #expect(harness.model.isZonesShown)
         #expect(harness.model.phase == .hovering)
     }
@@ -406,12 +424,11 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
 
         harness.model.handle(.cancelled)
 
-        #expect(harness.presenter.dismissed == [id])
         #expect(!harness.model.isZonesShown)
+        #expect(harness.presenter.suppressions == [true, false])
     }
 
     @Test func noEnabledZoneMeansNothingIsPresented() throws {
@@ -423,16 +440,17 @@ private final class Harness {
         harness.enterHotRect()
 
         #expect(harness.model.zones.isEmpty)
-        #expect(harness.presenter.presented.isEmpty)
         #expect(!harness.model.isZonesShown)
+        #expect(harness.presenter.suppressions.isEmpty)
+        #expect(harness.catcherFrames.isEmpty)
         #expect(harness.model.phase == .idle)
     }
 
     @Test func targetingAZoneUpdatesInPlaceAndReportsIt() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
+        harness.model.panelFrameProvider = { CGRect(x: 500, y: 600, width: 280, height: 140) }
         harness.enterHotRect()
-        let id = try #require(harness.presenter.presented.first?.id)
 
         let zone = harness.model.targeted(at: airDropPoint)
 
@@ -440,8 +458,10 @@ private final class Harness {
         #expect(harness.model.targeted == .airDrop)
         #expect(harness.model.phase == .targeted(.airDrop))
         #expect(harness.model.animationState.targeted == .airDrop)
-        #expect(harness.presenter.presented.count == 1)
-        #expect(harness.presenter.updated.map(\.id) == [id])
+        // In place: the panel widens the card it is already drawing, so neither the
+        // island nor the window hears about it.
+        #expect(harness.presenter.suppressions == [true])
+        #expect(harness.catcherFrames.count == 1)
         // 65/35 once a card is targeted (spec §2 "Widths").
         #expect(harness.model.layout.slots.first?.isTargeted == true)
     }
@@ -472,7 +492,7 @@ private final class Harness {
 
         #expect(harness.model.targeted == nil)
         #expect(harness.model.phase == .hovering)
-        #expect(harness.presenter.updated.count == 2)  // targeted, then cleared
+        #expect(harness.model.isZonesShown)
     }
 
     @Test func theCatcherFrameIsOfferedOnlyWhileTheZonesAreShown() throws {
@@ -507,21 +527,21 @@ private final class Harness {
         harness.model.panelFrameProvider = { frame }
 
         var frames: [CGRect?] = []
-        // The panel is presented into the fake presenter, so its count at the moment of
-        // the call says whether the catcher got there first.
-        var presentedWhenCalled: [Int] = []
+        // The island is suppressed as the window goes up, so what it has been told at the
+        // moment of the call says whether the notch was already clear.
+        var suppressedWhenCalled: [[Bool]] = []
         harness.model.onCatcherFrameChange = { [presenter = harness.presenter] next in
             frames.append(next)
-            presentedWhenCalled.append(presenter.presented.count)
+            suppressedWhenCalled.append(presenter.suppressions)
         }
 
         harness.enterHotRect()
 
         #expect(frames == [frame])
-        #expect(presentedWhenCalled == [0])
+        #expect(suppressedWhenCalled == [[true]])
 
-        // Targeting a card updates the panel in place; the catcher is already where it
-        // has to be, so nothing is handed over again mid-drag.
+        // Targeting a card widens it inside the panel the window already draws, so
+        // nothing is handed over again mid-drag.
         _ = harness.model.targeted(at: airDropPoint)
         #expect(frames == [frame])
 
@@ -530,8 +550,32 @@ private final class Harness {
         harness.model.handle(.ended)
         #expect(frames == [frame])
 
+        // The grace runs out, the panel starts shrinking — and the window that draws it
+        // only goes when the collapse is over.
         harness.clock.advance(by: .milliseconds(500))
+        #expect(frames == [frame])
+        harness.finishDismissAnimation()
         #expect(frames == [frame, nil])
+    }
+
+    /// A drag arriving inside that hold re-uses the window still on screen rather than
+    /// watching it vanish under the cursor.
+    @Test func aDragThatArrivesDuringTheDismissHoldKeepsTheCatcherUp() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
+        harness.model.panelFrameProvider = { frame }
+        harness.enterHotRect()
+        harness.model.handle(.ended)
+
+        harness.clock.advance(by: .milliseconds(200))
+        harness.enterHotRect()
+        harness.clock.advance(by: .seconds(2))
+
+        #expect(harness.model.isZonesShown)
+        // Up, down, up again — and never ordered out in between.
+        #expect(harness.catcherFrames == [frame, frame])
+        #expect(harness.presenter.suppressions == [true, false, true])
     }
 
     /// `stop()` takes the panel down, so the catcher has to come down with it — a window
@@ -540,14 +584,14 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.model.panelFrameProvider = { CGRect(x: 0, y: 0, width: 280, height: 140) }
-        var frames: [CGRect?] = []
-        harness.model.onCatcherFrameChange = { frames.append($0) }
 
         harness.enterHotRect()
         harness.model.stop()
 
-        #expect(frames.count == 2)
-        #expect(frames.last == .some(nil))
+        // Not after an animation nobody is watching: the window goes in this same turn.
+        #expect(harness.catcherFrames.count == 2)
+        #expect(harness.catcherFrames.last == .some(nil))
+        #expect(harness.clock.pendingCount == 0)
     }
 
     /// The hot rect is 300×121 from the top of the screen; the panel is 140 tall. A
@@ -557,7 +601,6 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
 
         harness.model.handle(.leftHotRect)
         harness.clock.advance(by: .milliseconds(100))
@@ -566,11 +609,10 @@ private final class Harness {
 
         // The leave was due 200 ms into this advance; only the settle may fire.
         harness.clock.advance(by: .milliseconds(399))
-        #expect(harness.presenter.dismissed.isEmpty)
         #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(1))
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .stashed)
     }
 
@@ -590,16 +632,15 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
 
         harness.model.handle(.enteredHotRect)
 
         #expect(harness.model.phase == .settling)
         #expect(harness.model.animationState.isSettling)
-        #expect(harness.presenter.presented.count == 1)
+        #expect(harness.model.isZonesShown)
         harness.clock.advance(by: .milliseconds(400))
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
     }
 }
 
@@ -612,7 +653,6 @@ private final class Harness {
         defer { harness.cleanUp() }
         let files = [try harness.makeFile("a.txt"), try harness.makeFile("b.txt")]
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
         _ = harness.model.targeted(at: stashPoint)
 
         await harness.model.drop(urls: files, on: .stash)
@@ -620,17 +660,17 @@ private final class Harness {
         #expect(harness.model.index.files.count == 2)
         #expect(harness.model.phase == .settling)
         #expect(harness.model.animationState.isSettling)
-        // Still on screen: the settle card is the zones presentation, updated in place.
-        #expect(harness.presenter.dismissed.isEmpty)
-        #expect(harness.presenter.updated.last?.id == zonesID)
+        // Still on screen: the settle card is the same panel, drawn by the same window.
+        #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(399))
-        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(1))
-        #expect(harness.presenter.dismissed == [zonesID])
         #expect(harness.model.phase == .stashed)
         #expect(!harness.model.isZonesShown)
+        // Only now does the island get its own card back — the stash peek.
+        #expect(harness.presenter.suppressions == [true, false])
 
         let peek = try #require(harness.presenter.liveCard(.background))
         #expect(peek.featureID == DropZonesViewModel.featureID)
@@ -724,11 +764,10 @@ private final class Harness {
         defer { harness.cleanUp() }
         let files = [try harness.makeFile("a.txt")]
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
 
         await harness.model.drop(urls: files, on: .airDrop)
 
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .idle)
         #expect(harness.airDrop.calls.isEmpty)
 
@@ -753,10 +792,9 @@ private final class Harness {
         defer { harness.cleanUp() }
         let file = try harness.makeFile("a.txt")
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
 
         var ranHook = false
-        harness.model.beforeStash = { [model = harness.model, clock = harness.clock, presenter = harness.presenter] in
+        harness.model.beforeStash = { [model = harness.model, clock = harness.clock] in
             ranHook = true
             #expect(model.phase == .dropped(pending: [file]))
             model.handle(.leftHotRect)
@@ -764,7 +802,6 @@ private final class Harness {
             // Neither armed anything, and neither tore the panel down on the spot.
             #expect(clock.pendingCount == 0)
             clock.advance(by: .seconds(1))
-            #expect(presenter.dismissed.isEmpty)
             #expect(model.isZonesShown)
         }
 
@@ -772,10 +809,10 @@ private final class Harness {
 
         #expect(ranHook)
         #expect(harness.model.phase == .settling)
-        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(400))
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .stashed)
         #expect(harness.presenter.liveCard(.background) != nil)
     }
@@ -785,7 +822,6 @@ private final class Harness {
         defer { harness.cleanUp() }
         harness.settings.stashDropAction = .add
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
 
         harness.clock.advance(by: .milliseconds(200))
@@ -795,10 +831,10 @@ private final class Harness {
         #expect(harness.model.phase == .settling)
         // The first drop's settle was due here and must have been replaced, not stacked.
         harness.clock.advance(by: .milliseconds(399))
-        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(1))
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .stashed)
     }
 
@@ -809,24 +845,22 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let firstID = try #require(harness.presenter.presented.first?.id)
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
         #expect(harness.model.phase == .settling)
 
         harness.clock.advance(by: .milliseconds(100))
         await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .airDrop)
-        #expect(harness.presenter.dismissed == [firstID])
+        #expect(!harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(250))
         harness.enterHotRect()
-        let secondID = try #require(harness.presenter.presented.last?.id)
-        #expect(secondID != firstID)
+        #expect(harness.model.isZonesShown)
 
         harness.clock.advance(by: .milliseconds(50))  // the first drop's 400 ms is up
 
-        #expect(harness.presenter.dismissed == [firstID])
+        // The second showing survives the first one's settle firing over it.
         #expect(harness.model.isZonesShown)
-        #expect(harness.presenter.live[secondID] != nil)
+        #expect(harness.presenter.suppressions == [true, false, true])
         #expect(harness.model.phase == .hovering)
         // The files still reached the peek: only the teardown was skipped.
         #expect(harness.presenter.liveCard(.background) != nil)
@@ -837,11 +871,10 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
 
         await harness.model.drop(urls: [], on: .stash)
 
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.index.files.isEmpty)
         #expect(harness.model.phase == .idle)
     }
@@ -885,10 +918,9 @@ private final class Harness {
         // The drag-out passes back over the notch, so the panel opens on the stash card
         // alone; the mouse-up that ends the drag closes it again.
         harness.enterHotRect()
-        let dragCardID = try #require(harness.presenter.presented.last?.id)
         #expect(harness.model.zones == [.stash])
         harness.model.handle(.ended)
-        #expect(harness.presenter.dismissed.contains(dragCardID))
+        #expect(!harness.model.isZonesShown)
 
         harness.model.dragOutEnded(completed: true)
         #expect(harness.model.dragOutPhase == .completed)
@@ -951,7 +983,6 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
-        let zonesID = try #require(harness.presenter.presented.first?.id)
         await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
         #expect(harness.model.phase == .settling)
 
@@ -960,7 +991,7 @@ private final class Harness {
         #expect(harness.model.phase == .settling)
 
         harness.clock.advance(by: .milliseconds(400))
-        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(!harness.model.isZonesShown)
         #expect(harness.model.phase == .stashed)
         #expect(harness.presenter.liveCard(.background) != nil)
     }
