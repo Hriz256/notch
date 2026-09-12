@@ -173,6 +173,67 @@ private func line(id: String, request: String, tokens: Int, at date: Date) -> St
         #expect(totals[6] == 64)
     }
 
+    /// The cache is megabytes and an idle poll finds nothing new, which is by far the common
+    /// case: rewriting it every 15 minutes for no change is pure disk churn.
+    @Test func unchangedScanDoesNotRewriteTheCache() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let now = Date(timeIntervalSince1970: 1_757_700_000)
+        let file = fixture.root.appendingPathComponent("-Users-me-alpha/a.jsonl")
+        try (line(id: "m1", request: "r1", tokens: 100, at: now) + "\n")
+            .write(to: file, atomically: true, encoding: .utf8)
+
+        let sparkline = ClaudeSparkline(root: fixture.root, cacheURL: fixture.cacheURL)
+        _ = await sparkline.dailyTotals(now: now)
+        #expect(await sparkline.writeCount == 1)
+
+        _ = await sparkline.dailyTotals(now: now)
+        #expect(await sparkline.writeCount == 1)
+
+        // A transcript that actually changed does earn a write.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_757_800_000)],
+            ofItemAtPath: file.path
+        )
+        _ = await sparkline.dailyTotals(now: now)
+        #expect(await sparkline.writeCount == 2)
+    }
+
+    /// A cold scan reads gigabytes; a caller that no longer wants the answer — the feature
+    /// switched off, the app quitting — must not have to wait for the whole tree.
+    @Test func cancelledScanStopsEarlyAndWritesNothing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+
+        let now = Date(timeIntervalSince1970: 1_757_700_000)
+        for index in 0..<40 {
+            try (line(id: "m\(index)", request: "r\(index)", tokens: 10, at: now) + "\n")
+                .write(
+                    to: fixture.root.appendingPathComponent("-Users-me-alpha/\(index).jsonl"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+        }
+
+        // The reader blocks on the first file until the task has been cancelled, so the loop
+        // is guaranteed to still be running when cancellation lands.
+        let gate = DispatchSemaphore(value: 0)
+        let sparkline = ClaudeSparkline(root: fixture.root, cacheURL: fixture.cacheURL) { url in
+            gate.wait()
+            return try Data(contentsOf: url)
+        }
+
+        let scan = Task.detached { await sparkline.dailyTotals(now: now) }
+        scan.cancel()
+        gate.signal()
+
+        #expect(await scan.value == [])
+        #expect(await sparkline.readCount < 40)
+        #expect(await sparkline.writeCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: fixture.cacheURL.path))
+    }
+
     @Test func missingRootYieldsZeroes() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }

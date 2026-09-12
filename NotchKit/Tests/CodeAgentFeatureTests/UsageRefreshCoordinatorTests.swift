@@ -232,6 +232,53 @@ struct UsageRefreshCoordinatorTests {
         coordinator.stop()
     }
 
+    /// A finished session is when today's total changed, so the panel should not wait out
+    /// the poll interval — but a burst of sessions ending together must not start a walk of
+    /// `~/.claude/projects` each time.
+    @Test func finishedSessionsRescanTheSparklineAtMostOncePerMinute() async {
+        let sparkline = GatedSparkline(totals: [3, 3, 3, 3, 3, 3, 3])
+        let (coordinator, _, clock) = makeClaude(sparkline: sparkline)
+
+        coordinator.start()
+        await coordinator.settle()
+        await sparkline.release()
+        await coordinator.settleSparkline()
+        #expect(await sparkline.calls == 1)
+
+        // Inside the throttle window: the fetch's own scan still counts.
+        clock.advance(by: .seconds(30))
+        coordinator.sparklineNeedsRefresh()
+        coordinator.sparklineNeedsRefresh()
+        await coordinator.settleSparkline()
+        #expect(await sparkline.calls == 1)
+
+        clock.advance(by: .seconds(31))
+        coordinator.sparklineNeedsRefresh()
+        await coordinator.settleSparkline()
+        #expect(await sparkline.calls == 2)
+
+        coordinator.stop()
+    }
+
+    /// Nothing to merge totals into, and the scan is the single most expensive thing here.
+    @Test func aFailedClaudeFetchDoesNotStartAScan() async {
+        let clock = UsageManualClock()
+        let sparkline = GatedSparkline(totals: [1, 1, 1, 1, 1, 1, 1])
+        let recorder = FetchRecorder([], fallback: .failure(.notSignedIn))
+        let coordinator = UsageRefreshCoordinator(
+            providers: [FakeProvider(agent: .claude, recorder: recorder)],
+            sparkline: sparkline,
+            clock: clock,
+            now: { MainActor.assumeIsolated { clock.currentDate } }
+        )
+
+        coordinator.start()
+        await coordinator.settle()
+
+        #expect(await sparkline.calls == 0)
+        coordinator.stop()
+    }
+
     @Test func aLaterPollKeepsTheSparklineAlreadyOnScreen() async {
         let sparkline = GatedSparkline(totals: [9, 9, 9, 9, 9, 9, 9])
         let (coordinator, _, clock) = makeClaude(sparkline: sparkline)

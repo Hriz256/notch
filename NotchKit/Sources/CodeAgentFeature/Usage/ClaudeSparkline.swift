@@ -21,6 +21,9 @@ public protocol UsageSparkline: Sendable {
 public actor ClaudeSparkline: UsageSparkline {
     /// Number of files actually read from disk, across all scans. Test seam for the cache.
     public private(set) var readCount = 0
+    /// Number of times the cache file was rewritten. Test seam for the "nothing changed,
+    /// nothing to write" skip.
+    public private(set) var writeCount = 0
 
     private let root: URL
     private let cacheURL: URL
@@ -33,12 +36,12 @@ public actor ClaudeSparkline: UsageSparkline {
     /// keeps the ~99 % of lines that are not assistant turns out of `JSONSerialization`.
     private static let assistantMarker = Data(#""type":"assistant""#.utf8)
 
-    private struct CachedFile: Codable {
+    private struct CachedFile: Codable, Equatable {
         var mtime: Date
         var entries: [CachedEntry]
     }
 
-    private struct CachedEntry: Codable {
+    private struct CachedEntry: Codable, Equatable {
         var key: String?
         var tokens: Int
         var timestamp: Date
@@ -65,8 +68,12 @@ public actor ClaudeSparkline: UsageSparkline {
     }
 
     /// Daily totals ending on the day containing `now`, oldest first. Always `days` long.
+    ///
+    /// Cancellable: the walk can read gigabytes on a cold cache, so a caller that no longer
+    /// wants the answer — the feature being switched off, the app quitting — gets out at the
+    /// next file rather than at the end of the tree.
     public func dailyTotals(now: Date, days: Int = 7) async -> [Double] {
-        var cache = cache ?? loadCache()
+        let cache = cache ?? loadCache()
         var fresh: [String: CachedFile] = [:]
         var entries: [ClaudeUsageLog.Entry] = []
 
@@ -75,6 +82,7 @@ public actor ClaudeSparkline: UsageSparkline {
         let cutoff = now.addingTimeInterval(-Double(days + 1) * 86_400)
 
         for file in transcripts(modifiedAtOrAfter: cutoff) {
+            if Task.isCancelled { return [] }
             let path = file.url.path
             if let cached = cache[path], let mtime = file.mtime, cached.mtime == mtime {
                 fresh[path] = cached
@@ -92,10 +100,10 @@ public actor ClaudeSparkline: UsageSparkline {
         }
 
         // Files that disappeared — or aged out of the window — drop out of the cache
-        // rather than growing it forever.
-        cache = fresh
-        self.cache = cache
-        save(cache)
+        // rather than growing it forever. A poll that found nothing new writes nothing:
+        // the cache is megabytes, and the idle case is by far the common one.
+        self.cache = fresh
+        if fresh != cache { save(fresh) }
 
         return ClaudeUsageLog.dailyTotals(
             entries: entries,
@@ -163,6 +171,7 @@ public actor ClaudeSparkline: UsageSparkline {
                 withIntermediateDirectories: true
             )
             try JSONEncoder().encode(cache).write(to: cacheURL, options: .atomic)
+            writeCount += 1
         } catch {
             logger.debug("could not write sparkline cache: \(error.localizedDescription, privacy: .public)")
         }

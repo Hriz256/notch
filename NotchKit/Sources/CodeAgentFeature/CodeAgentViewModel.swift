@@ -200,8 +200,17 @@ public final class CodeAgentViewModel {
     // MARK: - Input
 
     /// Folds one hook event into the tracker and re-derives the island.
+    ///
+    /// Events from an agent the user switched off are dropped here rather than filtered
+    /// downstream: hooks are removed on disable, but a config Notch could not edit — or an
+    /// agent process that was already running — can still send them, and the island must not
+    /// come back for an agent the user turned off.
     public func handle(_ event: AgentEvent) {
+        guard settings.isEnabled(event.agent) else { return }
         tracker.handle(event)
+        // A session that just ended is exactly when today's token total changed, and when
+        // the user is most likely to open the panel. The coordinator throttles the rescan.
+        if event.stage == .completed || event.stage == .failed { usage.sparklineNeedsRefresh() }
         refreshPresentation()
     }
 

@@ -20,6 +20,8 @@ public final class UsageRefreshCoordinator {
     static let maximumBackoff: TimeInterval = 3600
     /// Reset timers fire just after the boundary so the server has rolled the window over.
     static let resetSlack: TimeInterval = 5
+    /// Shortest gap between two sparkline scans, however many sessions finish in between.
+    static let sparklineThrottle: TimeInterval = 60
 
     public private(set) var usage: [Agent: Result<AgentUsage, UsageError>] = [:]
 
@@ -45,6 +47,10 @@ public final class UsageRefreshCoordinator {
     @ObservationIgnored private var inFlight: [Agent: Task<Void, Never>] = [:]
     @ObservationIgnored private var wakeObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var sparklineTask: Task<Void, Never>?
+    /// The detached walk itself. Held separately because cancelling the task that *awaits* it
+    /// does not propagate: an unstructured child keeps reading the whole tree.
+    @ObservationIgnored private var sparklineScan: Task<[Double], Never>?
+    @ObservationIgnored private var lastSparklineStart: Date?
     @ObservationIgnored private var latestSparkline: [Double]?
 
     public init(
@@ -97,6 +103,8 @@ public final class UsageRefreshCoordinator {
         inFlight.removeAll()
         sparklineTask?.cancel()
         sparklineTask = nil
+        sparklineScan?.cancel()
+        sparklineScan = nil
     }
 
     /// Fetches every agent immediately, cancelling any pending poll.
@@ -111,6 +119,10 @@ public final class UsageRefreshCoordinator {
         pollTokens.removeValue(forKey: agent)?.cancel()
 
         inFlight[agent] = Task { @MainActor [weak self] in
+            // Whatever happens below, the slot has to be freed or the agent is never
+            // polled again: `refresh` treats a non-nil entry as "already in flight".
+            defer { self?.inFlight[agent] = nil }
+
             var result: Result<AgentUsage, UsageError>
             do throws(UsageError) {
                 result = .success(try await provider.fetch())
@@ -122,11 +134,22 @@ public final class UsageRefreshCoordinator {
 
             result = self.withSparkline(result, for: agent)
             self.usage[agent] = result
-            self.inFlight[agent] = nil
             self.log(result, for: agent)
             self.scheduleNext(agent, after: result)
-            if agent == .claude { self.refreshSparkline() }
+            // A failed Claude fetch means there is nothing to merge the totals into, and the
+            // scan is the most expensive thing this coordinator does — so it does not run.
+            if agent == .claude, case .success = result { self.refreshSparkline() }
         }
+    }
+
+    /// Asks for a fresh sparkline outside the poll cadence — a finished session is exactly
+    /// when today's total changed and the user is most likely to look. Throttled, because a
+    /// burst of sessions finishing together must not start a walk of the tree each time.
+    public func sparklineNeedsRefresh() {
+        guard running else { return }
+        if let lastSparklineStart,
+           now().timeIntervalSince(lastSparklineStart) < Self.sparklineThrottle { return }
+        refreshSparkline()
     }
 
     // MARK: - Sparkline
@@ -146,13 +169,18 @@ public final class UsageRefreshCoordinator {
         // Sampled here, on the main actor: `now` may be isolated to it in tests, and the
         // scan below runs off it.
         let startedAt = now()
-        sparklineTask = Task { @MainActor [weak self] in
-            let totals = await Task.detached(priority: .utility) {
-                await sparkline.dailyTotals(now: startedAt, days: 7)
-            }.value
+        lastSparklineStart = startedAt
 
-            guard let self, !Task.isCancelled else { return }
+        let scan = Task.detached(priority: .utility) {
+            await sparkline.dailyTotals(now: startedAt, days: 7)
+        }
+        sparklineScan = scan
+        sparklineTask = Task { @MainActor [weak self] in
+            let totals = await scan.value
+
+            guard let self, !Task.isCancelled, !scan.isCancelled else { return }
             self.sparklineTask = nil
+            self.sparklineScan = nil
             self.mergeSparkline(totals)
         }
     }
