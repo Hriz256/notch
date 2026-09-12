@@ -36,18 +36,31 @@ public final class ScrollSwipeMonitor {
     public func start() {
         guard globalMonitor == nil else { return }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
-            // Only Sendable scalars cross to the main actor: `NSEvent` itself must not.
-            let deltaX = event.scrollingDeltaX
-            let phase = event.phase.rawValue
-            let momentum = event.momentumPhase.rawValue
-            Task { @MainActor in self?.handle(deltaX: deltaX, phase: phase, momentum: momentum) }
+            self?.dispatch(event)
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
-            let deltaX = event.scrollingDeltaX
-            let phase = event.phase.rawValue
-            let momentum = event.momentumPhase.rawValue
-            Task { @MainActor in self?.handle(deltaX: deltaX, phase: phase, momentum: momentum) }
+            self?.dispatch(event)
             return event
+        }
+    }
+
+    /// Handles one monitored event synchronously.
+    ///
+    /// These blocks run on the main thread, so the isolation is an assertion rather than a
+    /// scheduling decision — the same shape as `EventReceiver`. It matters because this
+    /// monitor sees *every* scroll event on the system: hopping through a `Task` allocated
+    /// one per event, the overwhelming majority of them for a pointer nowhere near the
+    /// island. The containment test in ``handle(deltaX:phase:momentum:)`` runs first and
+    /// costs nothing; it stays there because an event outside the island must also cancel a
+    /// gesture that started inside it.
+    ///
+    /// Only `Sendable` scalars are read off the event; `NSEvent` itself never escapes.
+    private nonisolated func dispatch(_ event: NSEvent) {
+        let deltaX = event.scrollingDeltaX
+        let phase = event.phase.rawValue
+        let momentum = event.momentumPhase.rawValue
+        MainActor.assumeIsolated {
+            handle(deltaX: deltaX, phase: phase, momentum: momentum)
         }
     }
 
