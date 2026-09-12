@@ -219,7 +219,7 @@ private func exists(_ path: String) -> Bool {
         #expect(exists(a), "the original is still the user's file")
     }
 
-    @Test func loadTreatsAnUnreadableIndexAsEmpty() async throws {
+    @Test func loadTreatsAnUnreadableIndexAsEmptyAndRewritesIt() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         try FileManager.default.createDirectory(at: fixture.base, withIntermediateDirectories: true)
@@ -228,6 +228,9 @@ private func exists(_ path: String) -> Bool {
         let loaded = await StashStore(baseDirectory: fixture.base, now: { start }).load()
 
         #expect(loaded == StashIndex())
+        // The garbage is replaced, so the next load has nothing to complain about.
+        let onDisk = try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: fixture.indexURL))
+        #expect(onDisk == StashIndex())
     }
 
     @Test func loadOnAFreshMachineIsEmptyAndCreatesNothing() async throws {
@@ -313,6 +316,29 @@ private func exists(_ path: String) -> Bool {
                 to: fixture.sources.appendingPathComponent("out.txt")
             )
         }
+    }
+
+    @Test func aFailedWriteLeavesAnExistingDestinationIntact() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let a = try fixture.makeFile("a.txt", contents: "alpha")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let index = await store.stash([a], action: .replace)
+        // The receiving app already has a file there, and our copy has vanished.
+        let destination = fixture.sources.appendingPathComponent("precious.txt")
+        try Data("the user's own bytes".utf8).write(to: destination)
+        try FileManager.default.removeItem(atPath: index.files[0].storedPath)
+
+        await #expect(throws: (any Error).self) {
+            try await store.write(file: index.files[0], to: destination)
+        }
+
+        let survived = try String(contentsOf: destination, encoding: .utf8)
+        #expect(survived == "the user's own bytes", "a failed write must not destroy the destination")
+        // And no half-written temporary is left next to it.
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: fixture.sources.path)
+        #expect(siblings.filter { $0.contains(".notch-") }.isEmpty)
     }
 
     // MARK: - stashDirectory

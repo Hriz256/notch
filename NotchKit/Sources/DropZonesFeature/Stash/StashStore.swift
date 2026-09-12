@@ -47,10 +47,15 @@ public actor StashStore {
     ///
     /// Three things can have happened since the index was written: the TTL ran out
     /// (everything goes), a stored file was deleted behind our back (that entry
-    /// goes), or the file is unreadable (treated as an empty stash — the next drop
-    /// rewrites it). Any pruning is persisted so the next load has nothing to do.
+    /// goes), or the file is unreadable (treated as an empty stash and rewritten on
+    /// the spot, so a corrupt `stash.json` is not re-read and re-logged forever).
+    /// Any pruning is persisted so the next load has nothing to do.
     public func load() -> StashIndex {
-        var index = decodeIndex()
+        guard var index = decodeIndex() else {
+            let empty = StashIndex()
+            writeIndex(empty)
+            return empty
+        }
 
         if index.isExpired(now: now()) {
             clear()
@@ -91,9 +96,10 @@ public actor StashStore {
         index.apply(action, adding: added, now: now())
         // Index first, files second: a crash in between leaves entries whose folder
         // is gone, which `load` prunes — the opposite order would lose files that
-        // the index still promises.
-        writeIndex(index)
-        if action == .replace { deleteFolders(of: replaced) }
+        // the index still promises. And only once the new index is actually on disk:
+        // if the write failed, the old index is still the truth and still points at
+        // those folders.
+        if writeIndex(index), action == .replace { deleteFolders(of: replaced) }
         return index
     }
 
@@ -105,13 +111,33 @@ public actor StashStore {
 
     /// Copies a stashed file to `destination`, replacing whatever is there.
     ///
+    /// The copy lands on a hidden sibling name first and only then takes the
+    /// destination's place, so a failure half way through — the stored file gone,
+    /// a full disk — leaves an existing file at `destination` exactly as it was.
+    /// Deleting first and copying second would destroy the receiver's file on a
+    /// failed drag-out.
+    ///
     /// Used by the drag-out file-promise delegate, which reports the thrown error
     /// to the receiving app; the stash itself is left untouched either way.
     public func write(file: StashedFile, to destination: URL) throws {
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        let source = URL(fileURLWithPath: file.storedPath)
+        let temporary = destination
+            .deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).notch-\(UUID().uuidString)")
+
+        do {
+            try fileManager.copyItem(at: source, to: temporary)
+            if fileManager.fileExists(atPath: destination.path) {
+                _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+            } else {
+                try fileManager.moveItem(at: temporary, to: destination)
+            }
+        } catch {
+            // `replaceItemAt` consumes the temporary on success; on any failure it
+            // may still be there, and it is ours to clean up.
+            remove(temporary)
+            throw error
         }
-        try fileManager.copyItem(at: URL(fileURLWithPath: file.storedPath), to: destination)
     }
 
     // MARK: - Copying
@@ -182,17 +208,23 @@ public actor StashStore {
 
     // MARK: - The index file
 
-    private func decodeIndex() -> StashIndex {
+    /// The index on disk, or `nil` when there is a file and it cannot be read —
+    /// the one case the caller has to repair. A missing file is not a failure: a
+    /// fresh machine simply has an empty stash and nothing to write.
+    private func decodeIndex() -> StashIndex? {
         guard fileManager.fileExists(atPath: indexURL.path) else { return StashIndex() }
         do {
             return try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: indexURL))
         } catch {
             logger.error("stash.json unreadable, starting empty: \(error.localizedDescription, privacy: .public)")
-            return StashIndex()
+            return nil
         }
     }
 
-    private func writeIndex(_ index: StashIndex) {
+    /// Writes the index atomically. `false` when it did not land — the caller must
+    /// not then delete files the index on disk still refers to.
+    @discardableResult
+    private func writeIndex(_ index: StashIndex) -> Bool {
         let encoder = JSONEncoder()
         // Pretty and sorted: the file is meant to be openable in an editor, and a
         // stable key order keeps diffs honest.
@@ -200,8 +232,10 @@ public actor StashStore {
         do {
             try fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
             try encoder.encode(index).write(to: indexURL, options: .atomic)
+            return true
         } catch {
             logger.error("could not write stash.json: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 }
