@@ -306,7 +306,7 @@ final class PromiseDelegate: NSObject, NSFilePromiseProviderDelegate, @unchecked
         plainPanel = makePanel(NSRect(x: f.midX + 10, y: y, width: 400, height: 160),
                                title: "B · NORMAL SPACE", level: statusLevel)
         }
-        log("panels up: private=\(privatePanel!.windowNumber) plain=\(plainPanel!.windowNumber) level=\(statusLevel.rawValue) space=\(space == nil ? "UNAVAILABLE" : "ok")")
+        log("panels up: private=\(privatePanel?.windowNumber ?? -1) plain=\(plainPanel?.windowNumber ?? -1) level=\(statusLevel.rawValue) space=\(space == nil ? "UNAVAILABLE" : "ok")")
 
         watcher.start()
 
