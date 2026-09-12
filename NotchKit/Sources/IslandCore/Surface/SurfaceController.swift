@@ -61,18 +61,9 @@ public final class SurfaceController {
     // MARK: Layout helpers
 
     /// Island rect in screen coordinates for the current state.
-    ///
-    /// A suppressed island draws nothing but the notch, so its hit rect shrinks to match:
-    /// the hover monitor, the swipe monitor and the window's own pass-through hit test all
-    /// read this, and a 280×140 rect that draws nothing would swallow clicks and scrolls
-    /// meant for the panel a feature has put there instead.
     private func islandScreenRect() -> CGRect {
         guard let geometry else { return .zero }
-        let layout = IslandLayout.resolve(
-            state: presenter.visibleState,
-            current: presenter.visibleCurrent,
-            geometry: geometry
-        )
+        let layout = IslandLayout.resolve(state: presenter.state, current: presenter.current, geometry: geometry)
         let midX = geometry.notchRect.midX
         return CGRect(
             x: midX - layout.size.width / 2,

@@ -20,10 +20,12 @@ struct PrivateSpaceTests {
         space.destroy()
     }
 
-    /// Adoption has to be safe to repeat on a live window: the controller re-adopts on
-    /// every rebuild (a screen change, a notch that moved). Nothing here can assert
-    /// *which* Space the WindowServer put the window in — that is not readable from our
-    /// side — so this guards the one thing that can break, which is the call itself.
+    /// The island window is adopted once, at build time, and stays in the private Space
+    /// for the life of the process — but a screen change rebuilds the window and adopts
+    /// the new one, so `adopt` has to be safe to repeat on a live window. Nothing here
+    /// can assert *which* Space the WindowServer put the window in — that is not readable
+    /// from our side — so this guards the one thing that can break, which is the call
+    /// itself (an unrealized window, a trap on re-entry).
     @Test func adoptingAWindowIsSafeToRepeat() throws {
         let space = try #require(PrivateSpace(), "SkyLight private space unavailable on this macOS")
         defer { space.destroy() }
@@ -39,7 +41,7 @@ struct PrivateSpaceTests {
         defer { window.orderOut(nil) }
 
         space.adopt(window)
-        space.adopt(window)
+        space.adopt(window)  // idempotent
 
         #expect(space.identifier != 0)
     }

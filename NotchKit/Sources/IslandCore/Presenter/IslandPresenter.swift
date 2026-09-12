@@ -14,10 +14,6 @@ public final class IslandPresenter: IslandPresenting {
     /// The card the user picked, by swiping or from the Cards menu. Cleared as soon as it
     /// leaves `stack`.
     public private(set) var pinnedID: PresentationID?
-    /// Whether a feature has asked the island to draw nothing but the bare notch (see
-    /// ``IslandPresenting/setSurfaceSuppressed(_:)``). `SurfaceView` reads it and renders
-    /// the collapsed layout; the queue below it is untouched.
-    public private(set) var isSurfaceSuppressed = false
 
     public enum CycleDirection: Sendable { case next, previous }
 
@@ -98,20 +94,6 @@ public final class IslandPresenter: IslandPresenting {
         return .peek(current.id)
     }
 
-    /// What the island actually draws: ``state``, or `.collapsed` while suppressed.
-    ///
-    /// The pair below is the one place suppression is turned into geometry, so the view
-    /// that draws the shape and the controller that measures its hit rect can never
-    /// disagree about how big a suppressed island is.
-    public var visibleState: IslandState {
-        isSurfaceSuppressed ? .collapsed : state
-    }
-
-    /// The card the island actually draws: ``current``, or nothing while suppressed.
-    public var visibleCurrent: Presentation? {
-        isSurfaceSuppressed ? nil : current
-    }
-
     // MARK: IslandPresenting
 
     public func present(_ presentation: Presentation) {
@@ -146,20 +128,6 @@ public final class IslandPresenter: IslandPresenting {
         queueDidChange()
     }
 
-    /// Hides everything the island draws, down to the bare notch, until it is cleared.
-    ///
-    /// Hover promotion is dropped with it: the pointer that is currently over the island
-    /// is holding a drag, and letting a promotion armed under a drag survive the
-    /// suppression would pop the island open the instant the drag ended.
-    public func setSurfaceSuppressed(_ suppressed: Bool) {
-        guard isSurfaceSuppressed != suppressed else { return }
-        isSurfaceSuppressed = suppressed
-        logger.info("surface \(suppressed ? "suppressed" : "restored", privacy: .public)")
-        guard suppressed else { return }
-        cancelHoverTimer()
-        if isHoverPromoted { isHoverPromoted = false }
-    }
-
     // MARK: Card stack
 
     /// Index of the card the stack dots mark as current: the pinned one, else whichever
@@ -186,12 +154,6 @@ public final class IslandPresenter: IslandPresenting {
     /// of fewer than two cards has no neighbour, so the call is a no-op. Pinning leaves
     /// hover promotion alone unless the new card cannot be expanded at all.
     public func cycle(_ direction: CycleDirection) {
-        // Nothing is on screen to swipe between: a scroll over the notch while the
-        // island is suppressed belongs to whatever is drawing there instead.
-        guard !isSurfaceSuppressed else {
-            logger.info("cycle ignored — surface suppressed")
-            return
-        }
         let stack = stack
         guard stack.count > 1, let index = selectedIndex else {
             // The no-op is logged too: without it a swipe that arrives and finds a
@@ -246,9 +208,6 @@ public final class IslandPresenter: IslandPresenting {
     }
 
     public func toggleHoverPromotion() {
-        // A click cannot reach a suppressed island — the panel over it takes the events —
-        // but the guard keeps a stray tap from expanding a card nobody can see.
-        guard !isSurfaceSuppressed else { return }
         cancelHoverTimer()
         isHoverPromoted.toggle()
         hoverSuppressedUntilExit = !isHoverPromoted && isHovering
@@ -322,9 +281,6 @@ public final class IslandPresenter: IslandPresenting {
     /// Starts the enter delay when the pointer is inside, the winner is eligible, and no
     /// promotion (or pending promotion) is already in flight.
     private func armHoverEnterIfNeeded() {
-        // `isHovering` keeps tracking while the surface is suppressed — the pointer is
-        // genuinely over the notch, holding a drag — but nothing may be promoted there.
-        guard !isSurfaceSuppressed else { return }
         guard isHovering, !hoverSuppressedUntilExit, !isHoverPromoted, !isHoverEnterPending, isHoverEligible else { return }
         isHoverEnterPending = true
         hoverToken = clock.schedule(after: Self.hoverEnterDelay) { [weak self] in

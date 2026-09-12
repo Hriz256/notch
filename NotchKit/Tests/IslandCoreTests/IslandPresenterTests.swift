@@ -803,76 +803,25 @@ struct IslandPresenterTests {
         #expect(p.current?.id == alert.id)
     }
 
-    /// A feature that has to own the notch for a while (Drop Zones, while a drag is in
-    /// the air) draws its own panel in an ordinary-Space window and suppresses the island
-    /// underneath it. Suppression hides; it never dismisses.
-    @Test func suppressingTheSurfaceCollapsesItWithoutTouchingTheQueue() {
+    /// The dots are on unless a card says otherwise, and the opt-out survives the queue.
+    @Test func aCardCanOptOutOfTheStackDots() {
         let p = IslandPresenter(clock: ManualClock())
-        let card = makePresentation(feature: "music")
-        p.present(card)
-        #expect(!p.isSurfaceSuppressed)
-        #expect(p.visibleState == .peek(card.id))
-        #expect(p.visibleCurrent?.id == card.id)
+        #expect(makePresentation().showsStackDots)
 
-        p.setSurfaceSuppressed(true)
+        let quiet = Presentation(
+            featureID: FeatureID("dropzones"),
+            priority: .alert,
+            style: .expanded,
+            leading: AnyView(EmptyView()),
+            trailing: AnyView(EmptyView()),
+            expanded: AnyView(EmptyView()),
+            showsStackDots: false
+        )
+        p.present(makePresentation())
+        p.present(quiet)
 
-        #expect(p.isSurfaceSuppressed)
-        #expect(p.visibleState == .collapsed)
-        #expect(p.visibleCurrent == nil)
-        // The queue is untouched: `state` and `current` still say what is queued.
-        #expect(p.queue.map(\.id) == [card.id])
-        #expect(p.state == .peek(card.id))
-        #expect(p.current?.id == card.id)
-
-        p.setSurfaceSuppressed(false)
-
-        #expect(p.visibleState == .peek(card.id))
-        #expect(p.visibleCurrent?.id == card.id)
-    }
-
-    /// The pointer sitting over a suppressed island is holding a drag, not asking for a
-    /// card: nothing may promote, and a promotion already up goes with the suppression.
-    @Test func aSuppressedSurfaceNeitherPromotesOnHoverNorOnAClick() {
-        let clock = ManualClock()
-        let p = IslandPresenter(clock: clock)
-        p.present(makePresentation(feature: "music"))
-        p.setHovering(true)
-        clock.advance(by: IslandPresenter.hoverEnterDelay)
-        #expect(p.isHoverPromoted)
-
-        p.setSurfaceSuppressed(true)
-        #expect(!p.isHoverPromoted)
-
-        // Still hovering, and a fresh queue change would normally re-arm the promotion.
-        p.present(makePresentation(feature: "code"))
-        clock.advance(by: .seconds(1))
-        #expect(!p.isHoverPromoted)
-
-        p.toggleHoverPromotion()
-        #expect(!p.isHoverPromoted)
-
-        // And it comes back the ordinary way once the drag is over.
-        p.setSurfaceSuppressed(false)
-        p.toggleHoverPromotion()
-        #expect(p.isHoverPromoted)
-    }
-
-    /// A scroll over the notch while the island is suppressed belongs to whatever is
-    /// drawing there, so cycling is refused rather than silently moving a hidden stack.
-    @Test func aSuppressedSurfaceIgnoresSwipes() {
-        let p = IslandPresenter(clock: ManualClock())
-        let first = makePresentation(feature: "music")
-        let second = makePresentation(feature: "code")
-        p.present(first)
-        p.present(second)
-
-        p.setSurfaceSuppressed(true)
-        p.cycle(.next)
-        #expect(p.current?.id == second.id)
-
-        p.setSurfaceSuppressed(false)
-        p.cycle(.next)
-        #expect(p.current?.id == first.id)
+        #expect(p.current?.id == quiet.id)
+        #expect(p.current?.showsStackDots == false)
     }
 }
 

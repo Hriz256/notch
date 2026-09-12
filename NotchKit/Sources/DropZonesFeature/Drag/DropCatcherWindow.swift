@@ -19,32 +19,23 @@ public protocol DropCatcherDelegate: AnyObject {
     func catcher(_ view: DropCatcherView, dropped info: any NSDraggingInfo, at point: CGPoint) -> Bool
 }
 
-/// The window that draws the zones panel **and** receives the drop.
+/// The invisible window that actually receives the drop.
 ///
-/// It does both because nothing else can do either. The island cannot receive a drop:
-/// a window in a private SkyLight space is invisible to drag hit-testing — it neither
-/// receives drops nor blocks the normal-space window beneath it
-/// (`research/drop-zones-macos.md`, "Spike results"). And the island cannot usefully
-/// *draw* the panel either: its private space composites above the system's drag-image
-/// window, so the thumbnail in the user's hand vanishes behind whatever the island
-/// shows, and moving the window into the active user space for the drag does not
-/// change that (measured on macOS 26.5, commit e1e8b4e). An ordinary-space window at
-/// the same level shows the drag image on top and takes the drop, so this one draws
-/// the panel itself and the island is suppressed to the bare notch underneath it.
+/// The island itself cannot: the spike proved that a window in a private
+/// SkyLight space is invisible to drag hit-testing — it neither receives drops
+/// nor blocks the normal-space window beneath it (`research/drop-zones-macos.md`,
+/// "Spike results"). So the island keeps drawing the zones and this window,
+/// sitting in the ordinary space exactly over them at `alphaValue 0`, takes the
+/// drag messages. AppKit routes them to a fully transparent window quite happily.
 ///
-/// It is ordered in only while the zones are shown, and `ignoresMouseEvents` whenever
-/// it is not — a window parked over the notch that swallowed clicks would be a
-/// desktop-wide bug. The panel view inside it never takes mouse events at all.
+/// It is ordered in only while the zones are shown, and `ignoresMouseEvents`
+/// whenever it is not — a window parked over the notch that swallowed clicks
+/// would be a desktop-wide bug.
 public final class DropCatcherWindow: NSPanel {
 
     /// The destination view. Exposed so the feature can set its `panelFrame` and
     /// delegate; it is always this window's `contentView`.
     public let catcherView: DropCatcherView
-
-    /// The view that draws the panel, filling ``catcherView``. `nil` until the owner
-    /// installs one — the window catches drops perfectly well without it, which is what
-    /// every configuration test relies on.
-    public private(set) var panelView: NSView?
 
     private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
 
@@ -59,13 +50,10 @@ public final class DropCatcherWindow: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        // Opaque only where the panel paints: the window is the full catcher rect,
-        // most of which has to stay see-through.
-        alphaValue = 1
-        // One above the island (`SurfaceWindow` = statusWindow + 1), which is also
-        // where the panel has to be — it replaces what the island used to draw — and
-        // keeps the drag hit test from ever landing on another status-level window
-        // first.
+        alphaValue = 0
+        // One above the island (`SurfaceWindow` = statusWindow + 1). Being above
+        // it costs nothing visually at alpha 0 and keeps the drag hit test from
+        // ever landing on another status-level window first.
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.statusWindow)) + 2)
         collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         hidesOnDeactivate = false
@@ -76,26 +64,13 @@ public final class DropCatcherWindow: NSPanel {
         contentView = catcherView
     }
 
-    /// Installs the view that draws the panel, filling the destination view.
-    ///
-    /// A *subview* of the registered `DropCatcherView` rather than its replacement:
-    /// AppKit dispatches a drag to the nearest ancestor that registered for the
-    /// pasteboard types, and this view registers none, so the drop still lands on the
-    /// catcher. It must also be transparent to the mouse — see ``PanelHostingView``.
-    public func setPanelView(_ view: NSView) {
-        panelView?.removeFromSuperview()
-        view.frame = catcherView.bounds
-        view.autoresizingMask = [.width, .height]
-        catcherView.addSubview(view)
-        panelView = view
-    }
-
     public override var canBecomeKey: Bool { false }
     public override var canBecomeMain: Bool { false }
 
     /// The frame is exactly what the owner asks for. AppKit's default nudges a window
-    /// whose frame reaches the screen's top edge (or past it) down onto the visible
-    /// area, which would move the panel off the notch it has to grow out of.
+    /// whose frame reaches the screen's top edge down onto the visible area, which would
+    /// slide the catcher off the panel it has to sit exactly over and make every hit test
+    /// land in the wrong place.
     public override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         frameRect
     }

@@ -10,16 +10,16 @@ import SwiftUI
 /// would mean a drop landing on a zone the user was not pointing at — the one bug in this
 /// feature the user could never diagnose.
 ///
-/// The panel is drawn in **panel** coordinates, origin at the panel's own top-left:
-/// that is the space `ZoneLayout` lays the cards out in and the space the drop catcher
-/// hit-tests, and the panel's top edge is the screen's top edge, so the two agree by
-/// construction. What keeps the cards out from under the hardware is
+/// The panel is drawn in **island** coordinates: `SurfaceView` pushes expanded content
+/// below the notch so features never draw where the hardware hides them, but the panel's
+/// coordinate space has to stay the island's for the hit test to agree with it, so that
+/// padding is cancelled here. What keeps the cards out from under the hardware is
 /// `ZoneLayout.topInset`, which starts them 2 pt below the notch's bottom edge — exactly
 /// where the reference frames put the top dash.
-///
-/// ``ZonesPanelView`` is what places this view, inside the black shape it animates.
 struct ZonesView: View {
     let model: DropZonesViewModel
+
+    @Environment(\.notchSize) private var notchSize
 
     /// The panel's geometry spring (spec §3.3): fast enough that widening the targeted
     /// card keeps up with the cursor, damped enough not to wobble under it.
@@ -35,6 +35,7 @@ struct ZonesView: View {
             }
         }
         .frame(width: ZoneLayout.panelSize.width, height: ZoneLayout.panelSize.height, alignment: .topLeading)
+        .padding(.top, -notchSize.height)
         .animation(ZonesView.geometry, value: model.animationState)
         .dropZonesContextMenu(model)
     }

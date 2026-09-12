@@ -138,11 +138,6 @@ private enum Ink {
         r > 0.6 && g < 0.35 && b < 0.35
     }
 
-    /// The panel's own shape. Nothing else in a rendered panel is this dark.
-    static func isBlack(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Bool {
-        r < 0.15 && g < 0.15 && b < 0.15
-    }
-
     /// `.systemBlue`, read back through whatever appearance the renderer used. Matched by
     /// shape rather than by exact components: the accent follows the user's settings, and
     /// a literal would make this test fail on a machine with a different one.
@@ -299,11 +294,11 @@ struct StashLayoutRenderTests {
         )
     }
 
-    static func render(_ view: some View, size: CGSize = windowSize) -> CGImage? {
+    static func render(_ view: some View) -> CGImage? {
         let renderer = ImageRenderer(
             content: AnyView(
                 view
-                    .frame(width: size.width, height: size.height)
+                    .frame(width: windowSize.width, height: windowSize.height)
                     // `ImageRenderer` paints a placeholder over an `NSViewRepresentable`
                     // rather than what is under it; without this every measurement below
                     // would be of that placeholder.
@@ -433,66 +428,12 @@ struct StashLayoutRenderTests {
 
     // MARK: The zones panel
 
-    /// The catcher window's content size: the panel grown by the slack on every side.
-    static let catcherSize = CGSize(
-        width: ZoneLayout.panelSize.width + 2 * DropZonesFeature.catcherSlack,
-        height: ZoneLayout.panelSize.height + DropZonesFeature.catcherSlack
-    )
-
-    /// Where the panel's top-left corner lands inside that view — which puts its top edge
-    /// on the screen's top edge and its centre on the notch's.
-    static let panelOrigin = CGPoint(x: DropZonesFeature.catcherSlack, y: 0)
-
-    /// Renders the zones the way they are really shown: as `ZonesPanelView`, filling the
-    /// drop catcher's window. That view owns the black shape, the slack the panel sits
-    /// inside and the notch the shape grows out of, so measuring anything less would let
-    /// the cards and the window they are hit-tested in drift apart unnoticed.
+    /// Renders the zones panel the way the island really shows it: as expanded content
+    /// of the real `SurfaceView`, which is also where the notch padding it cancels — and
+    /// the `\.notchSize` it reads — come from. Building the padding by hand here would
+    /// have let the two drift apart without a test noticing.
     static func renderZones(_ model: DropZonesViewModel) throws -> CGImage? {
-        let geometry = try geometry()
-        return render(
-            ZonesPanelView(
-                model: model,
-                notchSize: CGSize(width: geometry.notchWidth, height: geometry.notchHeight),
-                choreographer: .standard
-            ),
-            size: catcherSize
-        )
-    }
-
-    @Test("The panel sits exactly where the island's expanded panel used to")
-    func panelLandsAtTheSlackInsideTheCatcher() throws {
-        let harness = try RenderHarness()
-        defer { harness.cleanUp() }
-        harness.model.handle(.enteredHotRect)
-
-        let image = try #require(try Self.renderZones(harness.model), "the renderer produced no bitmap")
-        let panel = try #require(scan(image, matches: Ink.isBlack), "the panel drew no black shape")
-
-        // The catcher's window is the panel's screen rect inset by −20, so 20 pt in from
-        // its top and left edge is the panel's own top-left — screen top, notch centre.
-        let expected = CGRect(origin: Self.panelOrigin, size: ZoneLayout.panelSize)
-        #expect(abs(panel.minY - expected.minY) <= 1, "the panel starts at y \(panel.minY) pt")
-        #expect(abs(panel.maxY - expected.maxY) <= 1, "the panel ends at y \(panel.maxY) pt")
-        // Sideways the outermost points of a `NotchShape` are the tips of its two top
-        // flares, which taper to nothing: the last few columns are thin enough that no
-        // pixel in them is more than half covered, so the measured edges sit a little
-        // inside the frame. What has to be exact is that they sit *symmetrically*
-        // inside it — the panel is centred on the notch, and a drop is hit-tested
-        // against that centre.
-        let flare = ZonesPanelView.topRadius / 2
-        #expect(panel.minX >= expected.minX, "the panel starts at x \(panel.minX) pt, outside its frame")
-        #expect(panel.minX <= expected.minX + flare, "the panel starts at x \(panel.minX) pt")
-        #expect(panel.maxX <= expected.maxX, "the panel ends at x \(panel.maxX) pt, outside its frame")
-        #expect(panel.maxX >= expected.maxX - flare, "the panel ends at x \(panel.maxX) pt")
-        #expect(abs((panel.minX + panel.maxX) / 2 - expected.midX) <= 1,
-                "the panel is centred at x \((panel.minX + panel.maxX) / 2) pt, expected \(expected.midX) pt")
-
-        // And the cards are drawn inside it, not over the slack around it.
-        let cards = try #require(scan(image, matches: Ink.isBlue), "no cards inside the panel")
-        #expect(cards.minX >= expected.minX, "a card starts at x \(cards.minX) pt, left of the panel")
-        #expect(cards.maxX <= expected.maxX, "a card ends at x \(cards.maxX) pt, right of the panel")
-        #expect(cards.minY >= expected.minY, "a card starts at y \(cards.minY) pt, above the panel")
-        #expect(cards.maxY <= expected.maxY, "a card ends at y \(cards.maxY) pt, below the panel")
+        try renderExpanded(AnyView(ZonesView(model: model)), size: ZoneLayout.panelSize)
     }
 
     /// The horizontal runs of blue ink, one per card: the dashed border spans each card's
@@ -564,8 +505,8 @@ struct StashLayoutRenderTests {
         let widths = runs.map { $0.max - $0.min }
         #expect(abs(widths[0] - widths[1]) <= 2,
                 "untargeted cards measured \(widths[0]) and \(widths[1]) pt")
-        // The cards are inset 14 from the panel's edges, and the panel from the window's.
-        let panelLeft = Self.panelOrigin.x
+        // The panel is centred in the 640 pt window; the cards are inset 14 from its edges.
+        let panelLeft = (Self.windowSize.width - ZoneLayout.panelSize.width) / 2
         #expect(abs(runs[0].min - (panelLeft + ZoneLayout.inset)) <= 2,
                 "the first card starts at \(runs[0].min - panelLeft) pt into the panel")
         #expect(abs(runs[1].min - runs[0].max - ZoneLayout.gap) <= 2,
@@ -574,12 +515,11 @@ struct StashLayoutRenderTests {
         // Vertically: the top dash clears the physical notch — the whole point of
         // `ZoneLayout.topInset` — and the bottom one keeps the panel's 14 pt inset.
         let band = try #require(scan(image, matches: Ink.isBlue), "no card ink at all")
-        let panelTop = Self.panelOrigin.y
-        #expect(band.minY - panelTop >= geometry.notchHeight,
-                "the cards start at \(band.minY - panelTop) pt, under the \(geometry.notchHeight) pt notch")
-        #expect(abs(band.minY - (panelTop + ZoneLayout.topInset)) <= 2,
-                "the top dash is at \(band.minY - panelTop) pt into the panel, expected \(ZoneLayout.topInset) pt")
-        let bottom = panelTop + ZoneLayout.panelSize.height - ZoneLayout.inset
+        #expect(band.minY >= geometry.notchHeight,
+                "the cards start at \(band.minY) pt, under the \(geometry.notchHeight) pt notch")
+        #expect(abs(band.minY - ZoneLayout.topInset) <= 2,
+                "the top dash is at \(band.minY) pt, expected \(ZoneLayout.topInset) pt")
+        let bottom = ZoneLayout.panelSize.height - ZoneLayout.inset
         #expect(abs(band.maxY - bottom) <= 2,
                 "the bottom dash is at \(band.maxY) pt, expected \(bottom) pt")
     }
@@ -615,11 +555,10 @@ struct StashLayoutRenderTests {
         let fan = try #require(scan(image, matches: Ink.isRed), "the stash card drew no thumbnails")
         // A 48 pt tile at 2× is 9216 device pixels; far under that means it was clipped.
         #expect(fan.count >= 6000, "only \(fan.count) thumbnail pixels rendered")
-        let panelTop = Self.panelOrigin.y
-        #expect(fan.minY >= panelTop + ZoneLayout.topInset,
-                "the fan starts at \(fan.minY - panelTop) pt into the panel, above the card's top edge")
-        #expect(fan.maxY <= panelTop + ZoneLayout.panelSize.height - ZoneLayout.inset,
-                "the fan runs to \(fan.maxY - panelTop) pt into the panel, past the card's bottom edge")
+        #expect(fan.minY >= ZoneLayout.topInset,
+                "the fan starts at \(fan.minY) pt, above the card's top edge")
+        #expect(fan.maxY <= ZoneLayout.panelSize.height - ZoneLayout.inset,
+                "the fan runs to \(fan.maxY) pt, past the card's bottom edge")
     }
 
     @Test("A completed drag-out poofs the stash content away")
