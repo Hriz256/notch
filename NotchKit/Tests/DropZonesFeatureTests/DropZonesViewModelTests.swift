@@ -16,6 +16,13 @@ private final class FakePresenter: IslandPresenting {
     var updated: [Presentation] = []
     var dismissed: [PresentationID] = []
     var live: [PresentationID: Presentation] = [:]
+    /// Every `setSurfaceInUserSpace` call, in order — the island leaving its private
+    /// Space and coming back is a visible thing, so the sequence matters.
+    var spaceRequests: [Bool] = []
+
+    func setSurfaceInUserSpace(_ inUserSpace: Bool) {
+        spaceRequests.append(inUserSpace)
+    }
 
     func present(_ p: Presentation) {
         presented.append(p)
@@ -255,11 +262,155 @@ private final class Harness {
         harness.enterHotRect()
         let id = try #require(harness.presenter.presented.first?.id)
 
+        // Nothing is targeted, so no drop can be on its way: no grace is owed.
         harness.model.handle(.ended)
 
         #expect(harness.presenter.dismissed == [id])
         #expect(harness.model.phase == .idle)
         #expect(harness.model.catcherFrameNeeded == nil)
+        #expect(harness.clock.pendingCount == 0)
+    }
+
+    /// The defect this grace exists for: the global `.leftMouseUp` monitor fires `.ended`
+    /// *before* AppKit delivers `performDragOperation`, so dismissing there ordered the
+    /// catcher window out from under the drop and every drop was refused.
+    @Test func aDragThatEndsOverACardHoldsTheZonesOpenForTheDrop() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
+        harness.model.panelFrameProvider = { frame }
+        harness.enterHotRect()
+        let id = try #require(harness.presenter.presented.first?.id)
+        _ = harness.model.targeted(at: stashPoint)
+
+        harness.model.handle(.ended)
+
+        harness.clock.advance(by: .milliseconds(499))
+        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
+        // The catcher is still over the panel — which is the whole point.
+        #expect(harness.model.catcherFrameNeeded == frame)
+
+        harness.clock.advance(by: .milliseconds(1))
+        #expect(harness.presenter.dismissed == [id])
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.model.phase == .idle)
+        #expect(harness.model.catcherFrameNeeded == nil)
+    }
+
+    /// The drop AppKit was holding on to arrives inside the grace: it cancels it and the
+    /// panel goes on to settle, rather than being torn down mid-copy.
+    @Test func aDropWithinTheGraceCancelsItAndSettles() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let id = try #require(harness.presenter.presented.first?.id)
+        _ = harness.model.targeted(at: stashPoint)
+        harness.model.handle(.ended)
+
+        harness.clock.advance(by: .milliseconds(100))
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+
+        #expect(harness.model.phase == .settling)
+        #expect(harness.model.index.files.count == 1)
+        // Only the settle is left pending: the grace is gone, not merely outrun.
+        #expect(harness.clock.pendingCount == 1)
+
+        harness.clock.advance(by: .milliseconds(400))
+        #expect(harness.presenter.dismissed == [id])
+        #expect(harness.model.phase == .stashed)
+    }
+
+    /// The grace expiring is the refusal path: no drop ever came, so nothing is stashed
+    /// and nothing is left behind.
+    @Test func aGraceThatExpiresLeavesTheStashUntouched() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        _ = harness.model.targeted(at: stashPoint)
+
+        harness.model.handle(.ended)
+        harness.clock.advance(by: .milliseconds(500))
+
+        #expect(harness.model.index.files.isEmpty)
+        #expect(harness.model.phase == .idle)
+        #expect(harness.presenter.liveCard(.background) == nil)
+        #expect(harness.clock.pendingCount == 0)
+        let stored = await harness.store.load()
+        #expect(stored.files.isEmpty)
+    }
+
+    /// Escape cancels the drag outright: nothing will ever be delivered, so the panel
+    /// goes at once even with a card targeted.
+    @Test func aCancelledDragOverACardStillDismissesAtOnce() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let id = try #require(harness.presenter.presented.first?.id)
+        _ = harness.model.targeted(at: stashPoint)
+
+        harness.model.handle(.cancelled)
+
+        #expect(harness.presenter.dismissed == [id])
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.clock.pendingCount == 0)
+    }
+
+    /// A new drag arriving during the grace takes the panel over rather than inheriting
+    /// the last drag's mouse-up.
+    @Test func aNewDragDuringTheGraceCancelsIt() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        _ = harness.model.targeted(at: stashPoint)
+        harness.model.handle(.ended)
+
+        harness.enterHotRect()
+        harness.clock.advance(by: .seconds(2))
+
+        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
+        #expect(harness.model.phase == .hovering)
+    }
+
+    /// The island normally lives in a private Space that composites above Finder's
+    /// drag-image window, which hid the thumbnail the user was dragging behind the
+    /// cards. It comes down into the user's Space for the drag and goes back after.
+    @Test func theIslandLeavesItsPrivateSpaceWhileTheZonesAreUp() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+
+        harness.enterHotRect()
+        #expect(harness.presenter.spaceRequests == [true])
+
+        // Updating the panel in place is not a second move.
+        _ = harness.model.targeted(at: stashPoint)
+        #expect(harness.presenter.spaceRequests == [true])
+
+        harness.model.handle(.cancelled)
+        #expect(harness.presenter.spaceRequests == [true, false])
+    }
+
+    @Test func stoppingPutsTheIslandBackInItsPrivateSpace() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+
+        harness.model.stop()
+
+        #expect(harness.presenter.spaceRequests.first == true)
+        #expect(harness.presenter.spaceRequests.last == false)
+    }
+
+    /// Seam shows no stack dots over the zones panel, and neither do we: it is a drop
+    /// target for the drag in hand, not a page of the card stack.
+    @Test func theZonesPanelDrawsNoStackDots() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+
+        harness.enterHotRect()
+
+        #expect(harness.presenter.presented.first?.showsStackDots == false)
     }
 
     @Test func aCancelledDragDismissesAtOnce() throws {
@@ -385,8 +536,12 @@ private final class Harness {
         _ = harness.model.targeted(at: airDropPoint)
         #expect(frames == [frame])
 
+        // The mouse comes up over the card, and the catcher stays: the drop AppKit is
+        // about to deliver needs a window to land in (see `dropGrace`).
         harness.model.handle(.ended)
+        #expect(frames == [frame])
 
+        harness.clock.advance(by: .milliseconds(500))
         #expect(frames == [frame, nil])
     }
 

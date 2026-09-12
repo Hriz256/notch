@@ -126,6 +126,16 @@ public final class DropZonesViewModel {
     /// How long the zones stay up after the cursor leaves the hot rect, so a drag that
     /// clips the corner on its way somewhere else does not flicker them.
     public static let leaveDebounce: Duration = .milliseconds(300)
+    /// How long the zones stay up after the mouse comes up *over a card*, waiting for
+    /// AppKit to deliver the drop.
+    ///
+    /// The global `.leftMouseUp` monitor fires `.ended` the instant the button is
+    /// released, but AppKit only sends `prepareForDragOperation` /
+    /// `performDragOperation` to the destination *after* that same mouse-up has been
+    /// processed. Dismissing on `.ended` ordered the catcher window out from under the
+    /// drop, and every drop was refused: the cards highlighted, Finder showed the copy
+    /// badge, and nothing was ever stashed. Seam holds the panel open the same way.
+    public static let dropGrace: Duration = .milliseconds(500)
     /// How long the "N Files" settle card plays before the island collapses.
     public static let settleDelay: Duration = .milliseconds(400)
     /// The pause between the zones collapsing and the AirDrop sheet appearing.
@@ -230,6 +240,7 @@ public final class DropZonesViewModel {
     @ObservationIgnored private var zonesID: PresentationID?
     @ObservationIgnored private var stashID: PresentationID?
     @ObservationIgnored private var leaveToken: ScheduledToken?
+    @ObservationIgnored private var dropGraceToken: ScheduledToken?
     @ObservationIgnored private var settleToken: ScheduledToken?
     @ObservationIgnored private var airDropToken: ScheduledToken?
     @ObservationIgnored private var poofToken: ScheduledToken?
@@ -291,6 +302,9 @@ public final class DropZonesViewModel {
             // whatever is under the cursor.
             guard !zones.isEmpty else { return }
             cancelLeave()
+            // A fresh drag over a panel still waiting on the last one's drop: the grace
+            // belongs to a mouse-up that is now history.
+            cancelDropGrace()
             // A settle card still playing owns the panel: a new drag entering must not
             // blank it back to an empty hover half way through the animation. Targeting
             // resumes the moment the cursor is actually over a card.
@@ -313,15 +327,52 @@ public final class DropZonesViewModel {
                 phase = .idle
             }
 
-        case .ended, .cancelled:
+        case .ended:
             // A drop that reached us owns the teardown from here: the settle card is the
             // zones presentation, and the mouse-up that delivered the drop must not pull
             // it out from under the animation.
             guard isZonesShown, !isDropInFlight else { return }
             cancelLeave()
+            // The mouse came up over a card, so a drop is almost certainly on its way —
+            // AppKit just has not delivered it yet (see ``dropGrace``). Hold everything
+            // in place, catcher included, until it arrives or the grace runs out.
+            guard targeted == nil else {
+                armDropGrace()
+                return
+            }
+            dismissZones()
+            phase = .idle
+
+        case .cancelled:
+            guard isZonesShown, !isDropInFlight else { return }
+            cancelLeave()
+            // Escape during the drag: nothing will be delivered, so no grace is owed.
+            cancelDropGrace()
             dismissZones()
             phase = .idle
         }
+    }
+
+    /// Holds the zones (and with them the catcher window) open for ``dropGrace`` after a
+    /// mouse-up over a card, then closes up as `.ended` would have.
+    private func armDropGrace() {
+        cancelDropGrace()
+        // The grace belongs to *this* showing. A panel that has since been dismissed and
+        // re-presented for a new drag is somebody else's card to take down.
+        let showing = zonesID
+        dropGraceToken = clock.schedule(after: Self.dropGrace) { [weak self] in
+            guard let self else { return }
+            dropGraceToken = nil
+            logger.info("no drop arrived within the grace; closing the zones")
+            guard zonesID == showing, !isDropInFlight else { return }
+            dismissZones()
+            phase = .idle
+        }
+    }
+
+    private func cancelDropGrace() {
+        dropGraceToken?.cancel()
+        dropGraceToken = nil
     }
 
     /// Whether a drop is being copied or settling, which is when the zones presentation
@@ -362,10 +413,20 @@ public final class DropZonesViewModel {
     /// not fight the closing animation. A stash drop keeps the panel for the settle card,
     /// then collapses into the peek.
     public func drop(urls: [URL], on zone: Zone) async {
+        // The drop the mouse-up was waiting for: whatever happens next, the grace has
+        // done its job and must not fire over it. Whether one was pending decides who
+        // closes the panel in the branches below that stash nothing — if the button is
+        // already up, no later drag event is coming to do it.
+        let wasAwaitingDrop = dropGraceToken != nil
+        cancelDropGrace()
+
         // Nothing readable came off the pasteboard: close up as if the drag had simply
         // ended over us (spec §4).
         guard !urls.isEmpty else {
             logger.error("drop on \(zone.rawValue, privacy: .public) carried no files")
+            // Nothing is coming, so `.ended` must dismiss rather than arm a second grace
+            // on the card the empty drop landed on.
+            targeted = nil
             handle(.ended)
             return
         }
@@ -391,8 +452,15 @@ public final class DropZonesViewModel {
         case .stash, .addToStash, .replaceStash:
             // A drag that came out of the stash and went back into it would copy the
             // files onto themselves; the card is drawn as a target so the drag has
-            // somewhere harmless to land, and landing there does nothing.
-            guard dragOutPhase != .dragging else { return }
+            // somewhere harmless to land, and landing there does nothing — beyond
+            // closing the panel the grace was holding open for this very drop.
+            guard dragOutPhase != .dragging else {
+                if wasAwaitingDrop {
+                    targeted = nil
+                    handle(.ended)
+                }
+                return
+            }
             await stash(urls, action: Self.action(for: zone, default: settings.stashDropAction))
         }
     }
@@ -558,6 +626,7 @@ public final class DropZonesViewModel {
     /// Drops both presentations and every timer. Called when the feature is switched off.
     public func stop() {
         cancelLeave()
+        cancelDropGrace()
         settleToken?.cancel()
         settleToken = nil
         airDropToken?.cancel()
@@ -576,6 +645,9 @@ public final class DropZonesViewModel {
         thumbnails.removeAll()
         dismissZones()
         dismissStash()
+        // Unconditional, unlike `dismissZones`'s own call: a feature switched off with no
+        // panel up must still not leave the island stranded in the user's Space.
+        islandPresenter.setSurfaceInUserSpace(false)
         phase = .idle
         dragOutPhase = .idle
     }
@@ -588,6 +660,12 @@ public final class DropZonesViewModel {
         if isNewShowing {
             zonesID = id
             isZonesShown = true
+            // The island's private Space composites above Finder's drag-image window, so
+            // the thumbnail the user is dragging would disappear behind the cards. Down
+            // into the user's Space for the length of the drag; `dismissZones` puts it
+            // back. Before presenting, like the catcher, so the first frame of the panel
+            // is already drawn in the Space it belongs in.
+            islandPresenter.setSurfaceInUserSpace(true)
             // The catcher goes up first, before the SwiftUI card is built and presented:
             // see ``onCatcherFrameChange``. Presenting is the most expensive thing that
             // happens during a drag, and a window ordered in after it can miss the drop.
@@ -602,7 +680,10 @@ public final class DropZonesViewModel {
             leading: AnyView(EmptyView()),
             trailing: AnyView(EmptyView()),
             expanded: viewFactory.zones(self),
-            expandedSize: Self.zonesSize
+            expandedSize: Self.zonesSize,
+            // No dots over the cards: the panel is not a page of the stack, it is a
+            // target for the drag in the user's hand, and Seam shows none there either.
+            showsStackDots: false
         )
         if isNewShowing {
             islandPresenter.present(presentation)
@@ -626,6 +707,9 @@ public final class DropZonesViewModel {
         isZonesShown = false
         // Nothing to catch for any more; `catcherFrameNeeded` is `nil` from here.
         onCatcherFrameChange?(catcherFrameNeeded)
+        // The drag is over, so the island goes back into its private Space — above every
+        // user Space again, and out of the Space-transition animation.
+        islandPresenter.setSurfaceInUserSpace(false)
     }
 
     private func cancelLeave() {
