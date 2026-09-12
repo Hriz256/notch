@@ -172,9 +172,12 @@ public final class DropZonesViewModel {
     /// Where the drop catcher window has to be, or `nil` when it should be ordered out.
     ///
     /// The catcher only exists to receive drops on cards that are on screen, so this is
-    /// exactly "the panel's frame while the zones are shown".
+    /// exactly "the panel's frame while the zones are shown" — and `nil` until the
+    /// feature has told us where the panel is, so the catcher is never ordered in at a
+    /// frame nobody has computed yet.
     public var catcherFrameNeeded: CGRect? {
-        isZonesShown ? panelFrameProvider() : nil
+        guard isZonesShown, let panelFrameProvider else { return nil }
+        return panelFrameProvider()
     }
 
     // MARK: - Collaborators
@@ -185,9 +188,9 @@ public final class DropZonesViewModel {
     /// Read by the context menu and the status-menu submenu.
     @ObservationIgnored public let settings: DropZonesSettings
     /// Where the zones panel is on screen, in screen coordinates. Set by the feature once
-    /// it knows the island's geometry; `.zero` until then, which simply means the catcher
-    /// is never ordered in.
-    @ObservationIgnored public var panelFrameProvider: @MainActor () -> CGRect = { .zero }
+    /// it knows the island's geometry; `nil` until then, which makes ``catcherFrameNeeded``
+    /// `nil` too, so the catcher is never ordered in at a frame nobody has computed.
+    @ObservationIgnored public var panelFrameProvider: (@MainActor () -> CGRect)?
 
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private let store: StashStore
@@ -207,6 +210,16 @@ public final class DropZonesViewModel {
     @ObservationIgnored private var poofToken: ScheduledToken?
     @ObservationIgnored private var expiryToken: ScheduledToken?
     @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
+    /// The two timers hand off to an actor, so each also owns a `Task`; held here so
+    /// ``stop()`` can cancel the work the timer already started, not just the timer.
+    @ObservationIgnored private var poofTask: Task<Void, Never>?
+    @ObservationIgnored private var expiryTask: Task<Void, Never>?
+
+    /// Test seam. Awaited inside ``drop(urls:on:)`` after the drop has been recorded as
+    /// ``StashPhase/dropped(pending:)`` and before the copy starts, so a test can drive
+    /// events into the window where `store.stash` is in flight. Never set in shipping
+    /// code; `internal` so only `@testable` code can reach it.
+    @ObservationIgnored var beforeStash: (@MainActor () async -> Void)?
 
     public init(
         presenter: any IslandPresenting,
@@ -253,12 +266,20 @@ public final class DropZonesViewModel {
             // whatever is under the cursor.
             guard !zones.isEmpty else { return }
             cancelLeave()
-            targeted = nil
-            phase = .hovering
+            // A settle card still playing owns the panel: a new drag entering must not
+            // blank it back to an empty hover half way through the animation. Targeting
+            // resumes the moment the cursor is actually over a card.
+            if !isDropInFlight {
+                targeted = nil
+                phase = .hovering
+            }
             showZones()
 
         case .leftHotRect:
-            guard isZonesShown else { return }
+            // The hot rect is shorter than the panel, so a cursor that dips into the
+            // bottom of a card leaves it: arming the dismiss while a drop is being
+            // copied or settling would cut the settle card short.
+            guard isZonesShown, !isDropInFlight else { return }
             cancelLeave()
             leaveToken = clock.schedule(after: Self.leaveDebounce) { [weak self] in
                 guard let self else { return }
@@ -324,8 +345,15 @@ public final class DropZonesViewModel {
             return
         }
 
+        // The previous drag-out is over for good once files land on a card.
+        if dragOutPhase == .cancelled { dragOutPhase = .idle }
+
         switch zone {
         case .airDrop:
+            // A drop that landed on a card outlives the drag that armed the leave
+            // debounce: the cursor may well have dipped below the hot rect on its way
+            // into the card, and that dismiss must not fire behind the hand-over.
+            cancelLeave()
             dismissZones()
             phase = .idle
             airDropToken?.cancel()
@@ -355,10 +383,15 @@ public final class DropZonesViewModel {
     }
 
     private func stash(_ urls: [URL], action: StashDropAction) async {
+        // The cursor reached the card through the bottom of the panel, which is outside
+        // the shorter hot rect: a leave armed on the way in would otherwise dismiss the
+        // settle card mid-animation.
+        cancelLeave()
         targeted = nil
         phase = .dropped(pending: urls)
         refreshZones()
 
+        await beforeStash?()
         index = await store.stash(urls, action: action)
         logger.info("""
             stashed \(urls.count, privacy: .public) file(s) by \(action.rawValue, privacy: .public); \
@@ -369,13 +402,21 @@ public final class DropZonesViewModel {
         refreshThumbnails()
 
         settleToken?.cancel()
+        // The settle belongs to *this* showing of the panel. If the card it was playing
+        // in is gone by the time it fires — dismissed by a later AirDrop drop, replaced
+        // by a fresh panel for a new drag — tearing down whatever is on screen now would
+        // take someone else's card with it.
+        let showing = zonesID
         settleToken = clock.schedule(after: Self.settleDelay) { [weak self] in
             guard let self else { return }
             settleToken = nil
-            dismissZones()
-            phase = .stashed
+            // The peek and the 24-hour clock belong to the files, not to the panel, so
+            // they land either way.
             refreshStash()
             armExpiry()
+            guard zonesID == showing else { return }
+            dismissZones()
+            phase = .stashed
         }
     }
 
@@ -390,10 +431,15 @@ public final class DropZonesViewModel {
     /// The drag-out session ended. A session that actually delivered files clears the
     /// stash after the poof — Seam's behaviour, and the reason the island moves on to the
     /// next card once files have been taken out of it. A cancelled one leaves it alone.
+    ///
+    /// ``DragOutPhase/cancelled`` *stays* until the next ``dragOutBegan()`` or drop
+    /// rather than hopping straight back to `.idle`: a synchronous round trip would never
+    /// be observable, and the distinction is worth keeping (a cancelled drag-out is a
+    /// stack that snapped back, an idle one was never dragged). ``zones`` reads only
+    /// `.dragging`, so a cancelled phase changes nothing about the panel.
     public func dragOutEnded(completed: Bool) {
         guard completed else {
             dragOutPhase = .cancelled
-            dragOutPhase = .idle
             return
         }
         dragOutPhase = .completed
@@ -401,13 +447,16 @@ public final class DropZonesViewModel {
         poofToken = clock.schedule(after: Self.poofDuration) { [weak self] in
             guard let self else { return }
             poofToken = nil
-            Task { @MainActor [weak self] in await self?.finishPoof() }
+            poofTask?.cancel()
+            poofTask = Task { @MainActor [weak self] in await self?.finishPoof() }
         }
     }
 
     private func finishPoof() async {
         await clearStash()
+        guard !Task.isCancelled else { return }
         dragOutPhase = .idle
+        poofTask = nil
     }
 
     // MARK: - The stash's lifecycle
@@ -486,6 +535,12 @@ public final class DropZonesViewModel {
         poofToken?.cancel()
         poofToken = nil
         cancelExpiry()
+        // The tokens only cancel the *timers*; the work a fired timer handed to an actor
+        // is a `Task` of its own and has to be cancelled too.
+        poofTask?.cancel()
+        poofTask = nil
+        expiryTask?.cancel()
+        expiryTask = nil
         thumbnailTask?.cancel()
         thumbnailTask = nil
         thumbnails.removeAll()
@@ -610,7 +665,8 @@ public final class DropZonesViewModel {
             guard let self else { return }
             expiryToken = nil
             logger.info("stash expired after \(StashIndex.ttl, privacy: .public) s")
-            Task { @MainActor [weak self] in await self?.clearStash() }
+            expiryTask?.cancel()
+            expiryTask = Task { @MainActor [weak self] in await self?.clearStash() }
         }
     }
 

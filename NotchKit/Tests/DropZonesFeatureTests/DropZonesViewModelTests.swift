@@ -339,13 +339,72 @@ private final class Harness {
         let harness = try Harness()
         defer { harness.cleanUp() }
         let frame = CGRect(x: 500, y: 600, width: 280, height: 140)
-        harness.model.panelFrameProvider = { frame }
 
+        // Nobody has said where the panel is yet, so there is no frame to offer even
+        // with the zones up: the catcher must not be ordered in at a guessed rect.
+        harness.enterHotRect()
+        #expect(harness.model.isZonesShown)
+        #expect(harness.model.catcherFrameNeeded == nil)
+        harness.model.handle(.ended)
+
+        harness.model.panelFrameProvider = { frame }
         #expect(harness.model.catcherFrameNeeded == nil)
         harness.enterHotRect()
         #expect(harness.model.catcherFrameNeeded == frame)
         harness.model.handle(.ended)
         #expect(harness.model.catcherFrameNeeded == nil)
+    }
+
+    /// The hot rect is 300×121 from the top of the screen; the panel is 140 tall. A
+    /// cursor heading into the bottom of a card therefore leaves the rect *before* it
+    /// drops, and the dismiss that arms there must not survive the drop.
+    @Test func aDropCancelsAPendingLeaveDebounce() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+
+        harness.model.handle(.leftHotRect)
+        harness.clock.advance(by: .milliseconds(100))
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        #expect(harness.model.phase == .settling)
+
+        // The leave was due 200 ms into this advance; only the settle may fire.
+        harness.clock.advance(by: .milliseconds(399))
+        #expect(harness.presenter.dismissed.isEmpty)
+        #expect(harness.model.isZonesShown)
+
+        harness.clock.advance(by: .milliseconds(1))
+        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(harness.model.phase == .stashed)
+    }
+
+    /// The same crossing, seen the other way round: while a drop is in flight the leave
+    /// is not even armed, so nothing is left to cancel.
+    @Test func leavingTheHotRectWhileADropSettlesArmsNothing() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+
+        harness.model.handle(.leftHotRect)
+        #expect(harness.clock.pendingCount == 1)  // the settle, and nothing else
+    }
+
+    @Test func aNewDragEnteringWhileSettlingKeepsTheSettleCard() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+
+        harness.model.handle(.enteredHotRect)
+
+        #expect(harness.model.phase == .settling)
+        #expect(harness.model.animationState.isSettling)
+        #expect(harness.presenter.presented.count == 1)
+        harness.clock.advance(by: .milliseconds(400))
+        #expect(harness.presenter.dismissed == [zonesID])
     }
 }
 
@@ -490,6 +549,95 @@ private final class Harness {
         #expect(stored.files.isEmpty)
     }
 
+    /// The copy is a real hop onto the store's actor, and the mouse-up that delivered the
+    /// drop — plus the hot-rect crossing that came with it — reach the global monitor
+    /// while it is still running. `beforeStash` holds the drop open in `.dropped` so that
+    /// window can be driven deterministically.
+    @Test func dragEventsDuringTheCopyLeaveTheSettleCardAlone() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let file = try harness.makeFile("a.txt")
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+
+        var ranHook = false
+        harness.model.beforeStash = { [model = harness.model, clock = harness.clock, presenter = harness.presenter] in
+            ranHook = true
+            #expect(model.phase == .dropped(pending: [file]))
+            model.handle(.leftHotRect)
+            model.handle(.ended)
+            // Neither armed anything, and neither tore the panel down on the spot.
+            #expect(clock.pendingCount == 0)
+            clock.advance(by: .seconds(1))
+            #expect(presenter.dismissed.isEmpty)
+            #expect(model.isZonesShown)
+        }
+
+        await harness.model.drop(urls: [file], on: .stash)
+
+        #expect(ranHook)
+        #expect(harness.model.phase == .settling)
+        #expect(harness.presenter.dismissed.isEmpty)
+
+        harness.clock.advance(by: .milliseconds(400))
+        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(harness.model.phase == .stashed)
+        #expect(harness.presenter.liveCard(.background) != nil)
+    }
+
+    @Test func aSecondDropWhileSettlingIsAppliedAndRestartsTheSettle() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.settings.stashDropAction = .add
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+
+        harness.clock.advance(by: .milliseconds(200))
+        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .stash)
+
+        #expect(harness.model.index.files.map(\.name) == ["a.txt", "b.txt"])
+        #expect(harness.model.phase == .settling)
+        // The first drop's settle was due here and must have been replaced, not stacked.
+        harness.clock.advance(by: .milliseconds(399))
+        #expect(harness.presenter.dismissed.isEmpty)
+
+        harness.clock.advance(by: .milliseconds(1))
+        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(harness.model.phase == .stashed)
+    }
+
+    /// A settle belongs to the showing of the panel it was armed in. If that card has
+    /// already gone — here an AirDrop drop took it — the settle must hand the files to
+    /// the peek without dismissing whatever card is on screen by then.
+    @Test func aStaleSettleDoesNotDismissAFreshPanel() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let firstID = try #require(harness.presenter.presented.first?.id)
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        #expect(harness.model.phase == .settling)
+
+        harness.clock.advance(by: .milliseconds(100))
+        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .airDrop)
+        #expect(harness.presenter.dismissed == [firstID])
+
+        harness.clock.advance(by: .milliseconds(250))
+        harness.enterHotRect()
+        let secondID = try #require(harness.presenter.presented.last?.id)
+        #expect(secondID != firstID)
+
+        harness.clock.advance(by: .milliseconds(50))  // the first drop's 400 ms is up
+
+        #expect(harness.presenter.dismissed == [firstID])
+        #expect(harness.model.isZonesShown)
+        #expect(harness.presenter.live[secondID] != nil)
+        #expect(harness.model.phase == .hovering)
+        // The files still reached the peek: only the teardown was skipped.
+        #expect(harness.presenter.liveCard(.background) != nil)
+        #expect(harness.model.index.files.map(\.name) == ["a.txt"])
+    }
+
     @Test func aDropWithNoFilesIsTreatedAsADragThatJustEnded() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
@@ -539,7 +687,13 @@ private final class Harness {
         try await stashOneFile(harness)
         let peekID = try #require(harness.presenter.liveCard(.background)?.id)
         harness.model.dragOutBegan()
+        // The drag-out passes back over the notch, so the panel opens on the stash card
+        // alone; the mouse-up that ends the drag closes it again.
+        harness.enterHotRect()
+        let dragCardID = try #require(harness.presenter.presented.last?.id)
+        #expect(harness.model.zones == [.stash])
         harness.model.handle(.ended)
+        #expect(harness.presenter.dismissed.contains(dragCardID))
 
         harness.model.dragOutEnded(completed: true)
         #expect(harness.model.dragOutPhase == .completed)
@@ -564,14 +718,56 @@ private final class Harness {
         try await stashOneFile(harness)
         let peekID = try #require(harness.presenter.liveCard(.background)?.id)
 
+        harness.model.dragOutBegan()
         harness.model.dragOutEnded(completed: false)
         harness.clock.advance(by: .seconds(1))
 
-        #expect(harness.model.dragOutPhase == .idle)
+        // `.cancelled` stays put rather than hopping back to `.idle` where nothing could
+        // ever observe it; the panel does not read it, so the zones are whole again.
+        #expect(harness.model.dragOutPhase == .cancelled)
+        #expect(harness.model.zones == [.airDrop, .stash])
         #expect(harness.model.index.files.count == 1)
         #expect(harness.presenter.live[peekID] != nil)
         let stored = await harness.store.load()
         #expect(stored.files.count == 1)
+
+        // The next drag-out takes it over.
+        harness.model.dragOutBegan()
+        #expect(harness.model.dragOutPhase == .dragging)
+    }
+
+    @Test func aDropClearsACancelledDragOut() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stashOneFile(harness)
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: false)
+
+        harness.enterHotRect()
+        await harness.model.drop(urls: [try harness.makeFile("b.txt")], on: .stash)
+
+        #expect(harness.model.dragOutPhase == .idle)
+        #expect(harness.model.index.files.map(\.name) == ["b.txt"])
+    }
+
+    /// A drag-out can start out of the peek while the previous drop is still settling.
+    /// The panel narrows to the stash card, and the settle still runs to its end.
+    @Test func aDragOutBeginningWhileSettlingKeepsTheSettleGoing() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.enterHotRect()
+        let zonesID = try #require(harness.presenter.presented.first?.id)
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        #expect(harness.model.phase == .settling)
+
+        harness.model.dragOutBegan()
+        #expect(harness.model.zones == [.stash])
+        #expect(harness.model.phase == .settling)
+
+        harness.clock.advance(by: .milliseconds(400))
+        #expect(harness.presenter.dismissed == [zonesID])
+        #expect(harness.model.phase == .stashed)
+        #expect(harness.presenter.liveCard(.background) != nil)
     }
 }
 
