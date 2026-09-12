@@ -10,7 +10,12 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "-"
+    # A self-signed "Notch Dev" certificate in the login keychain (created with openssl +
+    # `security import`), not ad-hoc: an ad-hoc signature changes with every build, so
+    # Keychain treated each rebuild as a new app and asked for the Claude Code credentials
+    # again. A stable identity makes "Always Allow" stick. Falls back to ad-hoc where the
+    # certificate is absent (another machine).
+    CODE_SIGN_IDENTITY: "Notch Dev"
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: false
     MACOSX_DEPLOYMENT_TARGET: "26.0"
