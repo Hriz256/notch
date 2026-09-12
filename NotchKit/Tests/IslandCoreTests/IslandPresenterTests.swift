@@ -343,7 +343,7 @@ struct IslandPresenterTests {
         #expect(p.state == .peek(a.id))
     }
 
-    @Test func alertStillWinsOverPin() {
+    @Test func transientAlertStillWinsOverPin() {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a")
         let b = makePresentation(feature: "b")
@@ -352,7 +352,7 @@ struct IslandPresenterTests {
         p.cycle(.next)
         #expect(p.current?.id == a.id)
 
-        let alert = makePresentation(feature: "devices", priority: .alert)
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(4))
         p.present(alert)
         #expect(p.current?.id == alert.id)
         // The pin survives the interruption and takes over again once it clears.
@@ -388,7 +388,7 @@ struct IslandPresenterTests {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a")
         let b = makePresentation(feature: "b", priority: .activity)
-        let alert = makePresentation(feature: "devices", priority: .alert)
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(4))
         let c = makePresentation(feature: "c")
         p.present(a)
         p.present(b)
@@ -489,17 +489,31 @@ struct IslandPresenterTests {
         #expect(p.current?.id == b.id)
     }
 
-    /// Alerts are interruptions, not cards: they never enter the stack, so they cannot be
-    /// pinned either — pinning one would outlive the alert's own priority.
-    @Test func pinIgnoresAnAlert() {
+    /// A *transient* alert is an interruption, not a card: it never enters the stack, so it
+    /// cannot be pinned either — the pin would outlive the alert itself.
+    @Test func pinIgnoresATransientAlert() {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a")
-        let alert = makePresentation(feature: "devices", priority: .alert)
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(4))
         p.present(a)
         p.present(alert)
         p.pin(alert.id)
         #expect(p.pinnedID == nil)
         #expect(p.current?.id == alert.id)
+    }
+
+    /// A sticky alert, though, is a card the feature has merely raised to the top — the
+    /// Code feature's waiting-for-you prompt. It is pinnable like any other.
+    @Test func pinAcceptsAStickyAlert() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let waiting = makePresentation(feature: "code", priority: .alert)
+        p.present(a)
+        p.present(waiting)
+        #expect(p.stack.map(\.id) == [a.id, waiting.id])
+        p.pin(waiting.id)
+        #expect(p.pinnedID == waiting.id)
+        #expect(p.current?.id == waiting.id)
     }
 
     @Test func unpinRestoresTheQueueWinner() {
@@ -541,13 +555,13 @@ struct IslandPresenterTests {
 
     // MARK: Cards menu contents
 
-    /// What the Cards menu lists, in the order it lists it: insertion order, alerts left
-    /// out, with `stackIndex` marking the row that gets the checkmark.
+    /// What the Cards menu lists, in the order it lists it: insertion order, transient
+    /// alerts left out, with `stackIndex` marking the row that gets the checkmark.
     @Test func cardsListIsTheStackInInsertionOrder() {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a", title: "Music")
         let b = makePresentation(feature: "b", priority: .activity)
-        let alert = makePresentation(feature: "devices", priority: .alert)
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(4))
         let c = makePresentation(feature: "c")
         p.present(a)
         p.present(b)
@@ -572,5 +586,146 @@ struct IslandPresenterTests {
         let p = IslandPresenter(clock: ManualClock())
         #expect(p.stack.isEmpty)
         #expect(p.stackIndex == nil)
+    }
+
+    // MARK: Music + a busy coding agent
+    //
+    // The shape the user hit: Spotify queues a `.background` card, a Claude Code session
+    // queues one long-lived card it mutates in place on every hook event, and each finished
+    // session throws a separate 4 s alert on top.
+
+    /// The pin has to outlast everything a working agent does to the queue.
+    @Test func pinSurvivesUpdatesAndTransientAlerts() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        #expect(p.current?.id == code.id)
+
+        p.cycle(.next)
+        #expect(p.current?.id == music.id)
+
+        // A hook event re-renders the code card in place.
+        p.update(makePresentation(feature: "code", priority: .activity).withID(code.id))
+        #expect(p.pinnedID == music.id)
+        #expect(p.current?.id == music.id)
+
+        // A session finishes: its alert takes the island for exactly its ttl.
+        let alert = makePresentation(feature: "code", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        #expect(p.current?.id == alert.id)
+        #expect(p.pinnedID == music.id)
+        clock.advance(by: .seconds(4))
+        #expect(p.current?.id == music.id)
+
+        // The agent goes away; the pin is still the user's choice.
+        p.dismiss(code.id)
+        #expect(p.pinnedID == music.id)
+        #expect(p.current?.id == music.id)
+
+        // Only losing the pinned card itself clears the pin.
+        p.dismiss(music.id)
+        #expect(p.pinnedID == nil)
+        #expect(p.current == nil)
+    }
+
+    /// A card the feature raised to `.alert` to ask for attention is still a card. Dropping
+    /// it out of the stack shrank the stack to one and made ``cycle(_:)`` a silent no-op.
+    @Test func stickyAlertStaysInTheStackAndCanBeCycledPast() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let waiting = makePresentation(feature: "code", priority: .alert)
+        p.present(music)
+        p.present(waiting)
+        #expect(p.stack.count == 2)
+        #expect(p.current?.id == waiting.id)
+
+        p.cycle(.next)
+        #expect(p.pinnedID == music.id)
+        #expect(p.current?.id == music.id)
+        #expect(p.state == .peek(music.id))
+    }
+
+    /// The stage flip that used to resize the dots on every hook event: `.activity` while
+    /// the agent works, `.alert` while it waits, same card throughout.
+    @Test func stackSizeIsSteadyAcrossPriorityFlips() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        p.cycle(.next)
+
+        for priority in [Priority.alert, .activity, .alert, .activity] {
+            p.update(makePresentation(feature: "code", priority: priority).withID(code.id))
+            #expect(p.stack.count == 2)
+            #expect(p.pinnedID == music.id)
+            #expect(p.current?.id == music.id)
+        }
+    }
+
+    /// With two cards, both directions land on the other one.
+    @Test func bothDirectionsReachTheOtherCardOfTwo() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        #expect(p.current?.id == code.id)
+        p.cycle(.next)
+        #expect(p.current?.id == music.id)
+        p.cycle(.next)
+        #expect(p.current?.id == code.id)
+        p.cycle(.previous)
+        #expect(p.current?.id == music.id)
+    }
+
+    /// `update` must not restart a running countdown, or an alert the feature re-renders
+    /// every second would never expire.
+    @Test func updateDoesNotRestartTheTTL() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let alert = makePresentation(feature: "code", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        clock.advance(by: .seconds(3))
+        p.update(makePresentation(feature: "code", priority: .alert, ttl: .seconds(4)).withID(alert.id))
+        clock.advance(by: .seconds(1))
+        #expect(p.current == nil)
+    }
+
+    /// Losing the ttl turns an interruption into a card, and it needs the timer cancelled
+    /// with it — otherwise the card vanishes out of the stack on the old countdown.
+    @Test func updateThatDropsTheTTLCancelsTheTimer() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let alert = makePresentation(feature: "code", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        #expect(p.stack.isEmpty)
+        p.update(makePresentation(feature: "code", priority: .alert).withID(alert.id))
+        clock.advance(by: .seconds(10))
+        #expect(p.stack.map(\.id) == [alert.id])
+        #expect(p.current?.id == alert.id)
+    }
+}
+
+private extension Presentation {
+    /// A copy of this presentation under an existing id — what a feature does when it
+    /// re-renders its long-lived card in place.
+    @MainActor
+    func withID(_ id: PresentationID) -> Presentation {
+        Presentation(
+            id: id,
+            featureID: featureID,
+            title: title,
+            priority: priority,
+            style: style,
+            ttl: ttl,
+            leading: leading,
+            trailing: trailing,
+            expanded: expanded,
+            expandedSize: expandedSize
+        )
     }
 }

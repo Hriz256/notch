@@ -35,16 +35,27 @@ public final class IslandPresenter: IslandPresenting {
         self.clock = clock
     }
 
-    /// The cards the user can cycle between: everything queued below `.alert`, in insertion
-    /// order. Alerts are interruptions, not cards — they are never part of the stack.
+    /// The cards the user can cycle between: every *sticky* presentation — one with no
+    /// `ttl` — in insertion order, whatever its priority.
+    ///
+    /// Lifetime, not priority, is what separates a card from an interruption. A feature
+    /// raises its own long-lived card to `.alert` to ask for attention (the Code feature
+    /// does exactly that while an agent waits for the user), and that card is still a card:
+    /// dropping it out of the stack made the dots flicker on every hook event and shrank
+    /// the stack below two, which silently turned ``cycle(_:)`` into a no-op — the user
+    /// could no longer swipe back to Music. Only a presentation that expires on its own
+    /// (the 4 s completion alert) is a true interruption.
     public var stack: [Presentation] {
-        queue.filter { $0.priority < .alert }
+        queue.filter { $0.ttl == nil }
     }
 
-    /// An alert always wins; otherwise the pinned card, if the user picked one and it is
-    /// still queued; otherwise the plain queue winner.
+    /// A transient alert always wins for as long as it lives; otherwise the pinned card, if
+    /// the user picked one and it is still queued; otherwise the plain queue winner.
+    ///
+    /// The pin outranks a *sticky* alert on purpose: the user pointing at a card is a more
+    /// recent and more deliberate signal than a feature's standing request for attention.
     public var current: Presentation? {
-        if let alert = winner(in: queue.filter { $0.priority == .alert }) { return alert }
+        if let alert = winner(in: queue.filter { $0.priority == .alert && $0.ttl != nil }) { return alert }
         if let pinnedID, let pinned = stack.first(where: { $0.id == pinnedID }) { return pinned }
         return winner(in: queue)
     }
@@ -70,7 +81,13 @@ public final class IslandPresenter: IslandPresenting {
 
     public func update(_ presentation: Presentation) {
         guard let index = queue.firstIndex(where: { $0.id == presentation.id }) else { return }
+        let hadTTL = queue[index].ttl
         queue[index] = presentation
+        // An update must not restart a running countdown — a feature that refreshes its
+        // alert every second would otherwise keep it alive forever. It must still arm (or
+        // cancel) one when the lifetime itself changed, or a card could leave ``stack``
+        // with no timer to ever take it off screen.
+        if hadTTL != presentation.ttl { armTTL(for: presentation) }
         queueDidChange()
     }
 
@@ -96,7 +113,12 @@ public final class IslandPresenter: IslandPresenting {
     /// hover promotion alone unless the new card cannot be expanded at all.
     public func cycle(_ direction: CycleDirection) {
         let stack = stack
-        guard stack.count > 1, let index = stackIndex else { return }
+        guard stack.count > 1, let index = stackIndex else {
+            // The no-op is logged too: without it a swipe that arrives and finds a
+            // one-card stack is indistinguishable in the log from one that never arrived.
+            logger.info("cycle ignored — stack of \(stack.count, privacy: .public)")
+            return
+        }
         let offset = direction == .next ? 1 : stack.count - 1
         let id = stack[(index + offset) % stack.count].id
         pinnedID = id
@@ -106,9 +128,9 @@ public final class IslandPresenter: IslandPresenting {
 
     /// Pins a card the user picked by name (the Cards menu) rather than by cycling.
     ///
-    /// Ignored unless the id is in ``stack``: alerts are interruptions rather than cards,
-    /// and a card that has already left the queue must not be resurrected as a stale pin
-    /// that ``queueDidChange()`` would drop on the next change anyway.
+    /// Ignored unless the id is in ``stack``: a transient alert is an interruption rather
+    /// than a card, and a card that has already left the queue must not be resurrected as a
+    /// stale pin that ``queueDidChange()`` would drop on the next change anyway.
     public func pin(_ id: PresentationID) {
         guard pinnedID != id, stack.contains(where: { $0.id == id }) else { return }
         pinnedID = id

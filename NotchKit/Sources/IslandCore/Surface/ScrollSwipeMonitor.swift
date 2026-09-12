@@ -85,7 +85,10 @@ public final class ScrollSwipeMonitor {
             now: Date()
         )
         guard let direction else { return }
-        logger.debug("island swipe \(direction == .next ? "next" : "previous", privacy: .public)")
+        // Info, not debug: this is one half of the swipe trail, and a `log show --info`
+        // after the fact is the only way to tell "the gesture never fired" apart from
+        // "it fired and the presenter ignored it". Debug lines are not retained.
+        logger.info("island swipe \(direction == .next ? "next" : "previous", privacy: .public)")
         onSwipe(direction)
     }
 }

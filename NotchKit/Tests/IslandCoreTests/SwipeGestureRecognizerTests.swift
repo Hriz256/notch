@@ -105,13 +105,37 @@ struct SwipeGestureRecognizerTests {
         #expect(feed(&r, deltaX: -60, phase: [], momentum: .ended) == nil)
     }
 
-    @Test func eventsOutsideTheIslandAreIgnoredAndCancelTheGesture() {
+    @Test func aGestureThatBeginsOutsideTheIslandNeverFires() {
+        var r = SwipeGestureRecognizer()
+        _ = feed(&r, deltaX: 0, phase: .began, isOverIsland: false)
+        #expect(feed(&r, deltaX: -20) == nil)
+        #expect(feed(&r, deltaX: -20) == nil)
+        _ = feed(&r, deltaX: 0, phase: .ended)
+        // The next gesture starts clean, and this one does begin inside.
+        _ = feed(&r, deltaX: 0, phase: .began)
+        #expect(feed(&r, deltaX: -20) == .next)
+    }
+
+    /// The regression this latch exists for: the island rect is derived from whichever card
+    /// is on screen, so a card arriving mid-swipe resizes it out from under a stationary
+    /// pointer. Containment is decided once, at the start of the gesture.
+    @Test func aGestureSurvivesTheIslandResizingUnderThePointer() {
         var r = SwipeGestureRecognizer()
         _ = feed(&r, deltaX: 0, phase: .began)
-        #expect(feed(&r, deltaX: -8) == nil)
-        #expect(feed(&r, deltaX: -8, isOverIsland: false) == nil)
-        // The pointer left: the travel so far is discarded.
-        #expect(feed(&r, deltaX: -8) == nil)
+        #expect(feed(&r, deltaX: -6) == nil)
+        #expect(feed(&r, deltaX: -6, isOverIsland: false) == .next)
+    }
+
+    /// Real trackpad deltas: `.began` carries nothing, then a few points at a time.
+    @Test func typicalTrackpadDeltasFireExactlyOnce() {
+        var r = SwipeGestureRecognizer()
+        #expect(feed(&r, deltaX: 0, phase: .began) == nil)
+        #expect(feed(&r, deltaX: -4) == nil)
+        #expect(feed(&r, deltaX: -5) == nil)
+        #expect(feed(&r, deltaX: -6) == .next)
+        for _ in 0..<5 {
+            #expect(feed(&r, deltaX: -6, phase: [], momentum: .changed) == nil)
+        }
     }
 
     @Test func mayBeginDoesNotFire() {

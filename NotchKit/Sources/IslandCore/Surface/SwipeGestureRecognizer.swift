@@ -21,6 +21,9 @@ public struct SwipeGestureRecognizer {
     private var accumulatedX: CGFloat = 0
     private var didFireInGesture = false
     private var lastWheelFire: Date?
+    /// Whether the gesture in flight started over the island. Latched on the first event of
+    /// the gesture and reused for the rest of it — see ``receive(deltaX:phase:momentum:isOverIsland:now:)``.
+    private var isGestureOverIsland: Bool?
 
     public init() {}
 
@@ -44,15 +47,12 @@ public struct SwipeGestureRecognizer {
     ) -> IslandPresenter.CycleDirection? {
         // Momentum is the tail of a gesture that already fired; it must never fire again.
         guard rawMomentum == 0 else { return nil }
-        // An event outside the island also cancels a gesture that started inside it.
-        guard isOverIsland() else {
-            reset()
-            return nil
-        }
 
         let phase = NSEvent.Phase(rawValue: rawPhase)
         guard !phase.isEmpty else {
-            // Phase-less wheel tick: fire per tick, rate-limited.
+            // Phase-less wheel tick: no gesture to belong to, so the pointer is tested live.
+            guard isOverIsland() else { return nil }
+            // Fire per tick, rate-limited.
             guard abs(deltaX) >= Self.threshold else { return nil }
             if let lastWheelFire, now.timeIntervalSince(lastWheelFire) < Self.wheelInterval { return nil }
             lastWheelFire = now
@@ -64,6 +64,21 @@ public struct SwipeGestureRecognizer {
             reset()
             return nil
         }
+        // Containment is decided once per gesture, at its first event, and latched.
+        //
+        // Re-testing it per event used to cancel gestures that had every right to fire: the
+        // island rect is derived from whatever card is on screen, so a card arriving
+        // mid-swipe (a completion alert, a stage change) resizes it under a stationary
+        // pointer and the gesture died silently. Latching also means the rect lookup — the
+        // expensive half of this call — happens once instead of on every `.changed` event.
+        let isInside: Bool
+        if let isGestureOverIsland {
+            isInside = isGestureOverIsland
+        } else {
+            isInside = isOverIsland()
+            isGestureOverIsland = isInside
+        }
+        guard isInside else { return nil }
         accumulatedX += deltaX
         guard !didFireInGesture, abs(accumulatedX) >= Self.threshold else { return nil }
         didFireInGesture = true
@@ -75,6 +90,7 @@ public struct SwipeGestureRecognizer {
     public mutating func reset() {
         accumulatedX = 0
         didFireInGesture = false
+        isGestureOverIsland = nil
     }
 
     /// Natural direction: fingers moving left (negative delta) pull the next card in.
