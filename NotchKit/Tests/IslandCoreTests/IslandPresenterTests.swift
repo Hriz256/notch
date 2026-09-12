@@ -156,14 +156,60 @@ struct IslandPresenterTests {
         #expect(p.state == .peek(music.id))
     }
 
+    /// Hover decides whether the current card is open, never *which* card is current: the
+    /// alert stays on top of the background card the pointer is over.
     @Test func hoverNeverOverridesAlert() {
         let clock = ManualClock()
         let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
         let alert = makePresentation(feature: "devices", priority: .alert, style: .peek)
+        p.present(music)
         p.present(alert)
         p.setHovering(true)
         clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.current?.id == alert.id)
+        #expect(p.state == .expanded(alert.id))
+    }
+
+    /// An alert that carries an expanded view is the only way to read a waiting-for-you
+    /// prompt: the detail lives in the panel, not in the 56 pt peek slot.
+    @Test func alertWithExpandedViewCanBeHoverPromoted() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let alert = makePresentation(feature: "code", priority: .alert)
+        p.present(alert)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.isHoverPromoted)
+        #expect(p.state == .expanded(alert.id))
+    }
+
+    @Test func alertWithoutExpandedViewCannotBeHoverPromoted() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let alert = makePresentation(feature: "devices", priority: .alert, hasExpanded: false)
+        p.present(alert)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.isHoverPromoted == false)
         #expect(p.state == .peek(alert.id))
+    }
+
+    /// A session going from working to waiting-for-you raises the same card to `.alert`;
+    /// that must not slam an already-open panel shut under the pointer.
+    @Test func arrivingAlertWithExpandedKeepsHoverPromotion() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let background = makePresentation(feature: "code")
+        p.present(background)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(background.id))
+
+        let alert = makePresentation(feature: "code", priority: .alert)
+        p.present(alert)
+        #expect(p.isHoverPromoted)
+        #expect(p.state == .expanded(alert.id))
     }
 
     @Test func hoverDoesNothingWithoutExpandedView() {
@@ -219,7 +265,9 @@ struct IslandPresenterTests {
         let clock = ManualClock()
         let p = IslandPresenter(clock: clock)
         let music = makePresentation(feature: "music")
-        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(1))
+        // No expanded view, so hovering the alert cannot open anything.
+        let alert = makePresentation(
+            feature: "devices", priority: .alert, ttl: .seconds(1), hasExpanded: false)
         p.present(music)
         p.present(alert)
         p.setHovering(true)

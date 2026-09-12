@@ -47,9 +47,7 @@ public final class IslandPresenter: IslandPresenting {
     public var state: IslandState {
         guard let current else { return .collapsed }
         if current.style == .expanded { return .expanded(current.id) }
-        if isHoverPromoted, current.priority < .alert, current.expanded != nil {
-            return .expanded(current.id)
-        }
+        if isHoverPromoted, current.expanded != nil { return .expanded(current.id) }
         return .peek(current.id)
     }
 
@@ -143,11 +141,15 @@ public final class IslandPresenter: IslandPresenting {
         }
     }
 
-    /// A presentation can be hover-promoted only if it exists, is not an alert, has an
-    /// expanded view, and is not already showing expanded by its own style.
+    /// A presentation can be hover-promoted only if it exists, carries an expanded view, and
+    /// is not already showing expanded by its own style.
+    ///
+    /// Alerts are included: an alert's priority decides *which* presentation is shown, not
+    /// whether the user may open it. Excluding them made the whole class unopenable — the
+    /// Code feature's waiting-for-you prompt could never show what it was waiting for.
     private var isHoverEligible: Bool {
         guard let current else { return false }
-        return current.style == .peek && current.priority < .alert && current.expanded != nil
+        return current.style == .peek && current.expanded != nil
     }
 
     /// The winner may have changed: keep the pin and the promotion in sync with what is
