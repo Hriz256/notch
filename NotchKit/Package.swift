@@ -18,13 +18,13 @@ let package = Package(
         .target(name: "NowPlayingClient", dependencies: ["NowPlayingShared"]),
         .target(name: "MusicFeature", dependencies: ["IslandCore", "NowPlayingShared", "NowPlayingClient"]),
         .target(name: "CodeAgentShared"),
-        .target(name: "CodeAgentFeature", dependencies: ["IslandCore", "CodeAgentShared", "NowPlayingShared"]),
+        .target(name: "CodeAgentFeature", dependencies: ["IslandCore", "CodeAgentShared"]),
         .testTarget(name: "IslandCoreTests", dependencies: ["IslandCore"]),
         .testTarget(name: "NowPlayingSharedTests", dependencies: ["NowPlayingShared"]),
         .testTarget(name: "NowPlayingClientTests", dependencies: ["NowPlayingClient", "NowPlayingShared"]),
         .testTarget(name: "MusicFeatureTests", dependencies: ["MusicFeature", "IslandCore", "NowPlayingShared", "NowPlayingClient"]),
         .testTarget(name: "CodeAgentSharedTests", dependencies: ["CodeAgentShared"]),
-        .testTarget(name: "CodeAgentFeatureTests", dependencies: ["CodeAgentFeature", "IslandCore", "CodeAgentShared", "NowPlayingShared"]),
+        .testTarget(name: "CodeAgentFeatureTests", dependencies: ["CodeAgentFeature", "IslandCore", "CodeAgentShared"]),
     ],
     swiftLanguageModes: [.v6]
 )

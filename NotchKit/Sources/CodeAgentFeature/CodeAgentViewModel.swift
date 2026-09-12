@@ -159,6 +159,8 @@ public final class CodeAgentViewModel {
     @ObservationIgnored private var alertID: PresentationID?
     @ObservationIgnored private var alertToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
+    /// How many expanded panels are on screen and want the 1 Hz clock.
+    @ObservationIgnored private var visiblePanels = 0
     /// The finished session the current alert is about, kept so the views can render its
     /// stage for as long as the alert is up. Observed (not `@ObservationIgnored`) because
     /// ``displayedSession`` hands it to the views.
@@ -166,8 +168,9 @@ public final class CodeAgentViewModel {
     /// Set by ``teardown()``. Observation callbacks armed before the teardown can still
     /// fire afterwards; this stops them from re-presenting a dismissed island.
     @ObservationIgnored private var isTornDown = false
-    /// `session key → lastEventAt of the finish we already alerted about`. Keyed by the
-    /// event time so a revived session that finishes again alerts again.
+    /// `session key → startedAt of the run we already alerted about`. Keyed by the run's
+    /// start so a revived session that finishes again alerts again, while the two events
+    /// that end one run (Stop, SessionEnd) share a single alert.
     @ObservationIgnored private var alertedFinishes: [String: Date] = [:]
     /// Coalesces the refresh that observation asks for, so one burst of events is one refresh.
     @ObservationIgnored private var observationTask: Task<Void, Never>?
@@ -290,7 +293,8 @@ public final class CodeAgentViewModel {
     /// nothing it observes can bring the island back.
     public func teardown() {
         isTornDown = true
-        stopTicking()
+        visiblePanels = 0
+        cancelTick()
         observationTask?.cancel()
         observationTask = nil
         alertToken?.cancel()
@@ -334,7 +338,7 @@ public final class CodeAgentViewModel {
 
     private func apply() {
         let active = tracker.activeSession
-        displayedAgent = active?.agent ?? settings.currentAgent
+        displayedAgent = active?.agent ?? currentEnabledAgent
 
         let newAlert = claimFinishedSession()
         if let newAlert { alertingSession = newAlert }
@@ -349,6 +353,15 @@ public final class CodeAgentViewModel {
         usage.isSessionActive = tracker.activeCount > 0
     }
 
+    /// The user's agent, or — once they switch it off — the first one still enabled. With
+    /// nothing enabled this settles on `.claude` and ``updateMain(_:)`` presents nothing:
+    /// the views always need *an* agent to render against, even with no card on screen.
+    private var currentEnabledAgent: Agent {
+        let current = settings.currentAgent
+        if settings.isEnabled(current) { return current }
+        return settings.enabledAgents.first ?? .claude
+    }
+
     /// The finished session that still needs an alert, marking it as claimed. `nil` when the
     /// latest finish was already alerted about (a refresh must not re-fire the chime).
     private func claimFinishedSession() -> SessionTracker.Session? {
@@ -356,8 +369,12 @@ public final class CodeAgentViewModel {
 
         guard let finished = tracker.latestFinished else { return nil }
         let key = SessionTracker.key(agent: finished.agent, sessionID: finished.id)
-        guard alertedFinishes[key] != finished.lastEventAt else { return nil }
-        alertedFinishes[key] = finished.lastEventAt
+        // Keyed by `startedAt`, not by the event time: Claude Code reports the end of one run
+        // twice (Stop, then SessionEnd), and two chimes four seconds apart for one finished
+        // session reads as a bug. A session the user revives gets a fresh `startedAt`, so
+        // finishing it again does alert again.
+        guard alertedFinishes[key] != finished.startedAt else { return nil }
+        alertedFinishes[key] = finished.startedAt
         return finished
     }
 
@@ -379,10 +396,13 @@ public final class CodeAgentViewModel {
     private func updateElapsed(_ active: SessionTracker.Session?) {
         guard let active else {
             elapsed = 0
-            stopTicking()
+            cancelTick()
             return
         }
         elapsed = max(0, now().timeIntervalSince(active.startedAt))
+        // A panel that was already on screen when this session started never saw an
+        // `onAppear`, so this is the only place its clock can be restarted.
+        if visiblePanels > 0, tickToken == nil { tick() }
     }
 
     // MARK: - The main presentation
@@ -392,7 +412,10 @@ public final class CodeAgentViewModel {
             // An error is as much a reason to show the idle card as a snapshot is: "Open
             // Claude Code to sign in" is only actionable if the user can see it, and
             // presenting nothing is indistinguishable from the feature being off.
-            guard settings.showWhenIdle(displayedAgent), displayedUsage != nil || usageError != nil else {
+            guard settings.isEnabled(displayedAgent),
+                  settings.showWhenIdle(displayedAgent),
+                  displayedUsage != nil || usageError != nil
+            else {
                 dismissMain()
                 return
             }
@@ -497,19 +520,32 @@ public final class CodeAgentViewModel {
 
     // MARK: - Elapsed ticking (only while the expanded panel is visible)
 
+    /// Balanced against ``stopTicking()``. Both panels carry the same `onAppear`/`onDisappear`
+    /// pair, and SwiftUI appears the incoming one *before* it disappears the outgoing one, so
+    /// a plain flag would let the panel that is leaving stop the clock the arriving panel had
+    /// just started.
     public func startTicking() {
+        visiblePanels += 1
         guard tickToken == nil else { return }
         tick()
     }
 
     public func stopTicking() {
+        visiblePanels = max(0, visiblePanels - 1)
+        guard visiblePanels == 0 else { return }
+        cancelTick()
+    }
+
+    /// Stops the clock regardless of how many panels are on screen: there is simply nothing
+    /// left to count.
+    private func cancelTick() {
         tickToken?.cancel()
         tickToken = nil
     }
 
     private func tick() {
         guard let active = tracker.activeSession else {
-            stopTicking()
+            cancelTick()
             return
         }
         elapsed = max(0, now().timeIntervalSince(active.startedAt))

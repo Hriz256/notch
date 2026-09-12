@@ -249,7 +249,10 @@ public final class UsageRefreshCoordinator {
             if let previous = backoff[agent] {
                 delay = min(previous * 2, Self.maximumBackoff)
             } else {
-                delay = min(retryAfter ?? Self.defaultBackoff, Self.maximumBackoff)
+                // A floor, not just a default: this endpoint answers some 429s with a
+                // `Retry-After` of a few seconds, and honouring that walks straight back into
+                // the sticky rate-limit bucket the User-Agent exists to stay out of.
+                delay = min(max(retryAfter ?? Self.defaultBackoff, Self.defaultBackoff), Self.maximumBackoff)
             }
             backoff[agent] = delay
             logger.debug("\(agent.rawValue, privacy: .public) rate limited, retrying in \(delay)s")

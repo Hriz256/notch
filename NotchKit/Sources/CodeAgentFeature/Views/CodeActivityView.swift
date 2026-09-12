@@ -1,5 +1,5 @@
 import CodeAgentShared
-import NowPlayingShared
+import IslandCore
 import SwiftUI
 
 /// The expanded panel while a session is running, waiting or has just finished.

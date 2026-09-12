@@ -389,6 +389,70 @@ final class CodeAgentViewModelTests {
         #expect(f.presenter.presented.count == 2)
     }
 
+    /// Claude Code reports the end of a run twice — Stop, then SessionEnd — and both map to
+    /// `.completed`. Two chimes seconds apart for one finished run reads as a bug.
+    @Test func aSecondFinishEventForTheSameRunDoesNotChimeAgain() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+        f.vm.handle(f.event(.completed))
+        #expect(f.sound.count == 1)
+
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.completed))
+
+        #expect(f.sound.count == 1)
+        #expect(f.presenter.presented.count == 2)
+    }
+
+    /// A session the user picks back up is a new run, and its finish is worth announcing.
+    @Test func aRevivedSessionFinishingAgainAlertsAgain() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+        f.vm.handle(f.event(.completed))
+        #expect(f.sound.count == 1)
+
+        f.clock.advance(by: .seconds(2))
+        f.vm.handle(f.event(.thinking))
+        f.clock.advance(by: .seconds(2))
+        f.vm.handle(f.event(.completed))
+
+        #expect(f.sound.count == 2)
+        #expect(f.presenter.presented.count(where: { $0.priority == .alert }) == 2)
+    }
+
+    @Test func eventsFromADisabledAgentAreIgnored() {
+        let f = makeFixture(defaults: defaults)
+        f.settings.setEnabled(.codex, false)
+
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "c1"))
+
+        #expect(f.presenter.presented.isEmpty)
+        #expect(f.vm.activeSession == nil)
+        #expect(f.vm.visibleStage == nil)
+    }
+
+    /// With every agent switched off there is nothing the island is about, so it shows
+    /// nothing — and the displayed agent falls back to one that is still on.
+    @Test func disablingTheDisplayedAgentFallsBackAndThenDismisses() async throws {
+        let f = makeFixture(
+            results: [.claude: .success(usage(.claude)), .codex: .success(usage(.codex))],
+            defaults: defaults
+        )
+        await loadUsage(f)
+        let id = try #require(f.mainPresentation?.id)
+        #expect(f.vm.displayedAgent == .claude)
+
+        f.settings.setEnabled(.claude, false)
+        f.vm.refreshPresentation()
+        #expect(f.vm.displayedAgent == .codex)
+        #expect(f.presenter.live[id] != nil)
+
+        for agent in Agent.allCases { f.settings.setEnabled(agent, false) }
+        f.vm.refreshPresentation()
+        #expect(f.vm.displayedAgent == .claude)  // the placeholder the views render against
+        #expect(f.presenter.live.isEmpty)
+    }
+
     @Test func completedDoesNotChimeWhenTheSoundIsOff() {
         let f = makeFixture(defaults: defaults)
         f.settings.playCompleteSound = false
@@ -546,6 +610,34 @@ final class CodeAgentViewModelTests {
         f.vm.stopTicking()
         f.clock.advance(by: .seconds(10))
         #expect(f.vm.elapsed == 7)
+    }
+
+    /// SwiftUI appears the incoming panel before it disappears the outgoing one, so the two
+    /// overlap by a frame: the leaving panel's `stopTicking()` must not stop the clock the
+    /// arriving one just started.
+    @Test func aDisappearingPanelDoesNotStopTheClockANewOneStarted() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+
+        f.vm.startTicking()          // idle panel appears
+        f.vm.startTicking()          // activity panel appears over it
+        f.vm.stopTicking()           // idle panel goes away
+        f.clock.advance(by: .seconds(3))
+        #expect(f.vm.elapsed == 3)
+
+        f.vm.stopTicking()           // the last panel goes away
+        f.clock.advance(by: .seconds(5))
+        #expect(f.vm.elapsed == 3)
+    }
+
+    @Test func startTickingTwiceRunsOneClock() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+        f.vm.startTicking()
+        f.vm.startTicking()
+        f.clock.advance(by: .seconds(4))
+        // Two clocks would advance `elapsed` twice per second.
+        #expect(f.vm.elapsed == 4)
     }
 
     @Test func tickingStopsWhenTheSessionEnds() {

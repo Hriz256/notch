@@ -343,15 +343,15 @@ struct UsageRefreshCoordinatorTests {
     @Test func rateLimitUsesRetryAfterThenDoubles() async {
         let (coordinator, recorder, clock) = make(
             scripted: [
-                .failure(.rateLimited(retryAfter: 120)),
-                .failure(.rateLimited(retryAfter: 120)),
+                .failure(.rateLimited(retryAfter: 600)),
+                .failure(.rateLimited(retryAfter: 600)),
             ]
         )
         coordinator.start()
         await coordinator.settle()
         #expect(await recorder.calls == 1)
 
-        clock.advance(by: .seconds(119))
+        clock.advance(by: .seconds(599))
         await coordinator.settle()
         #expect(await recorder.calls == 1)
 
@@ -359,14 +359,32 @@ struct UsageRefreshCoordinatorTests {
         await coordinator.settle()
         #expect(await recorder.calls == 2)
 
-        // Second 429 doubles 120 → 240 rather than re-reading Retry-After.
-        clock.advance(by: .seconds(239))
+        // Second 429 doubles 600 → 1200 rather than re-reading Retry-After.
+        clock.advance(by: .seconds(1199))
         await coordinator.settle()
         #expect(await recorder.calls == 2)
 
         clock.advance(by: .seconds(1))
         await coordinator.settle()
         #expect(await recorder.calls == 3)
+    }
+
+    /// Five minutes is a floor, not just a default: this endpoint answers some 429s with a
+    /// `Retry-After` of seconds, and obeying that walks back into the sticky bucket.
+    @Test func aShortRetryAfterIsFlooredAtFiveMinutes() async {
+        let (coordinator, recorder, clock) = make(
+            scripted: [.failure(.rateLimited(retryAfter: 20))]
+        )
+        coordinator.start()
+        await coordinator.settle()
+
+        clock.advance(by: .seconds(299))
+        await coordinator.settle()
+        #expect(await recorder.calls == 1)
+
+        clock.advance(by: .seconds(1))
+        await coordinator.settle()
+        #expect(await recorder.calls == 2)
     }
 
     @Test func rateLimitWithoutRetryAfterFallsBackToFiveMinutes() async {
