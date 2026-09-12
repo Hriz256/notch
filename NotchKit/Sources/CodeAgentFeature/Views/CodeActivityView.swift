@@ -36,7 +36,12 @@ struct CodeActivityView: View {
     private var header: some View {
         HStack(spacing: 6) {
             AgentIcon(agent: model.displayedAgent, size: 18, isPulsing: stage == .thinking)
-            StageGlyph(stage: stage, size: 12)
+            // The same animated glyph the compact slot shows, so the card the user expands
+            // into is recognizably the one they were watching.
+            ActivityGlyph(
+                kind: ActivityKind.from(stage: stage, tool: session?.tool),
+                size: 12
+            )
             Text(StageGlyph.title(stage))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)

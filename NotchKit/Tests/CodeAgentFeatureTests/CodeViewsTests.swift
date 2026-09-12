@@ -25,6 +25,41 @@ struct CodeViewsTests {
         #expect(symbols.count == Self.allStages.count)
     }
 
+    @Test("The tool decides what the working stages are doing")
+    func activityKindFromTool() {
+        // A command and a file edit both arrive as `.creating`; only the tool tells them apart.
+        #expect(ActivityKind.from(stage: .creating, tool: "Bash") == .running)
+        #expect(ActivityKind.from(stage: .creating, tool: "shell") == .running)
+        #expect(ActivityKind.from(stage: .creating, tool: "Edit") == .editing)
+        #expect(ActivityKind.from(stage: .creating, tool: "apply_patch") == .editing)
+        #expect(ActivityKind.from(stage: .analyzing, tool: "Read") == .reading)
+        #expect(ActivityKind.from(stage: .analyzing, tool: "read_file") == .reading)
+        // A tool Notch does not know falls back to its stage rather than to nothing.
+        #expect(ActivityKind.from(stage: .analyzing, tool: "mcp__figma__get_file") == .reading)
+        #expect(ActivityKind.from(stage: .creating, tool: nil) == .editing)
+    }
+
+    @Test("Attention stages outrank the tool, and no session is idle")
+    func activityKindFromStage() {
+        #expect(ActivityKind.from(stage: .thinking, tool: nil) == .thinking)
+        #expect(ActivityKind.from(stage: .thinking, tool: "   ") == .thinking)
+        #expect(ActivityKind.from(stage: .waiting, tool: "Bash") == .waiting)
+        #expect(ActivityKind.from(stage: .completed, tool: "Edit") == .completed)
+        #expect(ActivityKind.from(stage: .failed, tool: "Bash") == .failed)
+        #expect(ActivityKind.from(stage: nil, tool: "Read") == .idle)
+    }
+
+    @Test("Only the silent kinds draw nothing, and the rest are distinguishable")
+    func activityKindSymbols() {
+        #expect(ActivityKind.thinking.symbol == nil)
+        #expect(ActivityKind.idle.symbol == nil)
+        #expect(ActivityKind.running.symbol == "terminal")
+        #expect(ActivityKind.waiting.symbol == "hand.raised.fill")
+        let drawn: [ActivityKind] = [.reading, .editing, .running, .waiting, .completed, .failed]
+        let symbols = Set(drawn.compactMap(\.symbol))
+        #expect(symbols.count == drawn.count)
+    }
+
     @Test("The Claude sprite is a well-formed 10 x 8 grid")
     func spriteGrid() {
         #expect(AgentIcon.claudeSprite.count == AgentIcon.spriteRows)

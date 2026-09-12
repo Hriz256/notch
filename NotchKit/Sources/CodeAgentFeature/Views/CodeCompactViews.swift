@@ -19,16 +19,18 @@ struct CodeCompactLeading: View {
     }
 }
 
-/// The island's trailing peek slot: the session ring while idle, the stage while working.
+/// The island's trailing peek slot: the session ring while idle, one animated glyph while
+/// working.
 ///
 /// The two are mutually exclusive by design — usage is the answer to "how much is left",
-/// which nobody asks while they are watching the agent type.
+/// which nobody asks while they are watching the agent type. No words either: 56 pt next
+/// to the notch is room for a symbol, and a six-character tool stump was never legible
+/// enough to earn the space. The full tool name is still in the expanded header.
 struct CodeCompactTrailing: View {
     let model: CodeAgentViewModel
 
-    /// Long tool names are cut rather than ellipsized: at 10 pt in the notch's corner the
-    /// "…" would cost a whole readable character.
-    static let toolLimit = 6
+    /// Big enough to read at arm's length, small enough to sit inside the notch's height.
+    static let glyphSize: CGFloat = 13
 
     var body: some View {
         content
@@ -37,25 +39,13 @@ struct CodeCompactTrailing: View {
 
     @ViewBuilder
     private var content: some View {
-        if let stage = model.visibleStage {
-            HStack(spacing: 4) {
-                StageGlyph(stage: stage, size: 12)
-                if let tool = Self.abbreviated(model.displayedSession?.tool) {
-                    Text(tool)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(1)
-                }
-            }
-        } else {
+        let kind = ActivityKind.from(stage: model.visibleStage, tool: model.displayedSession?.tool)
+        if kind == .idle {
             SessionRing(percent: model.displayedUsage?.session?.percent ?? 0)
+        } else {
+            // `.thinking` draws nothing: the pulsing agent icon on the other side of the
+            // notch already says the agent is between tools.
+            ActivityGlyph(kind: kind, size: Self.glyphSize)
         }
-    }
-
-    static func abbreviated(_ tool: String?) -> String? {
-        guard let tool else { return nil }
-        let trimmed = tool.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return String(trimmed.prefix(toolLimit))
     }
 }

@@ -10,15 +10,6 @@ import CodeAgentShared
 @MainActor
 struct CodeComposedViewsTests {
 
-    @Test("Tool names are cut to six characters and blanks disappear")
-    func toolAbbreviation() {
-        #expect(CodeCompactTrailing.abbreviated("Edit") == "Edit")
-        #expect(CodeCompactTrailing.abbreviated("WebSearch") == "WebSea")
-        #expect(CodeCompactTrailing.abbreviated("apply_patch") == "apply_")
-        #expect(CodeCompactTrailing.abbreviated(nil) == nil)
-        #expect(CodeCompactTrailing.abbreviated("   ") == nil)
-    }
-
     @Test("Bar labels round the percentage and name their window")
     func barLabels() {
         #expect(CodeUsageBars.label(8.4, "session") == "8% session")

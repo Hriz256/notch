@@ -63,10 +63,14 @@ public struct SurfaceView: View {
     /// One dot per card, hugging the right edge inside the black body. Purely decorative:
     /// it sits in an overlay with hit testing off, so neither the content's layout nor the
     /// tap target on the shape changes when the stack grows.
+    ///
+    /// Expanded only. In peek the two 56 pt slots run all the way to the shape's edges, so
+    /// the dots would land on top of whatever the front card is showing there — and the
+    /// card the user is looking at is the one the dots are about anyway.
     @ViewBuilder
     private func stackDots(layout: IslandLayout) -> some View {
         let count = presenter.stack.count
-        if count > 1, layout.mode != .collapsed {
+        if count > 1, layout.mode == .expanded {
             let index = presenter.stackIndex
             VStack(spacing: Self.dotSpacing) {
                 ForEach(0..<count, id: \.self) { position in
