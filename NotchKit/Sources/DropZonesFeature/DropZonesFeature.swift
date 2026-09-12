@@ -216,12 +216,26 @@ public final class DropZonesFeature: IslandFeature {
         // A little slack around the panel so a drop that lands a point or two outside a
         // card's edge still reaches the catcher; the hit test is against `panelFrame`, so
         // the extra area answers "no zone" and refuses the drag, exactly as a gap does.
-        catcher.show(frame: frame.insetBy(dx: -Self.catcherSlack, dy: -Self.catcherSlack))
+        catcher.show(frame: Self.catcherFrame(around: frame))
     }
 
-    /// How far the catcher's window extends past the panel on every side. Read by
-    /// ``ZonesPanelView``, which has to place the panel that same distance from its own
-    /// top and left edge for the cards to land where the hit test expects them.
+    /// The catcher window's frame for a panel: the panel grown by ``catcherSlack`` on the
+    /// left, right and bottom — never above the top. The panel's top edge is the screen's
+    /// top edge, and AppKit constrains a window whose frame pokes above the screen back
+    /// down onto it, which would shift the panel 20 pt below the notch and draw it as a
+    /// second, disconnected shape sliding out from under the hardware.
+    static func catcherFrame(around panel: CGRect) -> CGRect {
+        CGRect(
+            x: panel.minX - catcherSlack,
+            y: panel.minY - catcherSlack,
+            width: panel.width + 2 * catcherSlack,
+            height: panel.height + catcherSlack
+        )
+    }
+
+    /// How far the catcher's window extends past the panel on the left, right and
+    /// bottom. Read by ``ZonesPanelView``, which centres the panel and pins it to its
+    /// own top edge for the cards to land where the hit test expects them.
     static let catcherSlack: CGFloat = 20
 
     // MARK: - Status-menu surface

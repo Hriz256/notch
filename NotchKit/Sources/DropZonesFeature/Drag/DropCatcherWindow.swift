@@ -93,6 +93,13 @@ public final class DropCatcherWindow: NSPanel {
     public override var canBecomeKey: Bool { false }
     public override var canBecomeMain: Bool { false }
 
+    /// The frame is exactly what the owner asks for. AppKit's default nudges a window
+    /// whose frame reaches the screen's top edge (or past it) down onto the visible
+    /// area, which would move the panel off the notch it has to grow out of.
+    public override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+
     /// Puts the catcher over `frame` (screen coordinates) and starts accepting
     /// drags. Calling it again while shown just moves it, which is what happens
     /// as the panel widens under the cursor.

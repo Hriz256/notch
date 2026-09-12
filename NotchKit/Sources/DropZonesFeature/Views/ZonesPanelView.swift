@@ -13,9 +13,10 @@ import SwiftUI
 /// already had to exist to receive the drop, so it draws the panel too, and the island
 /// is suppressed to the bare notch underneath (``IslandPresenting/setSurfaceSuppressed(_:)``).
 ///
-/// Geometry: the catcher's frame is the panel's rect grown by ``slack`` on every side, so
-/// the panel sits `slack` points from this view's top and is centred across its width —
-/// which puts its top edge on the screen's top edge and its centre on the notch's, exactly
+/// Geometry: the catcher's frame is the panel's rect grown by ``slack`` on the left,
+/// right and bottom only (never above the screen, which AppKit would push back down),
+/// so the panel is pinned to this view's top edge and centred across its width — which
+/// puts its top edge on the screen's top edge and its centre on the notch's, exactly
 /// where the island's expanded panel used to be.
 ///
 /// Motion: the black shape grows out of the notch and shrinks back into it on the
@@ -77,7 +78,6 @@ struct ZonesPanelView: View {
             // doing, so the clip is what makes them appear out of the notch rather than
             // hanging outside it mid-animation.
             .clipShape(shape)
-            .padding(.top, slack)
             .animation(shown ? choreographer.geometry : choreographer.collapseGeometry, value: shown)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

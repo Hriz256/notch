@@ -436,12 +436,12 @@ struct StashLayoutRenderTests {
     /// The catcher window's content size: the panel grown by the slack on every side.
     static let catcherSize = CGSize(
         width: ZoneLayout.panelSize.width + 2 * DropZonesFeature.catcherSlack,
-        height: ZoneLayout.panelSize.height + 2 * DropZonesFeature.catcherSlack
+        height: ZoneLayout.panelSize.height + DropZonesFeature.catcherSlack
     )
 
     /// Where the panel's top-left corner lands inside that view — which puts its top edge
     /// on the screen's top edge and its centre on the notch's.
-    static let panelOrigin = CGPoint(x: DropZonesFeature.catcherSlack, y: DropZonesFeature.catcherSlack)
+    static let panelOrigin = CGPoint(x: DropZonesFeature.catcherSlack, y: 0)
 
     /// Renders the zones the way they are really shown: as `ZonesPanelView`, filling the
     /// drop catcher's window. That view owns the black shape, the slack the panel sits

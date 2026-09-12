@@ -141,9 +141,10 @@ private final class Harness {
         // because that is exactly the guarantee the drop path depends on.
         #expect(catcher.isVisible)
         #expect(catcher.catcherView.panelFrame == panel)
-        // The window is the panel plus a little slack on every side.
-        #expect(catcher.frame == panel.insetBy(dx: -DropZonesFeature.catcherSlack,
-                                               dy: -DropZonesFeature.catcherSlack))
+        // The window is the panel plus a little slack on the sides and below — never
+        // above the screen's top edge, where AppKit would constrain it back down.
+        #expect(catcher.frame == DropZonesFeature.catcherFrame(around: panel))
+        #expect(catcher.frame.maxY == panel.maxY)
 
         model.handle(.ended)
 
