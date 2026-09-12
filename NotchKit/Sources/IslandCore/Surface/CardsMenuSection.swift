@@ -48,7 +48,9 @@ public struct CardsMenuSection: View {
     @ViewBuilder
     private func rows(_ presenter: IslandPresenter) -> some View {
         let stack = presenter.stack
-        let index = presenter.stackIndex
+        // The *selected* card, not the dots' index: a menu opened while a 4 s alert is up
+        // must still say which card the island goes back to.
+        let index = presenter.selectedIndex
         if stack.isEmpty {
             Button("No cards") {}
                 .disabled(true)

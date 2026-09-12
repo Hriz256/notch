@@ -17,9 +17,13 @@ public final class IslandPresenter: IslandPresenting {
 
     public enum CycleDirection: Sendable { case next, previous }
 
-    /// Carries the whole card-selection trail — swipe, cycle, pin — under one category, so
-    /// `log stream --predicate 'category == "surface.swipe"'` shows a gesture end to end.
-    @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "surface.swipe")
+    /// Carries the whole card-selection trail — cycle, pin, unpin — under one category, so
+    /// `log stream --predicate 'category == "surface.cards"'` shows what the island is
+    /// showing and why. The gesture that *asked* for a cycle is logged by
+    /// ``ScrollSwipeMonitor`` under `surface.cards`' sibling, `surface.swipe`: detection and
+    /// outcome are separate questions, and reading the two together tells "the gesture never
+    /// fired" apart from "it fired and the stack had nowhere to go".
+    @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "surface.cards")
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private var ttlTokens: [PresentationID: ScheduledToken] = [:]
     @ObservationIgnored private var hoverToken: ScheduledToken?
@@ -49,15 +53,38 @@ public final class IslandPresenter: IslandPresenting {
         queue.filter { $0.ttl == nil }
     }
 
+    /// The interruption on screen right now, if any: a presentation that expires on its own.
+    ///
+    /// Lifetime is what makes it an interruption — the same rule ``stack`` is built on, read
+    /// the other way round. Every transient Notch presents today is an alert (the 4 s
+    /// completion card), which is why the property the views read is named for one; the
+    /// filter is on `ttl` so the two halves can never disagree and leave a presentation that
+    /// is neither a card nor an interruption.
+    private var transientAlert: Presentation? {
+        winner(in: queue.filter { $0.ttl != nil })
+    }
+
+    /// Whether ``current`` is a transient alert rather than one of the cards.
+    ///
+    /// The view reads this to dim every stack dot: a 4 s completion alert borrows the
+    /// island from whichever card is pinned, and lighting that card's dot while the alert's
+    /// own content is on screen told the user the island was on a page it was not.
+    public var isShowingTransientAlert: Bool { transientAlert != nil }
+
     /// A transient alert always wins for as long as it lives; otherwise the pinned card, if
-    /// the user picked one and it is still queued; otherwise the plain queue winner.
+    /// the user picked one and it is still queued; otherwise the winning *card*.
     ///
     /// The pin outranks a *sticky* alert on purpose: the user pointing at a card is a more
     /// recent and more deliberate signal than a feature's standing request for attention.
+    ///
+    /// The final fallback is the winner of ``stack``, not of the whole queue, so `current`
+    /// is always either the transient alert above or a member of the stack — nothing else
+    /// can be on screen, and every consumer (the dots, the cards menu, cycling) can rely on
+    /// that.
     public var current: Presentation? {
-        if let alert = winner(in: queue.filter { $0.priority == .alert && $0.ttl != nil }) { return alert }
+        if let alert = transientAlert { return alert }
         if let pinnedID, let pinned = stack.first(where: { $0.id == pinnedID }) { return pinned }
-        return winner(in: queue)
+        return winner(in: stack)
     }
 
     public var state: IslandState {
@@ -70,19 +97,23 @@ public final class IslandPresenter: IslandPresenting {
     // MARK: IslandPresenting
 
     public func present(_ presentation: Presentation) {
+        let previous = queue.first { $0.id == presentation.id }
         if let index = queue.firstIndex(where: { $0.id == presentation.id }) {
             queue[index] = presentation
         } else {
             queue.append(presentation)
         }
+        unpinForNewStickyAlert(presentation, previous: previous)
         armTTL(for: presentation)
         queueDidChange()
     }
 
     public func update(_ presentation: Presentation) {
         guard let index = queue.firstIndex(where: { $0.id == presentation.id }) else { return }
-        let hadTTL = queue[index].ttl
+        let previous = queue[index]
+        let hadTTL = previous.ttl
         queue[index] = presentation
+        unpinForNewStickyAlert(presentation, previous: previous)
         // An update must not restart a running countdown — a feature that refreshes its
         // alert every second would otherwise keep it alive forever. It must still arm (or
         // cancel) one when the lifetime itself changed, or a card could leave ``stack``
@@ -100,8 +131,19 @@ public final class IslandPresenter: IslandPresenting {
     // MARK: Card stack
 
     /// Index of the card the stack dots mark as current: the pinned one, else whichever
-    /// card would win on its own. `nil` while the stack is empty.
+    /// card would win on its own. `nil` while the stack is empty — and `nil` while a
+    /// transient alert owns the island, because then the island is not on a card at all and
+    /// a lit dot would point at a page the user is not looking at.
     var stackIndex: Int? {
+        isShowingTransientAlert ? nil : selectedIndex
+    }
+
+    /// Which card is *selected*: the pinned one, else whichever card would win on its own.
+    ///
+    /// Unlike ``stackIndex`` this ignores a transient alert, because the selection outlives
+    /// it — a swipe during the four seconds a completion alert is up still has to move the
+    /// card underneath it, and the Cards menu still has a row to check.
+    var selectedIndex: Int? {
         let stack = stack
         if let pinnedID, let index = stack.firstIndex(where: { $0.id == pinnedID }) { return index }
         guard let winner = winner(in: stack) else { return nil }
@@ -113,7 +155,7 @@ public final class IslandPresenter: IslandPresenting {
     /// hover promotion alone unless the new card cannot be expanded at all.
     public func cycle(_ direction: CycleDirection) {
         let stack = stack
-        guard stack.count > 1, let index = stackIndex else {
+        guard stack.count > 1, let index = selectedIndex else {
             // The no-op is logged too: without it a swipe that arrives and finds a
             // one-card stack is indistinguishable in the log from one that never arrived.
             logger.info("cycle ignored — stack of \(stack.count, privacy: .public)")
@@ -199,6 +241,26 @@ public final class IslandPresenter: IslandPresenting {
     private var isHoverEligible: Bool {
         guard let current else { return false }
         return current.style == .peek && current.expanded != nil
+    }
+
+    /// Drops the pin when another card starts *asking* for the user.
+    ///
+    /// A pin outranks a sticky alert — that is what lets the user keep watching Music while
+    /// the Code card waits — but only for the alert the pin was made against. Without this,
+    /// a card pinned once hid every later "waiting for you" prompt for the rest of the
+    /// session: the alert arrived, lost to the pin, and nothing ever cleared the pin, so the
+    /// island never said the agent was blocked.
+    ///
+    /// Only the *transition* into a sticky alert unpins. A feature that re-renders its
+    /// waiting card every second is still asking the same question, and re-clearing the pin
+    /// on every one of those updates would make the pin unusable while an agent waits.
+    private func unpinForNewStickyAlert(_ presentation: Presentation, previous: Presentation?) {
+        guard presentation.priority == .alert, presentation.ttl == nil else { return }
+        // Already alerting: this is a refresh of the same request, not a new one.
+        guard previous?.priority != .alert else { return }
+        guard let pinnedID, pinnedID != presentation.id else { return }
+        self.pinnedID = nil
+        logger.info("unpin \(pinnedID.description, privacy: .public) — new alert \(presentation.id.description, privacy: .public)")
     }
 
     /// The winner may have changed: keep the pin and the promotion in sync with what is

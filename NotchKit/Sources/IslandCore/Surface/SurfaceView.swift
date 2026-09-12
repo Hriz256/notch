@@ -75,11 +75,15 @@ public struct SurfaceView: View {
     /// Expanded only. In peek the two 56 pt slots run all the way to the shape's edges, so
     /// the dots would land on top of whatever the front card is showing there — and the
     /// card the user is looking at is the one the dots are about anyway.
+    ///
+    /// While a transient alert borrows the island, *no* dot is lit: the alert is an
+    /// interruption, not a page of the stack. Marking the card underneath it said the
+    /// island was showing Music while the panel on screen was the Code completion.
     @ViewBuilder
     private func stackDots(layout: IslandLayout) -> some View {
         let count = presenter.stack.count
         if count > 1, layout.mode == .expanded {
-            let index = presenter.stackIndex
+            let index = presenter.isShowingTransientAlert ? nil : presenter.stackIndex
             VStack(spacing: Self.dotSpacing) {
                 ForEach(0..<count, id: \.self) { position in
                     Circle()

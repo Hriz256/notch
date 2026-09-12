@@ -570,9 +570,11 @@ struct IslandPresenterTests {
         #expect(p.stack.map(\.id) == [a.id, b.id, c.id])
         #expect(p.stack.map(\.displayTitle) == ["Music", "B", "C"])
         // The activity card outranks both backgrounds, so it is the one marked current.
-        #expect(p.stackIndex == 1)
+        #expect(p.selectedIndex == 1)
         p.pin(c.id)
-        #expect(p.stackIndex == 2)
+        #expect(p.selectedIndex == 2)
+        // The dots, unlike the menu, mark nothing while the transient alert is on screen.
+        #expect(p.stackIndex == nil)
     }
 
     @Test func displayTitlePrefersTheFeatureTitle() {
@@ -658,12 +660,104 @@ struct IslandPresenterTests {
         p.present(code)
         p.cycle(.next)
 
-        for priority in [Priority.alert, .activity, .alert, .activity] {
-            p.update(makePresentation(feature: "code", priority: priority).withID(code.id))
+        // Working: the card re-renders as fast as the hooks fire and the pin does not care.
+        for _ in 0..<3 {
+            p.update(makePresentation(feature: "code", priority: .activity).withID(code.id))
             #expect(p.stack.count == 2)
             #expect(p.pinnedID == music.id)
             #expect(p.current?.id == music.id)
         }
+
+        // …until the agent starts *asking*: the first transition into a sticky alert hands
+        // the island over, because a pin must not be able to hide a standing prompt.
+        p.update(makePresentation(feature: "code", priority: .alert).withID(code.id))
+        #expect(p.stack.count == 2)
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == code.id)
+    }
+
+    /// The bug: one swipe to Music, and every later "waiting for you" prompt was invisible
+    /// for the rest of the session — the alert lost to the pin and nothing cleared the pin.
+    @Test func newStickyAlertUnpins() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        p.pin(music.id)
+        #expect(p.current?.id == music.id)
+
+        p.update(makePresentation(feature: "code", priority: .alert).withID(code.id))
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == code.id)
+
+        // The pin the alert itself carries is left alone: pinning the alerting card and
+        // then seeing it alert again is not a reason to take the island off it.
+        p.pin(code.id)
+        p.update(makePresentation(feature: "code", priority: .activity).withID(code.id))
+        p.update(makePresentation(feature: "code", priority: .alert).withID(code.id))
+        #expect(p.pinnedID == code.id)
+    }
+
+    /// An agent that waits re-renders its prompt on every hook event. Only the transition
+    /// into `.alert` unpins; the refreshes behind it must leave the user's choice alone.
+    @Test func repeatedAlertUpdateDoesNotUnpin() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+
+        p.update(makePresentation(feature: "code", priority: .alert).withID(code.id))
+        // The user swipes back to Music *while* the agent is waiting.
+        p.pin(music.id)
+        #expect(p.current?.id == music.id)
+
+        for _ in 0..<5 {
+            p.update(makePresentation(feature: "code", priority: .alert).withID(code.id))
+            #expect(p.pinnedID == music.id)
+            #expect(p.current?.id == music.id)
+        }
+    }
+
+    /// A transient alert is an interruption, not a page: while it is up the dots mark
+    /// nothing, and when it expires the island is back on the card the user pinned.
+    @Test func transientAlertMarksNoStackDotAndGivesTheIslandBack() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        p.pin(music.id)
+        #expect(p.stackIndex == 0)
+
+        let alert = makePresentation(feature: "code", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        #expect(p.current?.id == alert.id)
+        #expect(p.isShowingTransientAlert)
+        #expect(p.stackIndex == nil)
+        // The pin is untouched — it is the transient alert, not a standing request.
+        #expect(p.pinnedID == music.id)
+
+        clock.advance(by: .seconds(4))
+        #expect(!p.isShowingTransientAlert)
+        #expect(p.current?.id == music.id)
+        #expect(p.stackIndex == 0)
+    }
+
+    /// Cycling still works underneath a transient alert, even though the dots mark nothing.
+    @Test func cycleWorksWhileATransientAlertIsUp() {
+        let p = IslandPresenter(clock: ManualClock())
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code", priority: .activity)
+        p.present(music)
+        p.present(code)
+        p.pin(music.id)
+        p.present(makePresentation(feature: "code", priority: .alert, ttl: .seconds(4)))
+
+        p.cycle(.next)
+        #expect(p.pinnedID == code.id)
     }
 
     /// With two cards, both directions land on the other one.
