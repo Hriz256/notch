@@ -39,13 +39,34 @@ struct CodeCompactTrailing: View {
 
     @ViewBuilder
     private var content: some View {
-        let kind = ActivityKind.from(stage: model.visibleStage, tool: model.displayedSession?.tool)
-        if kind == .idle {
-            SessionRing(percent: model.displayedUsage?.session?.percent ?? 0)
-        } else {
+        switch Self.slot(for: model) {
+        case .ring(let percent):
+            SessionRing(percent: percent)
+        case .unavailable:
+            // A ring drawn at 0 % would read as "plenty left"; the dim mark says instead
+            // that there is nothing to report, and the expanded panel says why.
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: Self.glyphSize, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+                .accessibilityLabel("Usage unavailable")
+        case .activity(let kind):
             // `.thinking` draws nothing: the pulsing agent icon on the other side of the
             // notch already says the agent is between tools.
             ActivityGlyph(kind: kind, size: Self.glyphSize)
         }
+    }
+
+    /// What the slot draws. Split out of `body` so the choice is testable without rendering.
+    enum Slot: Equatable {
+        case ring(Double)
+        case unavailable
+        case activity(ActivityKind)
+    }
+
+    static func slot(for model: CodeAgentViewModel) -> Slot {
+        let kind = ActivityKind.from(stage: model.visibleStage, tool: model.displayedSession?.tool)
+        guard kind == .idle else { return .activity(kind) }
+        guard model.usageError == nil else { return .unavailable }
+        return .ring(model.displayedUsage?.session?.percent ?? 0)
     }
 }

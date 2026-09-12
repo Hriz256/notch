@@ -122,6 +122,17 @@ public final class CodeAgentViewModel {
     /// Daily token totals behind the sparkline; empty when usage is unavailable.
     public var sparkline: [Double] { displayedUsage?.sparkline ?? [] }
 
+    /// Past this, the numbers on screen are old enough to be worth marking (spec §4): a
+    /// failing poll otherwise leaves a confident-looking bar that has not moved in hours.
+    public static let stalenessThreshold: TimeInterval = 20 * 60
+
+    /// Whether the displayed snapshot was fetched long enough ago to show the stale dot.
+    /// `asOf` comes from the panel's own timeline so the dot appears without a refresh.
+    public func isUsageStale(asOf date: Date) -> Bool {
+        guard let fetchedAt = displayedUsage?.fetchedAt else { return false }
+        return date.timeIntervalSince(fetchedAt) > Self.stalenessThreshold
+    }
+
     /// Hook install state per agent, mirrored from ``HookInstaller`` so the context menu
     /// re-renders when it changes (the installer itself is not observable).
     public private(set) var hookStates: [Agent: HookInstaller.InstallState] = [:]
@@ -339,7 +350,10 @@ public final class CodeAgentViewModel {
 
     private func updateMain(_ active: SessionTracker.Session?) {
         guard let active else {
-            guard settings.showWhenIdle(displayedAgent), displayedUsage != nil else {
+            // An error is as much a reason to show the idle card as a snapshot is: "Open
+            // Claude Code to sign in" is only actionable if the user can see it, and
+            // presenting nothing is indistinguishable from the feature being off.
+            guard settings.showWhenIdle(displayedAgent), displayedUsage != nil || usageError != nil else {
                 dismissMain()
                 return
             }

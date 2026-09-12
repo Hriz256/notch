@@ -112,6 +112,7 @@ struct CodeUsageBars: View {
             window: window,
             pace: model.pace(for: window),
             now: now,
+            isStale: model.isUsageStale(asOf: now),
             compact: compact
         )
     }

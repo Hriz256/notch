@@ -233,13 +233,47 @@ final class CodeAgentViewModelTests {
         #expect(f.vm.displayedUsage == nil)
     }
 
-    @Test func idleWithUsageErrorPresentsNothingButSurfacesTheError() async {
+    /// A failure the user can act on ("Open Claude Code to sign in") is only useful on
+    /// screen, so the idle card is presented for an error exactly as it is for a snapshot.
+    @Test func idleWithUsageErrorStillPresentsTheIdleCard() async throws {
         let f = makeFixture(results: [.claude: .failure(.notSignedIn)], defaults: defaults)
         await loadUsage(f)
 
-        #expect(f.presenter.presented.isEmpty)
+        let presentation = try #require(f.mainPresentation)
+        #expect(presentation.priority == .background)
+        #expect(presentation.expandedSize == CodeAgentViewModel.expandedSize)
         #expect(f.vm.displayedUsage == nil)
         #expect(f.vm.usageError == .notSignedIn)
+        // The expanded panel swaps both bars for one line that names the fix.
+        #expect(CodeUsageBars.message(for: .notSignedIn) == "Open Claude Code to sign in")
+        // And the compact slot marks the gap instead of drawing a ring at 0 %.
+        #expect(CodeCompactTrailing.slot(for: f.vm) == .unavailable)
+    }
+
+    @Test func idleWithUsagePutsTheRingInTheCompactSlot() async {
+        let f = makeFixture(results: [.claude: .success(usage(.claude, percent: 42))], defaults: defaults)
+        await loadUsage(f)
+
+        #expect(CodeCompactTrailing.slot(for: f.vm) == .ring(42))
+    }
+
+    @Test func showWhenIdleOffStillHidesAUsageError() async {
+        let f = makeFixture(results: [.claude: .failure(.notSignedIn)], defaults: defaults)
+        f.settings.setShowWhenIdle(.claude, false)
+        await loadUsage(f)
+
+        #expect(f.presenter.presented.isEmpty)
+    }
+
+    /// A snapshot older than 20 minutes is marked; the countdown beside it keeps ticking,
+    /// so without the dot the bar would look freshly fetched.
+    @Test func staleSnapshotIsMarkedAfterTwentyMinutes() async {
+        let fetchedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let f = makeFixture(results: [.claude: .success(usage(.claude, fetchedAt: fetchedAt))], defaults: defaults)
+        await loadUsage(f)
+
+        #expect(!f.vm.isUsageStale(asOf: fetchedAt.addingTimeInterval(19 * 60)))
+        #expect(f.vm.isUsageStale(asOf: fetchedAt.addingTimeInterval(21 * 60)))
     }
 
     @Test func showWhenIdleOffDismissesTheIdlePresentation() async throws {

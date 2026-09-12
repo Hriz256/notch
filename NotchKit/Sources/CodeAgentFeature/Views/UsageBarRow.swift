@@ -16,6 +16,8 @@ struct UsageBarRow: View {
     /// Injected rather than read from the clock so the reset countdown is testable
     /// and re-renders exactly when the view model ticks.
     let now: Date
+    /// The snapshot behind this bar is older than ``CodeAgentViewModel/stalenessThreshold``.
+    var isStale: Bool = false
     var compact: Bool = false
 
     private var fraction: Double {
@@ -40,6 +42,14 @@ struct UsageBarRow: View {
                     Text(resetText)
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.55))
+                    // Marks numbers the poll has not been able to refresh — the countdown
+                    // next to it keeps running, so without the dot the bar looks current.
+                    if isStale {
+                        Circle()
+                            .fill(.white.opacity(0.35))
+                            .frame(width: 4, height: 4)
+                            .accessibilityLabel("Usage may be out of date")
+                    }
                 }
                 if let pace {
                     Circle()
