@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 @MainActor
 @Observable
@@ -10,11 +11,15 @@ public final class IslandPresenter: IslandPresenting {
     /// Insertion-ordered queue. Winner = highest priority, then latest inserted.
     public private(set) var queue: [Presentation] = []
     public private(set) var isHoverPromoted = false
-    /// The card the user picked by cycling. Cleared as soon as it leaves `stack`.
+    /// The card the user picked, by swiping or from the Cards menu. Cleared as soon as it
+    /// leaves `stack`.
     public private(set) var pinnedID: PresentationID?
 
     public enum CycleDirection: Sendable { case next, previous }
 
+    /// Carries the whole card-selection trail — swipe, cycle, pin — under one category, so
+    /// `log stream --predicate 'category == "surface.swipe"'` shows a gesture end to end.
+    @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "surface.swipe")
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private var ttlTokens: [PresentationID: ScheduledToken] = [:]
     @ObservationIgnored private var hoverToken: ScheduledToken?
@@ -93,7 +98,29 @@ public final class IslandPresenter: IslandPresenting {
         let stack = stack
         guard stack.count > 1, let index = stackIndex else { return }
         let offset = direction == .next ? 1 : stack.count - 1
-        pinnedID = stack[(index + offset) % stack.count].id
+        let id = stack[(index + offset) % stack.count].id
+        pinnedID = id
+        logger.info("cycle \(direction == .next ? "next" : "previous", privacy: .public) → pinned \(id.description, privacy: .public)")
+        queueDidChange()
+    }
+
+    /// Pins a card the user picked by name (the Cards menu) rather than by cycling.
+    ///
+    /// Ignored unless the id is in ``stack``: alerts are interruptions rather than cards,
+    /// and a card that has already left the queue must not be resurrected as a stale pin
+    /// that ``queueDidChange()`` would drop on the next change anyway.
+    public func pin(_ id: PresentationID) {
+        guard pinnedID != id, stack.contains(where: { $0.id == id }) else { return }
+        pinnedID = id
+        logger.info("pin → pinned \(id.description, privacy: .public)")
+        queueDidChange()
+    }
+
+    /// Drops the pin and hands the island back to the plain queue winner.
+    public func unpin() {
+        guard pinnedID != nil else { return }
+        pinnedID = nil
+        logger.info("unpin")
         queueDidChange()
     }
 

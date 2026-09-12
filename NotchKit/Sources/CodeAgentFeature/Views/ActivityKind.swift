@@ -1,3 +1,4 @@
+import AppKit
 import CodeAgentShared
 import SwiftUI
 
@@ -112,47 +113,275 @@ enum ActivityKind: Equatable, Sendable {
 /// The single animated glyph that says what the agent is doing, in the compact island's
 /// trailing slot and in the activity panel's header.
 ///
-/// Every repeating symbol effect lives here and nowhere else, and each one is bound to a
-/// working kind: an idle island draws ``SessionRing`` instead of this view, and the two
-/// silent kinds (`thinking`, `idle`) render nothing at all, so nothing animates when
-/// there is nothing to watch.
+/// Each kind gets a hand-made animation rather than an SF symbol effect: the effects are
+/// generic ("this symbol is busy") where the island wants to say *what* the agent is busy
+/// with, and none of them reads at 13 pt. Every animation is bound to a working kind and
+/// lives inside this view, so an idle island — which draws ``SessionRing`` instead — and
+/// the two silent kinds (`thinking`, `idle`) animate nothing at all.
+///
+/// Reduce Motion collapses all six to their still SF symbol.
 struct ActivityGlyph: View {
     let kind: ActivityKind
     var size: CGFloat = 13
 
-    /// Bumped whenever a one-shot kind arrives; `.symbolEffect(.bounce, value:)` watches it.
-    @State private var arrivals = 0
+    /// Every glyph draws inside the same box, so swapping kinds never shifts the text
+    /// next to it. Three points taller than the type size for the underline the editing
+    /// and reading glyphs draw beneath their symbol.
+    static func boxHeight(for size: CGFloat) -> CGFloat { size + 3 }
+    static func boxWidth(for size: CGFloat) -> CGFloat { size * 1.6 }
 
     var body: some View {
+        // The silent kinds draw nothing *and* take no room: the header reads plain
+        // "Thinking", with no gap where a glyph would have been.
         if let symbol = kind.symbol {
-            glyph(symbol)
+            content(still: symbol)
+                .frame(width: Self.boxWidth(for: size), height: Self.boxHeight(for: size))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(kind.label)
         }
     }
 
     @ViewBuilder
-    private func glyph(_ symbol: String) -> some View {
-        let base = Image(systemName: symbol)
-            .font(.system(size: size, weight: .semibold))
-            .foregroundStyle(kind.color)
-            .accessibilityLabel(kind.label)
-
-        switch kind {
-        case .reading, .waiting:
-            base.symbolEffect(.pulse, isActive: true)
-        case .editing:
-            // Slowed down: a full-speed repeating bounce reads as frantic at 13 pt.
-            base.symbolEffect(.bounce, options: .repeating.speed(0.6))
-        case .running:
-            // `.variableColor` would be inert here — `terminal` has no variable-colour
-            // layers — so the "still going" signal is a slow breathe instead.
-            base.symbolEffect(.breathe, options: .repeating.speed(0.8))
-        case .completed, .failed:
-            base
-                .symbolEffect(.bounce, value: arrivals)
-                .onAppear { arrivals += 1 }
-                .onChange(of: kind) { _, _ in arrivals += 1 }
-        case .thinking, .idle:
-            base
+    private func content(still symbol: String) -> some View {
+        if GlyphMotion.isReduced {
+            Image(systemName: symbol)
+                .font(.system(size: size * 0.85, weight: .semibold))
+                .foregroundStyle(kind.color)
+        } else {
+            switch kind {
+            case .editing: EditingGlyph(size: size)
+            case .reading: ReadingGlyph(size: size)
+            case .running: RunningGlyph(size: size)
+            case .waiting: WaitingGlyph(size: size)
+            case .completed: CompletedGlyph(size: size)
+            case .failed: FailedGlyph(size: size)
+            case .thinking, .idle: EmptyView()
+            }
         }
+    }
+}
+
+// MARK: - Motion helpers
+
+/// The shared clock math behind the looping glyphs, and the one place Reduce Motion is
+/// consulted.
+///
+/// The loops are driven by the date `TimelineView(.animation)` hands out rather than by
+/// `repeatForever` animations: a repeating animation attached to a view that SwiftUI
+/// re-creates on every model change restarts mid-cycle, whereas a function of wall-clock
+/// time is continuous no matter how often the island re-renders.
+@MainActor
+enum GlyphMotion {
+    static var isReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// `0 → 1`, restarting every `period` seconds. The "grows then resets" ramp.
+    static func phase(_ date: Date, period: Double) -> Double {
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+        return t / period
+    }
+
+    /// `0 → 1 → -1 → 0` once per `period`. A sine, so it eases in and out at both ends
+    /// exactly the way an autoreversing `.easeInOut` does.
+    static func wave(_ date: Date, period: Double) -> Double {
+        sin(phase(date, period: period) * 2 * .pi)
+    }
+
+    /// On for the first half of every `period`, off for the second — a cursor blink.
+    static func blink(_ date: Date, period: Double) -> Bool {
+        phase(date, period: period) < 0.5
+    }
+}
+
+// MARK: - The six glyphs
+
+/// A tilted pencil sliding back and forth over a salmon underline that writes itself.
+private struct EditingGlyph: View {
+    let size: CGFloat
+
+    private static let swayPeriod: Double = 0.9
+    private static let sway: CGFloat = 3
+    private static let writePeriod: Double = 1.4
+    /// The last quarter of the write loop is the fade, so the line never snaps away.
+    private static let fadeStart: Double = 0.75
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let written = GlyphMotion.phase(context.date, period: Self.writePeriod)
+            VStack(spacing: 1.5) {
+                Image(systemName: "pencil")
+                    .font(.system(size: size * 0.85, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .rotationEffect(.degrees(-25))
+                    .offset(x: GlyphMotion.wave(context.date, period: Self.swayPeriod) * Self.sway)
+                    .frame(height: size)
+                underline(written: written)
+            }
+        }
+    }
+
+    private func underline(written: Double) -> some View {
+        let full = size * 1.2
+        let opacity = written < Self.fadeStart
+            ? 1
+            : 1 - (written - Self.fadeStart) / (1 - Self.fadeStart)
+        return HStack(spacing: 0) {
+            Capsule()
+                .fill(CodePalette.salmon)
+                .frame(width: full * written, height: 1.5)
+                .opacity(opacity)
+            Spacer(minLength: 0)
+        }
+        .frame(width: full)
+    }
+}
+
+/// A magnifier scanning left and right along a faint line.
+private struct ReadingGlyph: View {
+    let size: CGFloat
+
+    private static let period: Double = 1.2
+    private static let travel: CGFloat = 4
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            VStack(spacing: 1.5) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: size * 0.85, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .offset(x: GlyphMotion.wave(context.date, period: Self.period) * Self.travel)
+                    .frame(height: size)
+                Capsule()
+                    .fill(.white.opacity(0.25))
+                    .frame(width: size * 1.2, height: 1)
+            }
+        }
+    }
+}
+
+/// A terminal window typing a line, with a blinking cursor after it.
+private struct RunningGlyph: View {
+    let size: CGFloat
+
+    private static let typePeriod: Double = 1.2
+    private static let blinkPeriod: Double = 0.5
+
+    /// The 14 × 10 frame of the spec, expressed against the type size so the glyph still
+    /// fits when the header renders it a point smaller than the compact slot does.
+    private var frameWidth: CGFloat { size * 1.08 }
+    private var frameHeight: CGFloat { size * 0.77 }
+    private var cursorHeight: CGFloat { frameHeight * 0.6 }
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let typed = GlyphMotion.phase(context.date, period: Self.typePeriod)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .stroke(.white, lineWidth: 1)
+                .frame(width: frameWidth, height: frameHeight)
+                .overlay(alignment: .leading) {
+                    HStack(spacing: 1) {
+                        Text(">")
+                            .font(.system(size: frameHeight * 0.62, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white)
+                        Capsule()
+                            .fill(.white)
+                            // Sized so prompt, line and cursor still clear the right-hand
+                            // stroke when the line is fully typed.
+                            .frame(width: (frameWidth * 0.3) * typed, height: 1)
+                        Rectangle()
+                            .fill(.white)
+                            .frame(width: 1, height: cursorHeight)
+                            .opacity(GlyphMotion.blink(context.date, period: Self.blinkPeriod) ? 1 : 0)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.leading, 1.5)
+                    .frame(width: frameWidth, height: frameHeight)
+                }
+        }
+    }
+}
+
+/// A raised hand waving from the wrist.
+private struct WaitingGlyph: View {
+    let size: CGFloat
+
+    private static let period: Double = 0.8
+    private static let tilt: Double = 12
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: size * 0.85, weight: .semibold))
+                .foregroundStyle(CodePalette.amber)
+                // From the wrist, not the middle of the palm: rotating around the centre
+                // reads as a spin rather than a wave.
+                .rotationEffect(.degrees(GlyphMotion.wave(context.date, period: Self.period) * Self.tilt),
+                                anchor: .bottom)
+        }
+    }
+}
+
+/// A checkmark that draws itself once, when the session finishes.
+private struct CompletedGlyph: View {
+    let size: CGFloat
+
+    @State private var drawn: CGFloat = 0
+
+    var body: some View {
+        CheckShape()
+            .trim(from: 0, to: drawn)
+            .stroke(CodePalette.green,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            .frame(width: size * 0.9, height: size * 0.66)
+            .onAppear {
+                // No repeat: "done" happens once, and a looping tick would keep asking
+                // for attention the session no longer needs.
+                withAnimation(.easeOut(duration: 0.35)) { drawn = 1 }
+            }
+    }
+}
+
+/// The tick, as a two-segment path so `.trim` draws it in the order a hand would.
+private struct CheckShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.36, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        return path
+    }
+}
+
+/// A cross that shakes its head once.
+private struct FailedGlyph: View {
+    let size: CGFloat
+
+    @State private var shake: CGFloat = 0
+
+    var body: some View {
+        Image(systemName: "xmark")
+            .font(.system(size: size * 0.85, weight: .semibold))
+            .foregroundStyle(CodePalette.red)
+            .modifier(ShakeEffect(progress: shake))
+            .onAppear {
+                withAnimation(.linear(duration: 0.35)) { shake = 1 }
+            }
+    }
+}
+
+/// Three horizontal cycles of ±2 pt over the life of `progress` (0 → 1).
+private struct ShakeEffect: GeometryEffect {
+    var progress: CGFloat
+
+    private static let amplitude: CGFloat = 2
+    private static let cycles: CGFloat = 3
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let offset = sin(progress * .pi * 2 * Self.cycles) * Self.amplitude
+        return ProjectionTransform(CGAffineTransform(translationX: offset, y: 0))
     }
 }

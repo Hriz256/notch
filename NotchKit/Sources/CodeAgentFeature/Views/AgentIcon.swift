@@ -67,19 +67,20 @@ struct ClaudeSprite: View {
     var size: CGFloat
     var color: Color = CodePalette.salmon
 
+    /// The canvas is the grid's own 10 : 8 shape rather than a square, so the drawing can
+    /// never be larger than the box it is given — a square canvas with the sprite centred
+    /// inside it looks identical but leaves the `Canvas` free to overflow the 56 pt peek
+    /// slot when a parent proposes it more room.
     var body: some View {
-        // The grid is wider than it is tall, so the cell is sized off the width and
-        // the shorter sprite is centred vertically inside the square frame.
         Canvas { context, canvasSize in
             let cell = canvasSize.width / CGFloat(AgentIcon.spriteColumns)
-            let top = (canvasSize.height - cell * CGFloat(AgentIcon.spriteRows)) / 2
             var path = Path()
             for (row, line) in AgentIcon.claudeSprite.enumerated() {
                 for (column, pixel) in line.enumerated() where pixel == "#" {
                     path.addRect(
                         CGRect(
                             x: CGFloat(column) * cell,
-                            y: top + CGFloat(row) * cell,
+                            y: CGFloat(row) * cell,
                             width: cell,
                             height: cell
                         )
@@ -88,7 +89,7 @@ struct ClaudeSprite: View {
             }
             context.fill(path, with: .color(color))
         }
-        .frame(width: size, height: size)
+        .frame(width: size, height: size * CGFloat(AgentIcon.spriteRows) / CGFloat(AgentIcon.spriteColumns))
     }
 }
 

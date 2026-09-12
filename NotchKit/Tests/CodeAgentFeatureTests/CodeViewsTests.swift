@@ -9,20 +9,17 @@ import CodeAgentShared
 struct CodeViewsTests {
     private static let allStages: [Stage] = [.analyzing, .thinking, .creating, .waiting, .completed, .failed]
 
-    @Test("Every stage has a title and a distinct symbol")
+    @Test("Every stage has its own header word")
     func stageTitles() {
-        #expect(StageGlyph.title(.analyzing) == "Analyzing")
-        #expect(StageGlyph.title(.thinking) == "Thinking")
-        #expect(StageGlyph.title(.creating) == "Creating")
-        #expect(StageGlyph.title(.waiting) == "Waiting for you")
-        #expect(StageGlyph.title(.completed) == "Done")
-        #expect(StageGlyph.title(.failed) == "Failed")
-
-        #expect(StageGlyph.symbol(.waiting) == "hand.raised.fill")
-        #expect(StageGlyph.symbol(.completed) == "checkmark")
-        // No two stages should be indistinguishable at a glance.
-        let symbols = Set(Self.allStages.map(StageGlyph.symbol))
-        #expect(symbols.count == Self.allStages.count)
+        #expect(StageLabel.title(.analyzing) == "Analyzing")
+        #expect(StageLabel.title(.thinking) == "Thinking")
+        #expect(StageLabel.title(.creating) == "Creating")
+        #expect(StageLabel.title(.waiting) == "Waiting for you")
+        #expect(StageLabel.title(.completed) == "Done")
+        #expect(StageLabel.title(.failed) == "Failed")
+        // No two stages read the same in the header.
+        let titles = Set(Self.allStages.map(StageLabel.title))
+        #expect(titles.count == Self.allStages.count)
     }
 
     @Test("The tool decides what the working stages are doing")
@@ -58,6 +55,33 @@ struct CodeViewsTests {
         let drawn: [ActivityKind] = [.reading, .editing, .running, .waiting, .completed, .failed]
         let symbols = Set(drawn.compactMap(\.symbol))
         #expect(symbols.count == drawn.count)
+    }
+
+    /// The glyph loops are functions of wall-clock time rather than SwiftUI animations, so
+    /// this is the only place their shape can be checked.
+    @Test("Glyph loops ramp, oscillate and blink on their own period")
+    func glyphMotion() {
+        let epoch = Date(timeIntervalSinceReferenceDate: 0)
+        // The ramp restarts exactly on the period and is linear in between.
+        #expect(GlyphMotion.phase(epoch, period: 1.4) == 0)
+        #expect(GlyphMotion.phase(epoch.addingTimeInterval(0.7), period: 1.4) == 0.5)
+        #expect(GlyphMotion.phase(epoch.addingTimeInterval(1.4), period: 1.4) == 0)
+
+        // The wave peaks a quarter of the way in and is back at rest after a full period.
+        #expect(abs(GlyphMotion.wave(epoch.addingTimeInterval(0.225), period: 0.9) - 1) < 0.0001)
+        #expect(abs(GlyphMotion.wave(epoch.addingTimeInterval(0.675), period: 0.9) + 1) < 0.0001)
+        #expect(abs(GlyphMotion.wave(epoch.addingTimeInterval(0.9), period: 0.9)) < 0.0001)
+
+        #expect(GlyphMotion.blink(epoch.addingTimeInterval(0.2), period: 0.5))
+        #expect(!GlyphMotion.blink(epoch.addingTimeInterval(0.3), period: 0.5))
+    }
+
+    /// Every glyph draws inside one box, so the header's title does not shift sideways as
+    /// the session moves between tools.
+    @Test("All glyphs share a box that leaves room for the underline")
+    func glyphBox() {
+        #expect(ActivityGlyph.boxHeight(for: 13) == 16)
+        #expect(ActivityGlyph.boxWidth(for: 13) > 13)
     }
 
     @Test("The Claude sprite is a well-formed 10 x 8 grid")

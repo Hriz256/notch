@@ -56,8 +56,15 @@ struct CodeExpandedView: View {
 }
 
 /// Keeps the machine awake while agents work. Filled cup = the assertion is held now.
+///
+/// Both expanded panels carry it, in the same place — the header's trailing edge — so it
+/// does not move when a session starts.
 struct CaffeinateButton: View {
     let model: CodeAgentViewModel
+
+    /// Stated rather than measured so the activity panel can line the cup up with the
+    /// text baseline next to it.
+    static let height: CGFloat = 16
 
     var body: some View {
         Button {
@@ -66,6 +73,7 @@ struct CaffeinateButton: View {
             Image(systemName: model.isCaffeinating ? "cup.and.saucer.fill" : "cup.and.saucer")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(model.isCaffeinating ? CodePalette.salmon : .white.opacity(0.55))
+                .frame(height: Self.height)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

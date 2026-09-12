@@ -17,6 +17,7 @@ struct StatusMenu: View {
         }
         Toggle("Track change peek", isOn: $trackChangePeek)
         Divider()
+        cards
         codingAgents
         Divider()
         // Reloading is a no-op while music is off, so the button reflects that rather than looking
@@ -30,6 +31,14 @@ struct StatusMenu: View {
         #endif
         Button("Quit Notch") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    /// The same card list the island's own menu shows, reachable when the pointer is
+    /// nowhere near the notch — or when nothing is on screen to right-click at all.
+    private var cards: some View {
+        Menu("Cards") {
+            CardsMenuSection(presenter: coordinator.presenter, includesHeader: false)
+        }
     }
 
     /// Mirrors the island's context menu for the settings that are worth changing without

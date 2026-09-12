@@ -35,6 +35,14 @@ public struct SurfaceView: View {
                 .islandFrame(size: layout.size, flare: layout.topRadius, minimum: floor)
                 .contentShape(Rectangle())
                 .onTapGesture { presenter.toggleHoverPromotion() }
+                // The island's own menu rides the black shape, under the content rather
+                // than around it: a right-click opens only the innermost `.contextMenu`
+                // it lands in, so wrapping the whole island here would shadow the menus
+                // the features attach to their own views. Landing on the shape — the
+                // notch cutout between the peek slots, the margins of an expanded panel —
+                // gives the cards; landing on feature content gives that feature's menu,
+                // which embeds `CardsMenuSection` to offer the same rows.
+                .contextMenu { CardsMenuSection(presenter: presenter) }
                 .overlay(alignment: .trailing) { stackDots(layout: layout) }
 
             content(layout: layout, current: current)

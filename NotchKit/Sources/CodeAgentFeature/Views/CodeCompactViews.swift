@@ -1,4 +1,5 @@
 import CodeAgentShared
+import IslandCore
 import SwiftUI
 
 /// The island's leading peek slot: which agent this card is about.
@@ -15,6 +16,11 @@ struct CodeCompactLeading: View {
             size: 18,
             isPulsing: model.visibleStage == .thinking
         )
+        // The slot is exactly ``IslandLayout/peekSlotWidth`` wide and the icon must sit in
+        // the middle of it. Stating the width here rather than inheriting the proposal
+        // keeps the icon off the notch's edge whatever the surface proposes — without it a
+        // glyph that measures wider than it draws drifts toward the notch and clips.
+        .codeSlot()
         .codeContextMenu(model)
     }
 }
@@ -34,6 +40,7 @@ struct CodeCompactTrailing: View {
 
     var body: some View {
         content
+            .codeSlot()
             .codeContextMenu(model)
     }
 
@@ -68,5 +75,14 @@ struct CodeCompactTrailing: View {
         guard kind == .idle else { return .activity(kind) }
         guard model.usageError == nil else { return .unavailable }
         return .ring(model.displayedUsage?.session?.percent ?? 0)
+    }
+}
+
+extension View {
+    /// Centres a peek-slot glyph in the 56 pt the surface gives it, vertically as well as
+    /// horizontally. Both Code slots use it, so neither can drift under the notch.
+    func codeSlot() -> some View {
+        frame(width: IslandLayout.peekSlotWidth, alignment: .center)
+            .frame(maxHeight: .infinity, alignment: .center)
     }
 }

@@ -30,6 +30,7 @@ final class ManualClock: IslandClock {
 @MainActor
 private func makePresentation(
     feature: String = "music",
+    title: String? = nil,
     priority: Priority = .background,
     style: PresentationStyle = .peek,
     ttl: Duration? = nil,
@@ -37,6 +38,7 @@ private func makePresentation(
 ) -> Presentation {
     Presentation(
         featureID: FeatureID(feature),
+        title: title,
         priority: priority,
         style: style,
         ttl: ttl,
@@ -437,5 +439,138 @@ struct IslandPresenterTests {
         p.dismiss(music.id)
         #expect(p.state == .collapsed)
         #expect(p.isHoverPromoted == false)
+    }
+
+    // MARK: Pinning by id
+
+    @Test func pinSelectsThatCard() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        #expect(p.current?.id == b.id)
+        p.pin(a.id)
+        #expect(p.pinnedID == a.id)
+        #expect(p.current?.id == a.id)
+        #expect(p.stackIndex == 0)
+    }
+
+    @Test func pinningTheCurrentCardIsIdempotent() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.pin(b.id)
+        p.pin(b.id)
+        #expect(p.pinnedID == b.id)
+        #expect(p.current?.id == b.id)
+    }
+
+    @Test func pinIgnoresAnUnknownID() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        p.present(a)
+        p.pin(PresentationID())
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == a.id)
+    }
+
+    @Test func pinIgnoresADismissedCard() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.dismiss(a.id)
+        p.pin(a.id)
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == b.id)
+    }
+
+    /// Alerts are interruptions, not cards: they never enter the stack, so they cannot be
+    /// pinned either — pinning one would outlive the alert's own priority.
+    @Test func pinIgnoresAnAlert() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let alert = makePresentation(feature: "devices", priority: .alert)
+        p.present(a)
+        p.present(alert)
+        p.pin(alert.id)
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == alert.id)
+    }
+
+    @Test func unpinRestoresTheQueueWinner() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.pin(a.id)
+        #expect(p.current?.id == a.id)
+        p.unpin()
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == b.id)
+    }
+
+    @Test func unpinWithoutAPinIsNoOp() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        p.present(a)
+        p.unpin()
+        #expect(p.pinnedID == nil)
+        #expect(p.current?.id == a.id)
+    }
+
+    @Test func unpinKeepsHoverPromotion() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.pin(a.id)
+        p.setHovering(true)
+        clock.advance(by: IslandPresenter.hoverEnterDelay)
+        #expect(p.state == .expanded(a.id))
+        p.unpin()
+        #expect(p.state == .expanded(b.id))
+    }
+
+    // MARK: Cards menu contents
+
+    /// What the Cards menu lists, in the order it lists it: insertion order, alerts left
+    /// out, with `stackIndex` marking the row that gets the checkmark.
+    @Test func cardsListIsTheStackInInsertionOrder() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a", title: "Music")
+        let b = makePresentation(feature: "b", priority: .activity)
+        let alert = makePresentation(feature: "devices", priority: .alert)
+        let c = makePresentation(feature: "c")
+        p.present(a)
+        p.present(b)
+        p.present(alert)
+        p.present(c)
+        #expect(p.stack.map(\.id) == [a.id, b.id, c.id])
+        #expect(p.stack.map(\.displayTitle) == ["Music", "B", "C"])
+        // The activity card outranks both backgrounds, so it is the one marked current.
+        #expect(p.stackIndex == 1)
+        p.pin(c.id)
+        #expect(p.stackIndex == 2)
+    }
+
+    @Test func displayTitlePrefersTheFeatureTitle() {
+        let titled = makePresentation(feature: "code", title: "Claude Code")
+        #expect(titled.displayTitle == "Claude Code")
+        #expect(makePresentation(feature: "music").displayTitle == "Music")
+        #expect(makePresentation(feature: "music", title: "").displayTitle == "Music")
+    }
+
+    @Test func emptyStackHasNoCurrentIndex() {
+        let p = IslandPresenter(clock: ManualClock())
+        #expect(p.stack.isEmpty)
+        #expect(p.stackIndex == nil)
     }
 }

@@ -1,8 +1,11 @@
 import SwiftUI
 
-public struct PresentationID: Hashable, Sendable {
+public struct PresentationID: Hashable, Sendable, CustomStringConvertible {
     private let raw = UUID()
     public init() {}
+    /// Short form for logs and view identities: the first UUID field is plenty to tell
+    /// one card from another in a queue that never holds more than a handful.
+    public var description: String { String(raw.uuidString.prefix(8)) }
 }
 
 public enum Priority: Int, Comparable, Sendable {
@@ -23,6 +26,9 @@ public enum PresentationStyle: Sendable, Equatable {
 public struct Presentation: Identifiable {
     public let id: PresentationID
     public let featureID: FeatureID
+    /// What the card is called in menus. Features set it ("Music", "Code"); while it is
+    /// nil the feature id stands in — see ``displayTitle``.
+    public var title: String?
     public let priority: Priority
     public let style: PresentationStyle
     public let ttl: Duration?
@@ -34,6 +40,7 @@ public struct Presentation: Identifiable {
     public init(
         id: PresentationID = PresentationID(),
         featureID: FeatureID,
+        title: String? = nil,
         priority: Priority,
         style: PresentationStyle,
         ttl: Duration? = nil,
@@ -45,6 +52,7 @@ public struct Presentation: Identifiable {
         precondition(style == .peek || expanded != nil, "expanded style requires an expanded view")
         self.id = id
         self.featureID = featureID
+        self.title = title
         self.priority = priority
         self.style = style
         self.ttl = ttl
@@ -52,5 +60,12 @@ public struct Presentation: Identifiable {
         self.trailing = trailing
         self.expanded = expanded
         self.expandedSize = expandedSize
+    }
+
+    /// The name menus show for this card: the feature-provided title, else the feature id
+    /// title-cased, so a feature that has not set one still reads as "Music" or "Code".
+    public var displayTitle: String {
+        if let title, !title.isEmpty { return title }
+        return featureID.rawValue.capitalized
     }
 }
