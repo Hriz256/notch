@@ -77,6 +77,9 @@ struct MusicViewModelTests {
         #expect(presenter.presented[0].priority == .background)
         #expect(presenter.presented[0].style == .peek)
         #expect(presenter.presented[0].featureID == FeatureID("music"))
+        // Menus name the card by its title, not the feature id.
+        #expect(presenter.presented[0].title == "Music")
+        #expect(presenter.presented[0].displayTitle == "Music")
     }
 
     @Test func snapshotWithoutTitleDismisses() {

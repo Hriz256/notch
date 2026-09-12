@@ -54,6 +54,8 @@ public struct CodeViewFactory {
 @Observable
 public final class CodeAgentViewModel {
     public static let featureID = FeatureID("code")
+    /// What this feature's cards are called in menus.
+    public static let displayTitle = "Code"
     /// The idle card: usage bars plus the sparkline. Also the default for anything that
     /// needs a size before a view model exists.
     public static let expandedSize = CGSize(width: 380, height: 170)
@@ -139,7 +141,9 @@ public final class CodeAgentViewModel {
 
     // MARK: - Collaborators
 
-    @ObservationIgnored private let presenter: any IslandPresenting
+    /// The island this feature presents on. Exposed read-only so the feature's context
+    /// menu can embed `CardsMenuSection`, which needs the presenter to list the cards.
+    @ObservationIgnored public let islandPresenter: any IslandPresenting
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private let settings: CodeSettings
     @ObservationIgnored private let tracker: SessionTracker
@@ -186,7 +190,7 @@ public final class CodeAgentViewModel {
         viewFactory: CodeViewFactory,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.presenter = presenter
+        self.islandPresenter = presenter
         self.clock = clock
         self.settings = settings
         self.tracker = tracker
@@ -302,7 +306,7 @@ public final class CodeAgentViewModel {
         alertingSession = nil
         visibleStage = nil
         if let alertID {
-            presenter.dismiss(alertID)
+            islandPresenter.dismiss(alertID)
             self.alertID = nil
         }
         dismissMain()
@@ -441,6 +445,7 @@ public final class CodeAgentViewModel {
         let presentation = Presentation(
             id: mainID ?? PresentationID(),
             featureID: Self.featureID,
+            title: Self.displayTitle,
             priority: priority,
             style: .peek,
             leading: viewFactory.compactLeading(self),
@@ -450,15 +455,15 @@ public final class CodeAgentViewModel {
         )
         if mainID == nil {
             mainID = presentation.id
-            presenter.present(presentation)
+            islandPresenter.present(presentation)
         } else {
-            presenter.update(presentation)
+            islandPresenter.update(presentation)
         }
     }
 
     private func dismissMain() {
         guard let mainID else { return }
-        presenter.dismiss(mainID)
+        islandPresenter.dismiss(mainID)
         self.mainID = nil
     }
 
@@ -472,13 +477,14 @@ public final class CodeAgentViewModel {
         if session.stage == .completed, settings.playCompleteSound { sound() }
 
         // A second finish while the first alert is up replaces it rather than stacking.
-        if let alertID { presenter.dismiss(alertID) }
+        if let alertID { islandPresenter.dismiss(alertID) }
         let id = PresentationID()
         alertID = id
-        presenter.present(
+        islandPresenter.present(
             Presentation(
                 id: id,
                 featureID: Self.featureID,
+                title: Self.displayTitle,
                 priority: .alert,
                 style: .peek,
                 ttl: Self.alertDuration,
@@ -496,7 +502,7 @@ public final class CodeAgentViewModel {
             alertingSession = nil
             // The presenter drops it on its own ttl; this is belt and braces so the view
             // model never believes an alert it no longer owns is on screen.
-            if let alertID { presenter.dismiss(alertID) }
+            if let alertID { islandPresenter.dismiss(alertID) }
             alertID = nil
             refreshPresentation()
         }

@@ -218,6 +218,9 @@ final class CodeAgentViewModelTests {
         #expect(presentation.style == .peek)
         #expect(presentation.ttl == nil)
         #expect(presentation.featureID == FeatureID("code"))
+        // Menus name the card by its title, not the feature id.
+        #expect(presentation.title == "Code")
+        #expect(presentation.displayTitle == "Code")
         #expect(presentation.expandedSize == CodeAgentViewModel.expandedSize)
         #expect(f.vm.displayedAgent == .claude)
         #expect(f.vm.displayedUsage?.agent == .claude)
@@ -381,6 +384,7 @@ final class CodeAgentViewModelTests {
         #expect(alert.style == .peek)
         #expect(alert.ttl == CodeAgentViewModel.alertDuration)
         #expect(alert.ttl == .seconds(4))
+        #expect(alert.title == "Code")
         #expect(f.vm.visibleStage == .completed)
         #expect(f.sound.count == 1)
 

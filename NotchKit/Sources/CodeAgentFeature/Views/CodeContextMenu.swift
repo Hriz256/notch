@@ -1,4 +1,5 @@
 import CodeAgentShared
+import IslandCore
 import SwiftUI
 
 /// The right-click menu carried by every part of the Code island — both peek slots and
@@ -13,6 +14,12 @@ struct CodeContextMenu: ViewModifier {
 
     func body(content: Content) -> some View {
         content.contextMenu {
+            // First, so switching card is in the same place wherever the user right-clicks
+            // — the feature's content here, the black shape in `SurfaceView`.
+            CardsMenuSection(presenter: model.islandPresenter)
+
+            Divider()
+
             Section("Show") {
                 ForEach(model.enabledAgents, id: \.self) { agent in
                     checkmarked(agent.displayName, isOn: agent == model.displayedAgent) {

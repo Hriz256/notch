@@ -33,6 +33,8 @@ public struct MusicViewFactory {
 @Observable
 public final class MusicViewModel {
     public static let featureID = FeatureID("music")
+    /// What this feature's cards are called in menus.
+    public static let displayTitle = "Music"
     public static let pauseDismissDelay: Duration = .seconds(600)
     public static let trackChangePeekDuration: Duration = .seconds(2.5)
     public static let expandedSize = CGSize(width: 380, height: 160)
@@ -54,7 +56,9 @@ public final class MusicViewModel {
     public var isPlaying: Bool { snapshot?.isPlaying ?? false }
     public var duration: TimeInterval { snapshot?.duration ?? 0 }
 
-    @ObservationIgnored private let presenter: any IslandPresenting
+    /// The island this feature presents on. Exposed read-only so the feature's context
+    /// menu can embed `CardsMenuSection`, which needs the presenter to list the cards.
+    @ObservationIgnored public let islandPresenter: any IslandPresenting
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private let sendCommand: @Sendable (PlaybackCommand) async -> Void
     @ObservationIgnored private let viewFactory: MusicViewFactory
@@ -94,7 +98,7 @@ public final class MusicViewModel {
                         ? true
                         : UserDefaults.standard.bool(forKey: MusicViewModel.trackChangePeekDefaultsKey)
                 }) {
-        self.presenter = presenter
+        self.islandPresenter = presenter
         self.clock = clock
         self.sendCommand = sendCommand
         self.viewFactory = viewFactory
@@ -133,11 +137,11 @@ public final class MusicViewModel {
         // a second presentation would give the panel a new view identity and blink it away and
         // back — twice, once when the peek appears and once when it expires.
         if let backgroundID {
-            presenter.update(makeBackgroundPresentation(id: backgroundID))
+            islandPresenter.update(makeBackgroundPresentation(id: backgroundID))
         } else {
             let id = PresentationID()
             backgroundID = id
-            presenter.present(makeBackgroundPresentation(id: id))
+            islandPresenter.present(makeBackgroundPresentation(id: id))
         }
 
         if trackChanged {
@@ -192,7 +196,7 @@ public final class MusicViewModel {
         pauseToken?.cancel()
         pauseToken = nil
         if let backgroundID {
-            presenter.dismiss(backgroundID)
+            islandPresenter.dismiss(backgroundID)
             self.backgroundID = nil
         }
     }
@@ -203,6 +207,7 @@ public final class MusicViewModel {
         Presentation(
             id: id,
             featureID: Self.featureID,
+            title: Self.displayTitle,
             priority: .background,
             style: .peek,
             leading: viewFactory.leading(self),

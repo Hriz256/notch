@@ -11,7 +11,7 @@ struct MusicExpandedView: View {
         VStack(spacing: 6) {
             HStack(spacing: 12) {
                 ArtworkView(data: model.artwork, size: 56, radius: 10)
-                    .onTapGesture { openSourceApp() }
+                    .onTapGesture { MusicSourceApp(bundleID: model.snapshot?.sourceBundleID)?.open() }
                 VStack(alignment: .leading, spacing: 1) {
                     MarqueeText(text: model.snapshot?.title ?? "",
                                 font: .system(size: 13, weight: .semibold))
@@ -39,6 +39,7 @@ struct MusicExpandedView: View {
         .onAppear { model.startTicking(); refreshTint() }
         .onDisappear { model.stopTicking() }
         .onChange(of: model.artwork) { _, _ in refreshTint() }
+        .musicContextMenu(model)
     }
 
     @MainActor
@@ -50,12 +51,5 @@ struct MusicExpandedView: View {
             }.value
             tint = color
         }
-    }
-
-    @MainActor
-    private func openSourceApp() {
-        guard let bundleID = model.snapshot?.sourceBundleID,
-              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 }

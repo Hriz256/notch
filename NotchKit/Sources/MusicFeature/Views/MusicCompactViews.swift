@@ -29,6 +29,7 @@ struct MusicCompactLeading: View {
     var body: some View {
         ArtworkView(data: model.artwork, size: 18, radius: 4)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .musicContextMenu(model)
     }
 }
 
@@ -37,5 +38,6 @@ struct MusicCompactTrailing: View {
     var body: some View {
         VisualizerBars(isPlaying: model.isPlaying)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .musicContextMenu(model)
     }
 }
