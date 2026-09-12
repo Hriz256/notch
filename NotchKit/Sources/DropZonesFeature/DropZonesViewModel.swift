@@ -162,6 +162,15 @@ public final class DropZonesViewModel {
     public static let airDropDelay: Duration = .milliseconds(300)
     /// The poof after a completed drag-out, before the stash is emptied.
     public static let poofDuration: Duration = .milliseconds(250)
+    /// How long after the panel comes down the island keeps drawing itself from the
+    /// mirror window (`IslandPresenting.setSurfaceMirrored(_:)`).
+    ///
+    /// The swap between the two windows is only invisible while the island is *static*,
+    /// and the zones' collapse is the longest animation a drag leaves behind: releasing on
+    /// the mouse-up would trade the windows mid-collapse, one frame ahead of the other.
+    /// 500 ms clears the spring with room to spare, and nothing about the island is
+    /// different in the meantime — the mirror is a copy of the same presenter.
+    public static let mirrorRelease: Duration = .milliseconds(500)
 
     // MARK: - Published state
 
@@ -272,6 +281,14 @@ public final class DropZonesViewModel {
     /// the first one's fade.
     @ObservationIgnored private var filePoofTokens: [UUID: ScheduledToken] = [:]
     @ObservationIgnored private var fileRemovalTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var mirrorToken: ScheduledToken?
+    /// Whether the island is currently drawing from the mirror window *at this feature's
+    /// request*. Kept here rather than read back off the presenter because the protocol
+    /// only offers the setter — and because it is what makes the calls idempotent.
+    @ObservationIgnored private var isMirrored = false
+    /// Set when a drag ends while the panel is still on screen: the mirror is released
+    /// ``mirrorRelease`` after the panel comes down rather than straight away.
+    @ObservationIgnored private var isMirrorReleasePending = false
     @ObservationIgnored private var expiryToken: ScheduledToken?
     @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
     /// The two timers hand off to an actor, so each also owns a `Task`; held here so
@@ -321,8 +338,17 @@ public final class DropZonesViewModel {
     /// Folds one `DragObserver` output into the zones presentation.
     public func handle(_ output: DragDetector.Output) {
         switch output {
-        case .none:
-            break
+        case .began:
+            // Mirroring is armed here — at the start of the drag, anywhere on screen —
+            // rather than when the zones open, so the mirror window has already rendered
+            // the island as it stands before the panel is presented into it. Swapped a
+            // turn later, SwiftUI coalesces the mirror's first render with the expansion
+            // and the panel appears fully grown instead of growing out of the notch.
+            //
+            // Nothing enabled means no panel will ever open for this drag, so there is
+            // nothing for the drag image to be hidden behind.
+            guard !zones.isEmpty else { return }
+            mirrorSurface()
 
         case .enteredHotRect:
             // Nothing enabled (or a drag out of a stash whose card is switched off) means
@@ -356,6 +382,9 @@ public final class DropZonesViewModel {
             }
 
         case .ended:
+            // The drag is over wherever it ended, so the mirror is owed back — before the
+            // guard below, which returns for every drag that never opened a panel.
+            armMirrorRelease()
             // A drop that reached us owns the teardown from here: the settle card is the
             // zones presentation, and the mouse-up that delivered the drop must not pull
             // it out from under the animation.
@@ -372,6 +401,7 @@ public final class DropZonesViewModel {
             phase = .idle
 
         case .cancelled:
+            armMirrorRelease()
             guard isZonesShown, !isDropInFlight else { return }
             cancelLeave()
             // Escape during the drag: nothing will be delivered, so no grace is owed.
@@ -401,6 +431,61 @@ public final class DropZonesViewModel {
     private func cancelDropGrace() {
         dropGraceToken?.cancel()
         dropGraceToken = nil
+    }
+
+    // MARK: - The surface mirror
+
+    /// Asks the island to draw itself from its mirror window — the one in the ordinary
+    /// user Space, under the system's drag image — for the rest of this drag.
+    ///
+    /// Without it the dragged file's thumbnail disappears behind the zones panel: the
+    /// island's private SkyLight Space composites above the drag image (spec, "Known gap").
+    private func mirrorSurface() {
+        cancelMirrorRelease()
+        guard !isMirrored else { return }
+        isMirrored = true
+        islandPresenter.setSurfaceMirrored(true)
+    }
+
+    /// The drag is over: give the pixels back to the primary window once whatever it left
+    /// on screen has finished collapsing.
+    private func armMirrorRelease() {
+        guard isMirrored else { return }
+        // A panel still up (or a drop still landing) owns the mirror until it comes down;
+        // ``dismissZones()`` starts the countdown then. A drag that never opened one — it
+        // passed nowhere near the notch, or the user let go outside it — has nothing to
+        // wait for.
+        guard isZonesShown || isDropInFlight else {
+            releaseMirror()
+            return
+        }
+        isMirrorReleasePending = true
+    }
+
+    /// Starts the post-collapse countdown. Called from ``dismissZones()`` so every way the
+    /// panel can come down — the grace expiring, a settle finishing, an AirDrop hand-over —
+    /// releases the mirror the same way.
+    private func scheduleMirrorRelease() {
+        isMirrorReleasePending = false
+        mirrorToken?.cancel()
+        mirrorToken = clock.schedule(after: Self.mirrorRelease) { [weak self] in
+            guard let self else { return }
+            mirrorToken = nil
+            releaseMirror()
+        }
+    }
+
+    private func releaseMirror() {
+        cancelMirrorRelease()
+        guard isMirrored else { return }
+        isMirrored = false
+        islandPresenter.setSurfaceMirrored(false)
+    }
+
+    private func cancelMirrorRelease() {
+        mirrorToken?.cancel()
+        mirrorToken = nil
+        isMirrorReleasePending = false
     }
 
     /// Whether a drop is being copied or settling, which is when the zones presentation
@@ -750,8 +835,12 @@ public final class DropZonesViewModel {
         thumbnailTask?.cancel()
         thumbnailTask = nil
         thumbnails.removeAll()
+        // Before `dismissZones()`, so the dismiss below cannot arm a countdown on a
+        // feature that is being switched off; the mirror goes back at once instead.
+        cancelMirrorRelease()
         dismissZones()
         dismissStash()
+        releaseMirror()
         phase = .idle
         dragOutPhase = .idle
     }
@@ -805,6 +894,10 @@ public final class DropZonesViewModel {
         isZonesShown = false
         // Nothing to catch for any more; `catcherFrameNeeded` is `nil` from here.
         onCatcherFrameChange?(catcherFrameNeeded)
+        // Only when the drag itself is already over: a panel dismissed by the leave
+        // debounce is one the user may well drag back into, and swapping the windows
+        // mid-drag would put the thumbnail back behind the island.
+        if isMirrorReleasePending { scheduleMirrorRelease() }
     }
 
     private func cancelLeave() {

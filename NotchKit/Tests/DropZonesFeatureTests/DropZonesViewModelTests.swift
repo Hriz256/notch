@@ -16,6 +16,10 @@ private final class FakePresenter: IslandPresenting {
     var updated: [Presentation] = []
     var dismissed: [PresentationID] = []
     var live: [PresentationID: Presentation] = [:]
+    /// Every `setSurfaceMirrored` call, in order. The real presenter swallows a repeat of
+    /// the state it is already in; this one records everything, so the tests can say the
+    /// model itself does not ask twice.
+    var mirrored: [Bool] = []
 
     func present(_ p: Presentation) {
         presented.append(p)
@@ -30,6 +34,10 @@ private final class FakePresenter: IslandPresenting {
     func dismiss(_ id: PresentationID) {
         dismissed.append(id)
         live.removeValue(forKey: id)
+    }
+
+    func setSurfaceMirrored(_ mirrored: Bool) {
+        self.mirrored.append(mirrored)
     }
 
     /// The one card on screen for `priority`, or `nil` — the view model never has
@@ -1197,5 +1205,160 @@ private final class Harness {
         harness.clock.advance(by: .milliseconds(400))
 
         #expect(harness.model.zones == [.airDrop, .stash, .replaceStash])
+    }
+}
+
+// MARK: - The surface mirror
+
+/// The island draws itself from a second window in the ordinary user Space for the length
+/// of a drag, so the system's drag image composites *above* the zones panel instead of
+/// disappearing behind it. These tests own the timing of that swap; `MirrorSwapTests` in
+/// IslandCore owns what the two windows then look like.
+@Suite @MainActor struct DropZonesViewModelMirrorTests {
+
+    /// At drag *start*, not when the zones open: the mirror's SwiftUI view has to render
+    /// the island as it stands before the panel is presented into it, or the panel appears
+    /// fully grown instead of growing out of the notch.
+    @Test func theDragStartMirrorsTheIslandBeforeAnythingIsPresented() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+
+        harness.model.handle(.began)
+
+        #expect(harness.presenter.mirrored == [true])
+        #expect(harness.presenter.presented.isEmpty)
+        #expect(!harness.model.isZonesShown)
+    }
+
+    /// With every card switched off no panel will ever open, so there is nothing for the
+    /// drag image to be hidden behind.
+    @Test func aDragWithNoZoneEnabledNeverMirrors() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.settings.airdrop = false
+        harness.settings.stash = false
+
+        harness.model.handle(.began)
+        harness.model.handle(.ended)
+
+        #expect(harness.presenter.mirrored.isEmpty)
+    }
+
+    /// A drag that passed nowhere near the notch has no collapse to wait for.
+    @Test func aDragThatNeverOpenedTheZonesReleasesAtOnce() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+
+        harness.model.handle(.began)
+        harness.model.handle(.ended)
+
+        #expect(harness.presenter.mirrored == [true, false])
+        #expect(harness.clock.pendingCount == 0)
+    }
+
+    /// The swap is only invisible while the island is static, so the mirror is held until
+    /// the panel's collapse has played out.
+    @Test func theMirrorOutlivesTheZonesCollapse() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+
+        // Nothing targeted, so the panel goes down with the mouse-up.
+        harness.model.handle(.ended)
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.clock.advance(by: .milliseconds(499))
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.clock.advance(by: .milliseconds(1))
+        #expect(harness.presenter.mirrored == [true, false])
+    }
+
+    /// The settle card is the longest thing a drag leaves on screen: the mirror waits for
+    /// the drop to land, the card to play and only then starts its own countdown.
+    @Test func aDropHoldsTheMirrorUntilTheSettleCardHasPlayed() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+        _ = harness.model.targeted(at: stashPoint)
+
+        // The mouse comes up over a card: the drop is still on its way.
+        harness.model.handle(.ended)
+        await harness.model.drop(urls: [try harness.makeFile("a.txt")], on: .stash)
+        #expect(harness.model.phase == .settling)
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.clock.advance(by: DropZonesViewModel.settleDelay)
+        #expect(harness.model.phase == .stashed)
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.clock.advance(by: DropZonesViewModel.mirrorRelease)
+        #expect(harness.presenter.mirrored == [true, false])
+    }
+
+    /// The cursor dipping out of the hot rect closes the panel but the drag is still in
+    /// the user's hand: swapping the windows back there would put the thumbnail behind the
+    /// island again for a drag that may well come back.
+    @Test func leavingTheHotRectMidDragKeepsTheMirror() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+
+        harness.model.handle(.leftHotRect)
+        harness.clock.advance(by: .seconds(5))
+        #expect(!harness.model.isZonesShown)
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.model.handle(.ended)
+        #expect(harness.presenter.mirrored == [true, false])
+    }
+
+    /// Escape mid-drag: nothing is coming, and the panel is already down.
+    @Test func aCancelledDragReleasesTheMirrorAfterTheCollapse() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+
+        harness.model.handle(.cancelled)
+        #expect(harness.presenter.mirrored == [true])
+
+        harness.clock.advance(by: DropZonesViewModel.mirrorRelease)
+        #expect(harness.presenter.mirrored == [true, false])
+    }
+
+    /// A second drag inside the release window takes the mirror over rather than swapping
+    /// the windows twice under it.
+    @Test func aFreshDragCancelsAPendingRelease() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+        harness.model.handle(.ended)
+        harness.clock.advance(by: .milliseconds(200))
+
+        harness.model.handle(.began)
+        harness.clock.advance(by: .seconds(5))
+
+        #expect(harness.presenter.mirrored == [true])
+        #expect(harness.clock.pendingCount == 0)
+    }
+
+    /// The feature being switched off mid-drag hands the island straight back: there is no
+    /// panel left to collapse, and nobody to release the mirror later.
+    @Test func stopReleasesTheMirror() throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        harness.model.handle(.began)
+        harness.enterHotRect()
+
+        harness.model.stop()
+
+        #expect(harness.presenter.mirrored == [true, false])
+        #expect(harness.clock.pendingCount == 0)
     }
 }

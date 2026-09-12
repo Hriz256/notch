@@ -68,7 +68,7 @@ public final class DragObserver {
     /// on a second screen would need.
     ///
     /// The location is real only for the outputs that come from a mouse-*dragged*
-    /// event — `.enteredHotRect` and `.leftHotRect`. `.ended` and `.cancelled`
+    /// event — `.began`, `.enteredHotRect` and `.leftHotRect`. `.ended` and `.cancelled`
     /// report `.zero`, because reading `NSEvent.mouseLocation` is a WindowServer
     /// round trip and those events fire on an idle machine (design §5: nothing but
     /// an `Int` comparison until a mouse-down).
@@ -213,7 +213,7 @@ public final class DragObserver {
             // a screen that was resized, rearranged or unplugged since the last
             // drag without any notification plumbing.
             detector = DragDetector(hotRect: hotRect())
-            // `.mouseDown` is always `.none`, so the location is never used.
+            // A mouse-down never produces an output, so the location is never used.
             emit(detector.receive(.mouseDown(changeCount: pasteboard.changeCount)), at: .zero)
 
         case .leftMouseDragged:
@@ -251,9 +251,13 @@ public final class DragObserver {
         return DragPasteboardClassifier.hasFileContent(types: pasteboard.types ?? [])
     }
 
-    private func emit(_ output: DragDetector.Output, at location: CGPoint) {
-        guard output != .none else { return }
-        logger.debug("\(String(describing: output), privacy: .public)")
-        onEvent?(output, location)
+    /// Forwards everything one event produced, in order. A promotion over the notch
+    /// reports `.began` and `.enteredHotRect` together, and the order matters: the island
+    /// mirrors itself on the first and presents the zones on the second.
+    private func emit(_ outputs: [DragDetector.Output], at location: CGPoint) {
+        for output in outputs {
+            logger.debug("\(String(describing: output), privacy: .public)")
+            onEvent?(output, location)
+        }
     }
 }

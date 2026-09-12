@@ -28,17 +28,17 @@ import Testing
 
     @Test func eventsOtherThanMouseDownAreIgnoredWhileIdle() {
         var d = detector()
-        #expect(d.receive(dragged(Self.inside)) == .none)
+        #expect(d.receive(dragged(Self.inside)) == [])
         #expect(d.phase == .idle)
-        #expect(d.receive(.flagsChanged) == .none)
+        #expect(d.receive(.flagsChanged) == [])
         #expect(d.phase == .idle)
-        #expect(d.receive(.mouseUp) == .none)
+        #expect(d.receive(.mouseUp) == [])
         #expect(d.phase == .idle)
     }
 
     @Test func mouseDownEntersMouseDownWithoutOutput() {
         var d = detector()
-        #expect(d.receive(.mouseDown(changeCount: 7)) == .none)
+        #expect(d.receive(.mouseDown(changeCount: 7)) == [])
         #expect(d.phase == .mouseDown)
     }
 
@@ -50,28 +50,45 @@ import Testing
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
         // Same change count: the drag has not published anything yet.
-        #expect(d.receive(dragged(Self.outside, changeCount: 7)) == .none)
+        #expect(d.receive(dragged(Self.outside, changeCount: 7)) == [])
         #expect(d.phase == .mouseDown)
-        // New count with files, but still outside the hot rect: promoted, silently.
-        #expect(d.receive(dragged(Self.outside, changeCount: 8)) == .none)
+        // New count with files, but still outside the hot rect: the drag has begun, and
+        // that is all this event says.
+        #expect(d.receive(dragged(Self.outside, changeCount: 8)) == [.began])
         #expect(d.phase == .dragging(inHotRect: false))
     }
 
+    /// `.began` is the mirror swap's cue, so it must arrive exactly once per drag: a
+    /// second one mid-drag would rebuild the mirror's view under a growing panel.
+    @Test func beganIsReportedOnceForTheWholeDrag() {
+        var d = detector()
+        _ = d.receive(.mouseDown(changeCount: 7))
+        #expect(d.receive(dragged(Self.outside)) == [.began])
+        #expect(d.receive(dragged(CGPoint(x: 20, y: 20))) == [])
+        #expect(d.receive(dragged(Self.inside)) == [.enteredHotRect])
+        #expect(d.receive(dragged(Self.outside)) == [.leftHotRect])
+        #expect(d.receive(.mouseUp) == [.ended])
+    }
+
+    /// A gesture that never carries files is not a drag at all, so nothing begins and the
+    /// island is never mirrored for it.
     @Test func aDragWithoutFilesNeverPromotes() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
         for _ in 0..<5 {
-            #expect(d.receive(dragged(Self.inside, changeCount: 8, hasFiles: false)) == .none)
+            #expect(d.receive(dragged(Self.inside, changeCount: 8, hasFiles: false)) == [])
             #expect(d.phase == .mouseDown)
         }
     }
 
     /// Promotion decides containment from the very event that promoted, so a drag that
-    /// becomes recognisable while already over the notch opens the zones at once.
+    /// becomes recognisable while already over the notch opens the zones at once — and
+    /// both halves come back from that one event, in the order the island needs them:
+    /// mirror first, panel second.
     @Test func promotingInsideTheHotRectEntersImmediately() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside)) == [.began, .enteredHotRect])
         #expect(d.phase == .dragging(inHotRect: true))
     }
 
@@ -81,32 +98,32 @@ import Testing
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.outside))
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside)) == [.enteredHotRect])
         // Moving around inside changes nothing.
-        #expect(d.receive(dragged(CGPoint(x: 260, y: 210))) == .none)
+        #expect(d.receive(dragged(CGPoint(x: 260, y: 210))) == [])
         #expect(d.phase == .dragging(inHotRect: true))
-        #expect(d.receive(dragged(Self.outside)) == .leftHotRect)
-        #expect(d.receive(dragged(CGPoint(x: 20, y: 20))) == .none)
+        #expect(d.receive(dragged(Self.outside)) == [.leftHotRect])
+        #expect(d.receive(dragged(CGPoint(x: 20, y: 20))) == [])
         #expect(d.phase == .dragging(inHotRect: false))
         // And a re-entry fires again.
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside)) == [.enteredHotRect])
     }
 
     @Test func theRectIncludesItsOwnEdge() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.outside))
-        #expect(d.receive(dragged(CGPoint(x: 100, y: 100))) == .enteredHotRect)
+        #expect(d.receive(dragged(CGPoint(x: 100, y: 100))) == [.enteredHotRect])
     }
 
     /// No notch screen: the rect is empty and the zones must never open.
     @Test func anEmptyHotRectNeverEntersOrLeaves() {
         var d = DragDetector(hotRect: .zero)
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(dragged(.zero)) == .none)
-        #expect(d.receive(dragged(Self.inside)) == .none)
+        #expect(d.receive(dragged(.zero)) == [.began])
+        #expect(d.receive(dragged(Self.inside)) == [])
         #expect(d.phase == .dragging(inHotRect: false))
-        #expect(d.receive(.mouseUp) == .ended)
+        #expect(d.receive(.mouseUp) == [.ended])
     }
 
     // MARK: - Mouse up
@@ -114,8 +131,8 @@ import Testing
     @Test func mouseUpInsideTheRectEndsTheDrag() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
-        #expect(d.receive(.mouseUp) == .ended)
+        #expect(d.receive(dragged(Self.inside)) == [.began, .enteredHotRect])
+        #expect(d.receive(.mouseUp) == [.ended])
         #expect(d.phase == .idle)
     }
 
@@ -125,7 +142,7 @@ import Testing
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.outside))
-        #expect(d.receive(.mouseUp) == .ended)
+        #expect(d.receive(.mouseUp) == [.ended])
         #expect(d.phase == .idle)
     }
 
@@ -133,7 +150,7 @@ import Testing
     @Test func mouseUpWithoutAPromotionIsSilent() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(.mouseUp) == .none)
+        #expect(d.receive(.mouseUp) == [])
         #expect(d.phase == .idle)
     }
 
@@ -142,8 +159,8 @@ import Testing
     @Test func flagsChangedWhileDraggingCancels() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
-        #expect(d.receive(.flagsChanged) == .cancelled)
+        #expect(d.receive(dragged(Self.inside)) == [.began, .enteredHotRect])
+        #expect(d.receive(.flagsChanged) == [.cancelled])
         #expect(d.phase == .cancelled)
     }
 
@@ -152,8 +169,8 @@ import Testing
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.outside))
         _ = d.receive(.flagsChanged)
-        #expect(d.receive(dragged(Self.inside)) == .none)
-        #expect(d.receive(.flagsChanged) == .none)
+        #expect(d.receive(dragged(Self.inside)) == [])
+        #expect(d.receive(.flagsChanged) == [])
         #expect(d.phase == .cancelled)
     }
 
@@ -163,17 +180,17 @@ import Testing
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.inside))
         _ = d.receive(.flagsChanged)
-        #expect(d.receive(.mouseUp) == .none)
+        #expect(d.receive(.mouseUp) == [])
         #expect(d.phase == .idle)
     }
 
     @Test func flagsChangedBeforeAPromotionIsHarmless() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(.flagsChanged) == .none)
+        #expect(d.receive(.flagsChanged) == [])
         #expect(d.phase == .mouseDown)
         // The drag can still start: a modifier held from the beginning is not a cancel.
-        #expect(d.receive(dragged(Self.inside)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside)) == [.began, .enteredHotRect])
     }
 
     // MARK: - Re-entry through mouse-down
@@ -183,13 +200,13 @@ import Testing
     @Test func mouseDownTwiceReSnapshotsTheChangeCount() {
         var d = detector()
         _ = d.receive(.mouseDown(changeCount: 7))
-        #expect(d.receive(dragged(Self.inside, changeCount: 8)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside, changeCount: 8)) == [.began, .enteredHotRect])
         // Second press snapshots 8, so a dragged event still at 8 cannot promote.
-        #expect(d.receive(.mouseDown(changeCount: 8)) == .none)
+        #expect(d.receive(.mouseDown(changeCount: 8)) == [])
         #expect(d.phase == .mouseDown)
-        #expect(d.receive(dragged(Self.inside, changeCount: 8)) == .none)
+        #expect(d.receive(dragged(Self.inside, changeCount: 8)) == [])
         #expect(d.phase == .mouseDown)
-        #expect(d.receive(dragged(Self.inside, changeCount: 9)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside, changeCount: 9)) == [.began, .enteredHotRect])
     }
 
     @Test func mouseDownRecoversFromACancelledDrag() {
@@ -197,8 +214,8 @@ import Testing
         _ = d.receive(.mouseDown(changeCount: 7))
         _ = d.receive(dragged(Self.inside))
         _ = d.receive(.flagsChanged)
-        #expect(d.receive(.mouseDown(changeCount: 8)) == .none)
+        #expect(d.receive(.mouseDown(changeCount: 8)) == [])
         #expect(d.phase == .mouseDown)
-        #expect(d.receive(dragged(Self.inside, changeCount: 9)) == .enteredHotRect)
+        #expect(d.receive(dragged(Self.inside, changeCount: 9)) == [.began, .enteredHotRect])
     }
 }
