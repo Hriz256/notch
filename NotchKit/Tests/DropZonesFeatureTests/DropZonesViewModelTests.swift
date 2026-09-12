@@ -16,12 +16,12 @@ private final class FakePresenter: IslandPresenting {
     var updated: [Presentation] = []
     var dismissed: [PresentationID] = []
     var live: [PresentationID: Presentation] = [:]
-    /// Every `setSurfaceInUserSpace` call, in order — the island leaving its private
-    /// Space and coming back is a visible thing, so the sequence matters.
-    var spaceRequests: [Bool] = []
+    /// Every `setSurfaceSuppressed` call, in order — the island collapsing out of the
+    /// way and coming back is a visible thing, so the sequence matters.
+    var suppressions: [Bool] = []
 
-    func setSurfaceInUserSpace(_ inUserSpace: Bool) {
-        spaceRequests.append(inUserSpace)
+    func setSurfaceSuppressed(_ suppressed: Bool) {
+        suppressions.append(suppressed)
     }
 
     func present(_ p: Presentation) {
@@ -373,44 +373,33 @@ private final class Harness {
         #expect(harness.model.phase == .hovering)
     }
 
-    /// The island normally lives in a private Space that composites above Finder's
-    /// drag-image window, which hid the thumbnail the user was dragging behind the
-    /// cards. It comes down into the user's Space for the drag and goes back after.
-    @Test func theIslandLeavesItsPrivateSpaceWhileTheZonesAreUp() throws {
+    /// The island's private Space composites above Finder's drag-image window, so
+    /// anything it draws hides the thumbnail the user is dragging. It goes down to the
+    /// bare notch for the drag and comes back after.
+    @Test func theIslandIsSuppressedWhileTheZonesAreUp() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
 
         harness.enterHotRect()
-        #expect(harness.presenter.spaceRequests == [true])
+        #expect(harness.presenter.suppressions == [true])
 
-        // Updating the panel in place is not a second move.
+        // Updating the panel in place is not a second request.
         _ = harness.model.targeted(at: stashPoint)
-        #expect(harness.presenter.spaceRequests == [true])
+        #expect(harness.presenter.suppressions == [true])
 
         harness.model.handle(.cancelled)
-        #expect(harness.presenter.spaceRequests == [true, false])
+        #expect(harness.presenter.suppressions == [true, false])
     }
 
-    @Test func stoppingPutsTheIslandBackInItsPrivateSpace() throws {
+    @Test func stoppingUnsuppressesTheIsland() throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
         harness.enterHotRect()
 
         harness.model.stop()
 
-        #expect(harness.presenter.spaceRequests.first == true)
-        #expect(harness.presenter.spaceRequests.last == false)
-    }
-
-    /// Seam shows no stack dots over the zones panel, and neither do we: it is a drop
-    /// target for the drag in hand, not a page of the card stack.
-    @Test func theZonesPanelDrawsNoStackDots() throws {
-        let harness = try Harness()
-        defer { harness.cleanUp() }
-
-        harness.enterHotRect()
-
-        #expect(harness.presenter.presented.first?.showsStackDots == false)
+        #expect(harness.presenter.suppressions.first == true)
+        #expect(harness.presenter.suppressions.last == false)
     }
 
     @Test func aCancelledDragDismissesAtOnce() throws {

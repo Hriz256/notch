@@ -646,8 +646,8 @@ public final class DropZonesViewModel {
         dismissZones()
         dismissStash()
         // Unconditional, unlike `dismissZones`'s own call: a feature switched off with no
-        // panel up must still not leave the island stranded in the user's Space.
-        islandPresenter.setSurfaceInUserSpace(false)
+        // panel up must still not leave the island hidden.
+        islandPresenter.setSurfaceSuppressed(false)
         phase = .idle
         dragOutPhase = .idle
     }
@@ -661,11 +661,11 @@ public final class DropZonesViewModel {
             zonesID = id
             isZonesShown = true
             // The island's private Space composites above Finder's drag-image window, so
-            // the thumbnail the user is dragging would disappear behind the cards. Down
-            // into the user's Space for the length of the drag; `dismissZones` puts it
-            // back. Before presenting, like the catcher, so the first frame of the panel
-            // is already drawn in the Space it belongs in.
-            islandPresenter.setSurfaceInUserSpace(true)
+            // anything the island draws hides the thumbnail the user is dragging — and
+            // moving the window into the user's Space does not change that. The island
+            // therefore goes down to the bare notch for the length of the drag and the
+            // catcher window draws the panel instead; `dismissZones` gives it back.
+            islandPresenter.setSurfaceSuppressed(true)
             // The catcher goes up first, before the SwiftUI card is built and presented:
             // see ``onCatcherFrameChange``. Presenting is the most expensive thing that
             // happens during a drag, and a window ordered in after it can miss the drop.
@@ -680,10 +680,7 @@ public final class DropZonesViewModel {
             leading: AnyView(EmptyView()),
             trailing: AnyView(EmptyView()),
             expanded: viewFactory.zones(self),
-            expandedSize: Self.zonesSize,
-            // No dots over the cards: the panel is not a page of the stack, it is a
-            // target for the drag in the user's hand, and Seam shows none there either.
-            showsStackDots: false
+            expandedSize: Self.zonesSize
         )
         if isNewShowing {
             islandPresenter.present(presentation)
@@ -707,9 +704,8 @@ public final class DropZonesViewModel {
         isZonesShown = false
         // Nothing to catch for any more; `catcherFrameNeeded` is `nil` from here.
         onCatcherFrameChange?(catcherFrameNeeded)
-        // The drag is over, so the island goes back into its private Space — above every
-        // user Space again, and out of the Space-transition animation.
-        islandPresenter.setSurfaceInUserSpace(false)
+        // The drag is over: the island comes back to whatever it was showing.
+        islandPresenter.setSurfaceSuppressed(false)
     }
 
     private func cancelLeave() {

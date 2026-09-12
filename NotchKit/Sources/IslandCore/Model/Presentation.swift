@@ -36,11 +36,6 @@ public struct Presentation: Identifiable {
     public var trailing: AnyView
     public var expanded: AnyView?
     public var expandedSize: CGSize
-    /// Whether the island draws its stack dots over this card. On by default — the dots
-    /// are how the user knows there is more than one card — but a panel that is not a
-    /// page of the stack in the user's mind (the Drop Zones cards, which exist only for
-    /// the length of a drag) turns them off rather than inviting a swipe mid-drop.
-    public var showsStackDots: Bool
 
     public init(
         id: PresentationID = PresentationID(),
@@ -52,8 +47,7 @@ public struct Presentation: Identifiable {
         leading: AnyView,
         trailing: AnyView,
         expanded: AnyView?,
-        expandedSize: CGSize = CGSize(width: 390, height: 200),
-        showsStackDots: Bool = true
+        expandedSize: CGSize = CGSize(width: 390, height: 200)
     ) {
         precondition(style == .peek || expanded != nil, "expanded style requires an expanded view")
         self.id = id
@@ -66,7 +60,6 @@ public struct Presentation: Identifiable {
         self.trailing = trailing
         self.expanded = expanded
         self.expandedSize = expandedSize
-        self.showsStackDots = showsStackDots
     }
 
     /// The name menus show for this card: the feature-provided title, else the feature id

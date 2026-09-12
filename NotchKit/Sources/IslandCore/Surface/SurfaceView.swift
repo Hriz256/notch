@@ -23,8 +23,14 @@ public struct SurfaceView: View {
     }
 
     public var body: some View {
-        let current = presenter.current
-        let layout = IslandLayout.resolve(state: presenter.state, current: current, geometry: geometry)
+        // While a feature owns the notch (Drop Zones, for the length of a drag) the
+        // island draws the bare notch and nothing else: `visibleState` / `visibleCurrent`
+        // are `.collapsed` / `nil` then, so the shape shrinks on the choreographer's
+        // collapse curve, the content leaves on `contentOut`, and no dot survives —
+        // `stackDots` already needs `.expanded`.
+        let current = presenter.visibleCurrent
+        let state = presenter.visibleState
+        let layout = IslandLayout.resolve(state: state, current: current, geometry: geometry)
         // The notch itself is the floor: the black shape may cover it, never sit inside it.
         let floor = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
         let animation = choreographer.geometryAnimation(from: previousLayout, to: layout)
@@ -43,7 +49,7 @@ public struct SurfaceView: View {
                 // gives the cards; landing on feature content gives that feature's menu,
                 // which embeds `CardsMenuSection` to offer the same rows.
                 .contextMenu { CardsMenuSection(presenter: presenter) }
-                .overlay(alignment: .trailing) { stackDots(layout: layout, current: current) }
+                .overlay(alignment: .trailing) { stackDots(layout: layout) }
 
             content(layout: layout, current: current)
                 .islandFrame(size: layout.size, minimum: floor, alignment: .top)
@@ -54,7 +60,7 @@ public struct SurfaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(animation, value: layout)
-        .animation(animation, value: presenter.state)
+        .animation(animation, value: state)
         .onChange(of: layout, initial: true) { _, new in previousLayout = new }
     }
 
@@ -83,13 +89,11 @@ public struct SurfaceView: View {
     /// interruption, not a page of the stack. Marking the card underneath it said the
     /// island was showing Music while the panel on screen was the Code completion.
     ///
-    /// A card can opt out entirely (``Presentation/showsStackDots``): the Drop Zones
-    /// panel is up only while a drag is in the air, and dots over it read as "swipe me"
-    /// on a card there is no swiping away from.
+    /// A suppressed island has no mode but `.collapsed`, so the dots go with it.
     @ViewBuilder
-    private func stackDots(layout: IslandLayout, current: Presentation?) -> some View {
+    private func stackDots(layout: IslandLayout) -> some View {
         let count = presenter.stack.count
-        if count > 1, layout.mode == .expanded, current?.showsStackDots != false {
+        if count > 1, layout.mode == .expanded {
             let index = presenter.isShowingTransientAlert ? nil : presenter.stackIndex
             VStack(spacing: Self.dotSpacing) {
                 ForEach(0..<count, id: \.self) { position in

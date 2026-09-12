@@ -5,22 +5,26 @@ public protocol IslandPresenting: AnyObject {
     func update(_ presentation: Presentation)
     func dismiss(_ id: PresentationID)
 
-    /// Asks for the island window to sit in the user's *active* Space rather than in the
-    /// private one it normally lives in.
+    /// Asks the island to draw nothing but the bare notch for a while, whatever is in
+    /// the queue.
     ///
-    /// The private Space composites above every user Space, which is exactly what keeps
-    /// the island out of Space-transition animations — and also what draws it over
-    /// Finder's drag image, so a file dragged onto the island disappears behind it. A
-    /// feature that needs the drag image on top (Drop Zones, while its cards are up)
-    /// asks for the window to come back down into the user Space for the duration, and
-    /// hands it back afterwards.
+    /// The island window lives in a private Space that composites above every user
+    /// Space — including Finder's drag-image window — so anything it draws covers the
+    /// thumbnail the user is dragging, and moving the window out of that Space for the
+    /// duration does not change that (measured on macOS 26.5). A feature that has to own
+    /// the notch during a drag therefore draws its own panel in an ordinary-Space window
+    /// and suppresses the island underneath it, so the two black shapes never both
+    /// appear over the notch.
+    ///
+    /// Suppression hides; it does not dismiss. The queue is untouched, so whatever was
+    /// on screen comes back the moment the flag is cleared.
     ///
     /// Default no-op: a feature is never *required* to care, and neither is a presenter.
-    func setSurfaceInUserSpace(_ inUserSpace: Bool)
+    func setSurfaceSuppressed(_ suppressed: Bool)
 }
 
 public extension IslandPresenting {
-    func setSurfaceInUserSpace(_ inUserSpace: Bool) {}
+    func setSurfaceSuppressed(_ suppressed: Bool) {}
 }
 
 @MainActor

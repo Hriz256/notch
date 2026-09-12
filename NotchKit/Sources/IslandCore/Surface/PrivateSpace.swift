@@ -55,7 +55,6 @@ public final class PrivateSpace {
     private typealias HideSpacesFn = @convention(c) (Int32, CFArray) -> Int32
     private typealias AddWindowsAndRemoveFromSpacesFn = @convention(c) (Int32, UInt64, CFArray, Int32) -> Int32
     private typealias SpaceDestroyFn = @convention(c) (Int32, UInt64) -> Int32
-    private typealias GetActiveSpaceFn = @convention(c) (Int32) -> UInt64
 
     private static let frameworkPath =
         "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
@@ -68,9 +67,6 @@ public final class PrivateSpace {
     private let showSpaces: ShowSpacesFn
     private let hideSpaces: HideSpacesFn?
     private let spaceDestroy: SpaceDestroyFn?
-    /// Optional: ``release(_:)`` is the only caller, and without it the window simply
-    /// stays in the private Space (the island keeps working, the drag image stays under it).
-    private let getActiveSpace: GetActiveSpaceFn?
     private var isAlive = true
 
     /// The WindowServer id of the created Space. Useful for verification.
@@ -114,12 +110,6 @@ public final class PrivateSpace {
         self.spaceDestroy = dlsym(handle, "SLSSpaceDestroy").map {
             unsafeBitCast($0, to: SpaceDestroyFn.self)
         }
-        self.getActiveSpace = dlsym(handle, "SLSGetActiveSpace").map {
-            unsafeBitCast($0, to: GetActiveSpaceFn.self)
-        }
-        if getActiveSpace == nil {
-            logger.warning("SLSGetActiveSpace unavailable; the island cannot leave its private space")
-        }
 
         logger.info("""
             Created private space id=\(space, privacy: .public) \
@@ -157,48 +147,6 @@ public final class PrivateSpace {
             logger.error("""
                 Failed to adopt window \(number, privacy: .public) into \
                 space \(self.spaceID, privacy: .public): error \(result, privacy: .public)
-                """)
-        }
-    }
-
-    /// Moves `window` back out of the private Space and into the user's *active* one —
-    /// the inverse of ``adopt(_:)``.
-    ///
-    /// Why anyone would want that: the private Space composites above every user Space,
-    /// which puts the island above Finder's drag-image window too, so a file dragged onto
-    /// the island vanishes behind it. A window in the active Space is composited with
-    /// everything else in it and the drag image draws on top, the way it does in Seam.
-    /// The cost is that the window rides Space transitions again for as long as it is
-    /// out — acceptable while the user is holding a drag.
-    ///
-    /// The call is the same atomic add-and-remove as ``adopt(_:)``, so the window is
-    /// never in neither Space: there is nothing to flash. Idempotent, and a no-op when
-    /// `SLSGetActiveSpace` did not resolve (logged once, at init).
-    public func release(_ window: NSWindow) {
-        guard isAlive else { return }
-        guard let getActiveSpace else { return }
-        let number = window.windowNumber
-        guard number > 0 else {
-            logger.error("Cannot release window with invalid windowNumber \(number, privacy: .public)")
-            return
-        }
-        let active = getActiveSpace(connection)
-        guard active != 0 else {
-            logger.error("SLSGetActiveSpace returned no space; window \(number, privacy: .public) stays private")
-            return
-        }
-        // Same trailing 7 — "remove from all other spaces" — which is what takes the
-        // window out of ours as it joins the active one.
-        let result = addWindows(connection, active, [number] as CFArray, 7)
-        if result == 0 {
-            logger.info("""
-                Released window \(number, privacy: .public) \
-                into active space \(active, privacy: .public)
-                """)
-        } else {
-            logger.error("""
-                Failed to release window \(number, privacy: .public) into \
-                active space \(active, privacy: .public): error \(result, privacy: .public)
                 """)
         }
     }
