@@ -53,16 +53,13 @@ struct CodeActivityView: View {
     /// same line by hand.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            AgentIcon(agent: model.displayedAgent, size: 18, isPulsing: stage == .thinking)
+            AgentIcon(agent: model.displayedAgent, size: 18, isPulsing: model.visibleActivity == .thinking)
                 .glyphBaseline(height: 18, textSize: 13)
-            // The same animated glyph the compact slot shows, so the card the user expands
-            // into is recognizably the one they were watching. `thinking` draws nothing,
-            // which is why the header reads plain "Thinking" between tools.
-            ActivityGlyph(
-                kind: ActivityKind.from(stage: stage, tool: session?.tool),
-                size: 12
-            )
-            .glyphBaseline(height: ActivityGlyph.boxHeight(for: 12), textSize: 13)
+            // Literally the glyph the compact slot is showing — the same smoothed value,
+            // not a second derivation of it — so expanding the island never swaps the mark
+            // the user was watching for a different one.
+            ActivityGlyph(kind: model.visibleActivity, size: 12)
+                .glyphBaseline(height: ActivityGlyph.boxHeight(for: 12), textSize: 13)
             Text(StageLabel.title(stage))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)

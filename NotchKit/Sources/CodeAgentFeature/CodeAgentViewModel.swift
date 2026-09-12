@@ -67,6 +67,10 @@ public final class CodeAgentViewModel {
     /// How long the completion / failure alert stays up.
     public static let alertDuration: Duration = .seconds(4)
 
+    /// How long the displayed session may go quiet before another working session is
+    /// allowed to take the island from it.
+    static let sessionHandoverQuiet: TimeInterval = 5
+
     /// Window lengths assumed when the provider does not report one (spec §3.3 pace rule).
     static let sessionWindowLength: TimeInterval = 5 * 3600
     static let weeklyWindowLength: TimeInterval = 7 * 24 * 3600
@@ -79,6 +83,14 @@ public final class CodeAgentViewModel {
     /// The last stage that passed the user's stage filter. A hidden stage leaves this
     /// untouched, so the island keeps showing the stage before it.
     public private(set) var visibleStage: Stage?
+    /// The glyph the compact slot and the activity header draw. Smoothed by
+    /// ``ActivityDwell``, so it lags ``visibleStage`` by up to a couple of seconds — which
+    /// is the whole point: hook events are far quicker than an eye.
+    /// Internal because ``ActivityKind`` is: only this module draws the island.
+    private(set) var visibleActivity: ActivityKind = .idle
+    /// ``SessionTracker/key(agent:sessionID:)`` of the session the island is about, kept
+    /// across events so two agents working at once do not trade the island back and forth.
+    public private(set) var displayedSessionKey: String?
     /// Seconds since the running session started. Only re-derived at 1 Hz between
     /// ``startTicking()`` and ``stopTicking()``; a plain refresh still snaps it to the truth.
     public private(set) var elapsed: TimeInterval = 0
@@ -97,9 +109,20 @@ public final class CodeAgentViewModel {
     public var activeCount: Int { tracker.activeCount }
     public var isCaffeinating: Bool { caffeinator.isActive }
 
-    /// The session the island is currently about: the running one, or — while a completion
-    /// alert is up — the finished one the alert is for. This is what the views render.
-    public var displayedSession: SessionTracker.Session? { tracker.activeSession ?? alertingSession }
+    /// The session the island is currently about: the sticky running one, or — while a
+    /// completion alert is up — the finished one the alert is for. This is what the views
+    /// render.
+    public var displayedSession: SessionTracker.Session? { displayedRunningSession ?? alertingSession }
+
+    /// The running session ``displayedSessionKey`` names, or `nil` once it has finished or
+    /// been dropped.
+    private var displayedRunningSession: SessionTracker.Session? {
+        guard let displayedSessionKey,
+              let session = tracker.sessions[displayedSessionKey],
+              !session.isFinished
+        else { return nil }
+        return session
+    }
 
     /// How tall the expanded card has to be for what the panel is about to draw.
     ///
@@ -178,6 +201,12 @@ public final class CodeAgentViewModel {
     @ObservationIgnored private var alertedFinishes: [String: Date] = [:]
     /// Coalesces the refresh that observation asks for, so one burst of events is one refresh.
     @ObservationIgnored private var observationTask: Task<Void, Never>?
+    /// The glyph the session *is* on, before the dwell smooths it. Only moved by a stage the
+    /// user's filter lets through, which is how a hidden stage keeps the previous glyph.
+    @ObservationIgnored private var activityTarget: ActivityKind = .idle
+    @ObservationIgnored private var dwell = ActivityDwell()
+    /// Brings the glyph forward when the dwell expires with no new event to do it.
+    @ObservationIgnored private var dwellToken: ScheduledToken?
 
     public init(
         presenter: any IslandPresenting,
@@ -303,8 +332,14 @@ public final class CodeAgentViewModel {
         observationTask = nil
         alertToken?.cancel()
         alertToken = nil
+        dwellToken?.cancel()
+        dwellToken = nil
         alertingSession = nil
+        displayedSessionKey = nil
         visibleStage = nil
+        activityTarget = .idle
+        dwell = ActivityDwell()
+        visibleActivity = .idle
         if let alertID {
             islandPresenter.dismiss(alertID)
             self.alertID = nil
@@ -341,13 +376,19 @@ public final class CodeAgentViewModel {
     }
 
     private func apply() {
-        let active = tracker.activeSession
+        let active = Self.chooseDisplayedSession(
+            current: displayedRunningSession,
+            sessions: tracker.sessions,
+            now: now()
+        )
+        displayedSessionKey = active.map { SessionTracker.key(agent: $0.agent, sessionID: $0.id) }
         displayedAgent = active?.agent ?? currentEnabledAgent
 
         let newAlert = claimFinishedSession()
         if let newAlert { alertingSession = newAlert }
 
         updateVisibleStage(driver: active ?? alertingSession)
+        updateVisibleActivity()
         updateElapsed(active)
         updateMain(active)
         if let newAlert { presentAlert(for: newAlert) }
@@ -382,19 +423,84 @@ public final class CodeAgentViewModel {
         return finished
     }
 
-    /// Stages the user hid must not change what the island shows: the previous stage stays.
-    /// `waiting`, `completed` and `failed` are never filterable.
+    /// Which session the island is about, given the one it is already about.
+    ///
+    /// Two agents working side by side each fire several hooks a second, and picking "the
+    /// most recent event" every time made the island flip between them many times a second:
+    /// unreadable, and it looked broken. So the displayed session is *sticky*. It changes
+    /// only when it has to:
+    ///
+    /// - it finished, or the tracker dropped it — there is nothing left to show;
+    /// - it has been quiet for ``sessionHandoverQuiet`` while another session is working —
+    ///   the user has moved on, and the island should follow;
+    /// - nothing was displayed.
+    ///
+    /// A busier neighbour is never on its own a reason to switch. Pure so the whole rule can
+    /// be read, and tested, in one place; `current` is looked up in `sessions` rather than
+    /// trusted, so a stale copy cannot keep a finished session on screen.
+    static func chooseDisplayedSession(
+        current: SessionTracker.Session?,
+        sessions: [String: SessionTracker.Session],
+        now: Date
+    ) -> SessionTracker.Session? {
+        let running = sessions.values.filter { !$0.isFinished }
+
+        guard let current,
+              let live = sessions[SessionTracker.key(agent: current.agent, sessionID: current.id)],
+              !live.isFinished
+        else { return newest(running) }
+
+        guard now.timeIntervalSince(live.lastEventAt) >= sessionHandoverQuiet else { return live }
+
+        let busy = running.filter {
+            $0.id != live.id || $0.agent != live.agent
+        }.filter {
+            now.timeIntervalSince($0.lastEventAt) < sessionHandoverQuiet
+        }
+        return newest(busy) ?? live
+    }
+
+    /// Most recent event wins; the id breaks ties so the choice is deterministic when two
+    /// events share a timestamp.
+    private static func newest(_ candidates: some Sequence<SessionTracker.Session>) -> SessionTracker.Session? {
+        candidates.max { ($0.lastEventAt, $0.id) < ($1.lastEventAt, $1.id) }
+    }
+
+    /// Stages the user hid must not change what the island shows: the previous stage — and
+    /// the previous glyph — stay. `waiting`, `completed` and `failed` are never filterable.
     private func updateVisibleStage(driver: SessionTracker.Session?) {
         guard let driver else {
             visibleStage = nil
+            activityTarget = .idle
             return
         }
         guard settings.showsStage(driver.agent, driver.stage) else { return }
+        // Before the stage guard below: the same stage with a different tool is still a
+        // different glyph (`creating` covers both an edit and a shell command).
+        activityTarget = ActivityKind.from(stage: driver.stage, tool: driver.tool)
         guard visibleStage != driver.stage else { return }
         visibleStage = driver.stage
         // The one line that says what the island is showing. Stage and agent only — never
         // the tool arguments or the prompt text the detail line carries.
         logger.info("showing \(driver.stage.rawValue, privacy: .public) for \(driver.agent.rawValue, privacy: .public)")
+    }
+
+    /// Runs the stage-filtered target through ``ActivityDwell`` and re-arms the timer the
+    /// dwell asks for. Without that timer the glyph would only catch up on the next hook
+    /// event, and the last one of a session would never hand over to the dots.
+    private func updateVisibleActivity() {
+        let current = now()
+        let due = dwell.update(target: activityTarget, now: current)
+        visibleActivity = dwell.visible
+
+        dwellToken?.cancel()
+        dwellToken = nil
+        guard let due else { return }
+        dwellToken = clock.schedule(after: .seconds(max(0, due.timeIntervalSince(current)))) { [weak self] in
+            guard let self else { return }
+            dwellToken = nil
+            refreshPresentation()
+        }
     }
 
     private func updateElapsed(_ active: SessionTracker.Session?) {
@@ -550,7 +656,8 @@ public final class CodeAgentViewModel {
     }
 
     private func tick() {
-        guard let active = tracker.activeSession else {
+        // The clock belongs to the session on screen, not to whichever one moved last.
+        guard let active = displayedRunningSession else {
             cancelTick()
             return
         }

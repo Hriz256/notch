@@ -515,6 +515,145 @@ final class CodeAgentViewModelTests {
         #expect(f.vm.visibleStage == .waiting)
     }
 
+    /// The filter applies on top of the dwell: a hidden stage leaves the glyph where it is,
+    /// even once the glyph is long past its minimum time on screen.
+    @Test func filteredStageKeepsThePreviousGlyph() {
+        let f = makeFixture(defaults: defaults)
+        f.settings.setShowsStage(.claude, .creating, false)
+
+        f.vm.handle(f.event(.analyzing, tool: "Read"))
+        #expect(f.vm.visibleActivity == .reading)
+
+        // Well past the 1.5 s dwell, so only the filter can be holding the magnifier.
+        f.clock.advance(by: .seconds(3))
+        f.vm.handle(f.event(.creating, tool: "Write"))
+        #expect(f.vm.visibleActivity == .reading)
+        #expect(f.vm.visibleStage == .analyzing)
+        #expect(f.vm.activeSession?.tool == "Write")
+    }
+
+    // MARK: Sticky displayed session
+
+    /// The bug: two Claude Code windows interleaving hooks had the island swapping between
+    /// them on every event — "то одна покажется, то другая".
+    @Test func theIslandStaysWithOneSessionWhileTwoAreWorking() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        #expect(f.vm.displayedSessionKey == SessionTracker.key(agent: .claude, sessionID: "s1"))
+
+        for _ in 0..<6 {
+            f.clock.advance(by: .milliseconds(200))
+            f.vm.handle(f.event(.creating, session: "s2", tool: "Edit"))
+            #expect(f.vm.displayedSession?.id == "s1")
+
+            f.clock.advance(by: .milliseconds(200))
+            f.vm.handle(f.event(.analyzing, session: "s1", tool: "Read"))
+            #expect(f.vm.displayedSession?.id == "s1")
+        }
+
+        // The second session is still counted — that is what the header's "×2" is for.
+        #expect(f.vm.activeCount == 2)
+    }
+
+    @Test func theIslandFollowsTheOtherSessionAfterFiveQuietSeconds() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        #expect(f.vm.displayedSession?.id == "s1")
+        #expect(f.vm.displayedAgent == .claude)
+
+        // Five seconds after `s1`'s last event, with `s2` still working.
+        f.clock.advance(by: .seconds(4))
+        f.vm.handle(f.event(.creating, agent: .codex, session: "s2", tool: "Edit"))
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.displayedAgent == .codex)
+    }
+
+    @Test func aFinishedSessionHandsTheIslandToTheOneStillWorking() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        f.clock.advance(by: .milliseconds(200))
+        f.vm.handle(f.event(.thinking, session: "s2"))
+        #expect(f.vm.displayedSession?.id == "s1")
+
+        f.clock.advance(by: .milliseconds(200))
+        f.vm.handle(f.event(.completed, session: "s1"))
+
+        // The island is about `s2` at once; the completion of `s1` is the separate alert.
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.activeCount == 1)
+        #expect(f.presenter.presented.count(where: { $0.priority == .alert }) == 1)
+    }
+
+    // MARK: Glyph dwell
+
+    /// The timeline from the spec, driven through the view model and its manual clock: a
+    /// 100 ms `Read`, an `Edit` right behind it, and then the tool ending for good.
+    @Test func theGlyphHoldsItsGroundAndThenFallsBackToTheDots() {
+        let f = makeFixture(defaults: defaults)
+
+        f.vm.handle(f.event(.analyzing, tool: "Read"))                 // t = 0
+        #expect(f.vm.visibleActivity == .reading)
+        #expect(CodeCompactTrailing.slot(for: f.vm) == .activity(.reading))
+
+        f.clock.advance(by: .milliseconds(100))                        // t = 0.1
+        f.vm.handle(f.event(.thinking))                                // PostToolUse(Read)
+        #expect(f.vm.visibleActivity == .reading)
+
+        f.clock.advance(by: .milliseconds(100))                        // t = 0.2
+        f.vm.handle(f.event(.creating, tool: "Edit"))                  // PreToolUse(Edit)
+        #expect(f.vm.visibleActivity == .reading)
+
+        f.clock.advance(by: .milliseconds(1200))                       // t = 1.4
+        #expect(f.vm.visibleActivity == .reading)
+
+        // The magnifier has had its 1.5 s; the pencil takes over with no new event needed.
+        f.clock.advance(by: .milliseconds(100))                        // t = 1.5
+        #expect(f.vm.visibleActivity == .editing)
+
+        f.clock.advance(by: .milliseconds(100))                        // t = 1.6
+        f.vm.handle(f.event(.thinking))                                // PostToolUse(Edit)
+        #expect(f.vm.visibleActivity == .editing)
+        #expect(f.vm.visibleStage == .thinking)                        // the stage is honest
+
+        f.clock.advance(by: .milliseconds(1900))                       // t = 3.5
+        #expect(f.vm.visibleActivity == .editing)
+
+        // No tool came back, so the island admits the agent is just thinking.
+        f.clock.advance(by: .milliseconds(100))                        // t = 3.6
+        #expect(f.vm.visibleActivity == .thinking)
+        #expect(CodeCompactTrailing.slot(for: f.vm) == .activity(.thinking))
+    }
+
+    /// A prompt is the one thing worth taking the slot from a glyph that has just appeared.
+    @Test func waitingInterruptsAGlyphThatHasJustAppeared() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.analyzing, tool: "Read"))
+        f.clock.advance(by: .milliseconds(50))
+
+        f.vm.handle(f.event(.waiting, detail: "Allow Bash to run rm -rf build?"))
+        #expect(f.vm.visibleActivity == .waiting)
+    }
+
+    /// Once the session is gone the slot goes back to the usage ring immediately — a glyph
+    /// lingering over an island that is no longer about a session would be a lie.
+    @Test func theGlyphClearsWithTheSession() async {
+        let f = makeFixture(results: [.claude: .success(usage(.claude, percent: 42))], defaults: defaults)
+        await loadUsage(f)
+
+        f.vm.handle(f.event(.creating, tool: "Edit"))
+        #expect(f.vm.visibleActivity == .editing)
+
+        f.vm.handle(f.event(.completed))
+        #expect(f.vm.visibleActivity == .completed)
+
+        f.clock.advance(by: CodeAgentViewModel.alertDuration)
+        #expect(f.vm.visibleActivity == .idle)
+        #expect(CodeCompactTrailing.slot(for: f.vm) == .ring(42))
+    }
+
     // MARK: Caffeinate
 
     @Test func caffeinateFollowsTheSettingAndTheSessionCount() {

@@ -14,7 +14,9 @@ struct CodeCompactLeading: View {
         AgentIcon(
             agent: model.displayedAgent,
             size: 18,
-            isPulsing: model.visibleStage == .thinking
+            // The glyph's idea of thinking, not the stage's: the two differ while the last
+            // tool glyph is lingering, and the icon must not pulse against it.
+            isPulsing: model.visibleActivity == .thinking
         )
         // The slot is exactly ``IslandLayout/peekSlotWidth`` wide and the icon must sit in
         // the middle of it. Stating the width here rather than inheriting the proposal
@@ -57,8 +59,6 @@ struct CodeCompactTrailing: View {
                 .foregroundStyle(.white.opacity(0.45))
                 .accessibilityLabel("Usage unavailable")
         case .activity(let kind):
-            // `.thinking` draws nothing: the pulsing agent icon on the other side of the
-            // notch already says the agent is between tools.
             ActivityGlyph(kind: kind, size: Self.glyphSize)
         }
     }
@@ -71,7 +71,8 @@ struct CodeCompactTrailing: View {
     }
 
     static func slot(for model: CodeAgentViewModel) -> Slot {
-        let kind = ActivityKind.from(stage: model.visibleStage, tool: model.displayedSession?.tool)
+        // The smoothed kind, not one derived here: a glyph recomputed per event flickered.
+        let kind = model.visibleActivity
         guard kind == .idle else { return .activity(kind) }
         guard model.usageError == nil else { return .unavailable }
         return .ring(model.displayedUsage?.session?.percent ?? 0)

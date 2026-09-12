@@ -18,7 +18,7 @@ enum ActivityKind: Equatable, Sendable {
     case editing
     /// A shell command.
     case running
-    /// Between tools. Deliberately silent in the compact slot — the agent icon pulses instead.
+    /// Between tools. Drawn as the typing dots, so the slot is never empty mid-session.
     case thinking
     /// The agent needs the user.
     case waiting
@@ -72,7 +72,8 @@ enum ActivityKind: Equatable, Sendable {
         }
     }
 
-    /// `nil` for the two kinds that draw nothing in the slot.
+    /// `nil` for the two kinds that have no SF symbol: ``idle`` draws nothing at all, and
+    /// ``thinking`` is drawn by hand as ``ThinkingDots``.
     var symbol: String? {
         switch self {
         case .reading: "magnifyingglass"
@@ -82,6 +83,20 @@ enum ActivityKind: Equatable, Sendable {
         case .completed: "checkmark"
         case .failed: "xmark"
         case .thinking, .idle: nil
+        }
+    }
+
+    /// Whether this kind puts something in the slot. Only ``idle`` — which means "no
+    /// session", and hands the slot to ``SessionRing`` — draws nothing.
+    var drawsGlyph: Bool { self != .idle }
+
+    /// The three kinds a tool call produces. They are the ones ``ActivityDwell`` holds on
+    /// screen: a `PostToolUse` that lands milliseconds after its `PreToolUse` would
+    /// otherwise flash the glyph and take it away again.
+    var isTool: Bool {
+        switch self {
+        case .reading, .editing, .running: true
+        case .thinking, .waiting, .completed, .failed, .idle: false
         }
     }
 
@@ -110,16 +125,88 @@ enum ActivityKind: Equatable, Sendable {
     }
 }
 
+// MARK: - Dwell
+
+/// Slows the glyph down to human speed.
+///
+/// Hooks fire far faster than an eye can follow: a `Read` of a small file is a
+/// `PreToolUse`/`PostToolUse` pair milliseconds apart, so the honest glyph appears and
+/// vanishes inside one frame, and a burst of tools reads as a flicker rather than as work.
+/// This value type folds the *wanted* kind into the *shown* one under two rules:
+///
+/// - a tool glyph that has just appeared keeps the slot for ``minimumDwell`` before another
+///   tool glyph may take it;
+/// - when the tool ends (`PostToolUse` clears the tool and the stage falls back to
+///   thinking) the last tool glyph lingers for ``toolLinger``, so a gap between two tools
+///   does not blink the dots on and off in between.
+///
+/// The kinds that need the user — ``ActivityKind/waiting``, ``ActivityKind/completed``,
+/// ``ActivityKind/failed`` — and ``ActivityKind/idle`` are never held back: they are the
+/// ones worth interrupting for.
+///
+/// Pure: every decision is a function of the target and the two timestamps, so the whole
+/// timeline is testable without a view or a run loop. ``update(target:now:)`` hands back the
+/// date at which it wants to be called again (`nil` when it is already settled).
+struct ActivityDwell: Equatable, Sendable {
+    /// How long a tool glyph owns the slot once it appears.
+    static let minimumDwell: TimeInterval = 1.5
+    /// How long the last tool glyph stays after the tool ends, waiting for the next one.
+    static let toolLinger: TimeInterval = 2
+
+    /// What the island is drawing right now.
+    private(set) var visible: ActivityKind = .idle
+    /// When ``visible`` appeared. `nil` before the first update.
+    private(set) var shownAt: Date?
+    /// When the target stopped being a tool — the start of the ``toolLinger`` window.
+    private(set) var toolEndedAt: Date?
+
+    /// Folds the kind the session *is* into the kind the island *shows*.
+    /// - Returns: when to call this again with the same target, or `nil` if nothing is pending.
+    mutating func update(target: ActivityKind, now: Date) -> Date? {
+        if target.isTool {
+            toolEndedAt = nil
+        } else if target == .thinking {
+            // Only the first thinking target after a tool opens the linger window; the
+            // refreshes that follow must not push it further out.
+            if toolEndedAt == nil { toolEndedAt = now }
+        } else {
+            toolEndedAt = nil
+        }
+
+        // Nothing to protect: no tool glyph on screen, the same glyph again, or news the
+        // user is owed now — a prompt, a finish, or the end of the session.
+        guard visible.isTool, target != visible, target.isTool || target == .thinking else {
+            show(target, at: now)
+            return nil
+        }
+
+        let dwellUntil = (shownAt ?? now).addingTimeInterval(Self.minimumDwell)
+        let due = target.isTool
+            ? dwellUntil
+            : max(dwellUntil, (toolEndedAt ?? now).addingTimeInterval(Self.toolLinger))
+
+        guard now >= due else { return due }
+        show(target, at: now)
+        return nil
+    }
+
+    private mutating func show(_ kind: ActivityKind, at now: Date) {
+        guard kind != visible else { return }
+        visible = kind
+        shownAt = now
+    }
+}
+
 /// The single animated glyph that says what the agent is doing, in the compact island's
 /// trailing slot and in the activity panel's header.
 ///
 /// Each kind gets a hand-made animation rather than an SF symbol effect: the effects are
 /// generic ("this symbol is busy") where the island wants to say *what* the agent is busy
 /// with, and none of them reads at 13 pt. Every animation is bound to a working kind and
-/// lives inside this view, so an idle island — which draws ``SessionRing`` instead — and
-/// the two silent kinds (`thinking`, `idle`) animate nothing at all.
+/// lives inside this view, so an idle island — which draws ``SessionRing`` instead —
+/// animates nothing at all.
 ///
-/// Reduce Motion collapses all six to their still SF symbol.
+/// Reduce Motion collapses all of them to a still mark.
 struct ActivityGlyph: View {
     let kind: ActivityKind
     var size: CGFloat = 13
@@ -131,10 +218,10 @@ struct ActivityGlyph: View {
     static func boxWidth(for size: CGFloat) -> CGFloat { size * 1.6 }
 
     var body: some View {
-        // The silent kinds draw nothing *and* take no room: the header reads plain
-        // "Thinking", with no gap where a glyph would have been.
-        if let symbol = kind.symbol {
-            content(still: symbol)
+        // Only the idle island draws nothing *and* takes no room; every stage of a live
+        // session has a mark of its own, thinking included.
+        if kind.drawsGlyph {
+            content
                 .frame(width: Self.boxWidth(for: size), height: Self.boxHeight(for: size))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(kind.label)
@@ -142,11 +229,16 @@ struct ActivityGlyph: View {
     }
 
     @ViewBuilder
-    private func content(still symbol: String) -> some View {
+    private var content: some View {
         if GlyphMotion.isReduced {
-            Image(systemName: symbol)
-                .font(.system(size: size * 0.85, weight: .semibold))
-                .foregroundStyle(kind.color)
+            // The dots have no SF symbol to fall back to, so they draw themselves still.
+            if kind == .thinking {
+                ThinkingDots(isAnimating: false)
+            } else if let symbol = kind.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: size * 0.85, weight: .semibold))
+                    .foregroundStyle(kind.color)
+            }
         } else {
             switch kind {
             case .editing: EditingGlyph(size: size)
@@ -155,7 +247,8 @@ struct ActivityGlyph: View {
             case .waiting: WaitingGlyph(size: size)
             case .completed: CompletedGlyph(size: size)
             case .failed: FailedGlyph(size: size)
-            case .thinking, .idle: EmptyView()
+            case .thinking: ThinkingDots()
+            case .idle: EmptyView()
             }
         }
     }
@@ -192,7 +285,67 @@ enum GlyphMotion {
     }
 }
 
-// MARK: - The six glyphs
+// MARK: - The glyphs
+
+/// Three dots that rise in turn — the "still with you" indicator every chat app uses, at
+/// the one size a notch has room for.
+///
+/// Deliberately the quietest glyph in the set: thinking is the state the island spends most
+/// of a session in, and anything livelier than a slow wave would be a distraction for
+/// minutes at a time. Fixed points rather than multiples of `size`: at 3 pt a dot is already
+/// at the floor of what renders as a circle, so the header and the compact slot draw the
+/// same one.
+struct ThinkingDots: View {
+    var isAnimating: Bool = true
+
+    static let count = 3
+    static let diameter: CGFloat = 3
+    static let spacing: CGFloat = 3
+    /// One full pass of the wave.
+    static let period: Double = 0.9
+    /// How far behind its neighbour each dot runs.
+    static let stagger: Double = 0.15
+    static let rise: CGFloat = 2
+    /// The share of the loop one dot spends off the ground.
+    private static let bump: Double = 1.0 / 3
+
+    /// How far dot `index` is lifted at `date`, in points. A half sine over the first third
+    /// of its loop and flat for the rest, so the dot eases up, eases down and then rests.
+    static func lift(_ date: Date, index: Int) -> CGFloat {
+        let shifted = date.addingTimeInterval(-Double(index) * stagger)
+        let phase = GlyphMotion.phase(shifted, period: period)
+        guard phase < bump else { return 0 }
+        return CGFloat(sin(phase / bump * .pi)) * rise
+    }
+
+    var body: some View {
+        if isAnimating {
+            TimelineView(.animation) { context in
+                row(at: context.date)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        } else {
+            // Reduce Motion: the same three dots, dimmer so a still row still reads as
+            // "waiting" rather than as a finished state.
+            row(at: nil)
+                .foregroundStyle(.white.opacity(0.5))
+        }
+    }
+
+    /// `nil` is the still row — the dots on the ground.
+    private func row(at date: Date?) -> some View {
+        HStack(spacing: Self.spacing) {
+            ForEach(0..<Self.count, id: \.self) { index in
+                Circle()
+                    .frame(width: Self.diameter, height: Self.diameter)
+                    .offset(y: -(date.map { Self.lift($0, index: index) } ?? 0))
+            }
+        }
+        // The tallest the row ever gets, claimed always, so the dots do not shove the
+        // baseline around as they rise.
+        .frame(height: Self.diameter + Self.rise)
+    }
+}
 
 /// A tilted pencil sliding back and forth over a salmon underline that writes itself.
 private struct EditingGlyph: View {
