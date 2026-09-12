@@ -58,76 +58,30 @@ struct StashTrailingView: View {
 private struct StashPoof: ViewModifier {
     let model: DropZonesViewModel
 
-    /// Spec §3.2: the poof is the beat between a completed drag-out and the stash clearing.
-    static let duration: Double = 0.25
-    static let scale: CGFloat = 0.6
-
     private var isPoofing: Bool { model.dragOutPhase == .completed }
 
     func body(content: Content) -> some View {
         content
             // Reduce Motion keeps the fade and drops the shrink: the card still leaves
             // visibly, nothing moves.
-            .scaleEffect(isPoofing && !MotionPreference.isReduced ? Self.scale : 1)
+            .scaleEffect(isPoofing && !MotionPreference.isReduced ? PoofTokens.scale : 1)
             .opacity(isPoofing ? 0 : 1)
-            .animation(.easeOut(duration: Self.duration), value: isPoofing)
+            .animation(.easeOut(duration: PoofTokens.duration), value: isPoofing)
     }
+}
+
+/// The one shape a poof has, whether the whole card is leaving or a single tile is.
+///
+/// Spec §3.2: the poof is the beat between a drag-out being accepted and the files it took
+/// disappearing from the island.
+enum PoofTokens {
+    static let duration: Double = 0.25
+    static let scale: CGFloat = 0.6
 }
 
 extension View {
     func stashPoof(_ model: DropZonesViewModel) -> some View {
         modifier(StashPoof(model: model))
-    }
-}
-
-/// The hover-expanded stash card: the peek's two slots, unmoved, over a caption saying
-/// what the stack is worth.
-///
-/// The top row is a real `PeekRow` at the real notch size rather than a re-creation of it,
-/// because "unmoved" is the whole point: hovering the island must add a line, not shuffle
-/// the two things the user was already looking at. `SurfaceView` pushes expanded content
-/// below the notch — right for a panel, wrong for a card whose first row *is* the peek —
-/// so that padding is cancelled here and the row lands back at the island's top edge.
-struct StashExpandedView: View {
-    let model: DropZonesViewModel
-
-    @Environment(\.notchSize) private var notchSize
-
-    /// The caption row's height, and the gap above it. Together with the notch they put
-    /// the row's centre 26 pt below the notch's bottom edge (spec §3.3).
-    static let captionHeight: CGFloat = 20
-    static let captionGap: CGFloat = 16
-
-    var body: some View {
-        VStack(spacing: 0) {
-            PeekRow(
-                leading: AnyView(StashLeadingView(model: model)),
-                trailing: AnyView(StashTrailingView(model: model)),
-                notch: notchSize
-            )
-            .frame(height: notchSize.height)
-
-            caption
-                .frame(height: Self.captionHeight)
-                .padding(.top, Self.captionGap)
-                .stashPoof(model)
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-        .padding(.top, -notchSize.height)
-        .dropZonesContextMenu(model)
-    }
-
-    private var caption: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "tray.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.blue)
-            Text(StashCaption.text(count: model.index.files.count, bytes: model.index.totalBytes))
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Palette.caption)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
     }
 }
 

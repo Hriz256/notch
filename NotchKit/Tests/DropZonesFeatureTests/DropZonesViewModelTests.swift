@@ -610,7 +610,7 @@ private final class Harness {
         let peek = try #require(harness.presenter.liveCard(.background))
         #expect(peek.featureID == DropZonesViewModel.featureID)
         #expect(peek.style == .peek)
-        #expect(peek.expandedSize == CGSize(width: 0, height: 76))
+        #expect(peek.expandedSize == DropZonesViewModel.stashExpandedSize)
         // The copies are real files under the temporary base directory.
         let stored = await harness.store.load()
         #expect(stored.files.count == 2)
@@ -944,6 +944,145 @@ private final class Harness {
     }
 }
 
+// MARK: - One file at a time
+
+/// The hover-expanded row drags — and removes — a single file, which the compact fan
+/// cannot: everything here is about the rest of the stash surviving.
+@Suite @MainActor struct DropZonesViewModelSingleFileTests {
+
+    /// Stashes `names` in one drop and lands on the peek.
+    private func stash(_ names: [String], in harness: Harness) async throws {
+        harness.enterHotRect()
+        let urls = try names.map { try harness.makeFile($0) }
+        await harness.model.drop(urls: urls, on: .stash)
+        harness.clock.advance(by: .milliseconds(400))
+    }
+
+    @Test func removingOneFileKeepsTheCardAndTheOthers() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt", "b.txt", "c.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let victim = harness.model.index.files[1]
+
+        await harness.model.removeFile(id: victim.id)
+
+        #expect(harness.model.index.files.map(\.name) == ["a.txt", "c.txt"])
+        #expect(harness.model.thumbnails[victim.id] == nil)
+        // The card is updated in place: the row closes up, the island does not blink.
+        #expect(harness.presenter.live[peekID] != nil)
+        #expect(!harness.presenter.dismissed.contains(peekID))
+        let stored = await harness.store.load()
+        #expect(stored.files.map(\.name) == ["a.txt", "c.txt"])
+        #expect(!FileManager.default.fileExists(atPath: victim.storedPath))
+    }
+
+    @Test func removingTheLastFileDismissesTheCard() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let only = harness.model.index.files[0]
+
+        await harness.model.removeFile(id: only.id)
+
+        #expect(harness.model.index.files.isEmpty)
+        #expect(harness.presenter.live[peekID] == nil)
+        #expect(harness.model.thumbnails.isEmpty)
+        #expect(harness.model.phase == .idle)
+        let stored = await harness.store.load()
+        #expect(stored == StashIndex())
+    }
+
+    @Test func removingAFileThatIsAlreadyGoneDoesNothing() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt"], in: harness)
+
+        await harness.model.removeFile(id: UUID())
+
+        #expect(harness.model.index.files.count == 1)
+        #expect(harness.presenter.liveCard(.background) != nil)
+    }
+
+    @Test func aSingleFileDragOutRemovesOnlyThatFileAfterThePoof() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let taken = harness.model.index.files[0]
+
+        harness.model.dragOutBegan()
+        #expect(harness.model.zones == [.stash], "the panel offers the stash card alone either way")
+
+        harness.model.dragOutEnded(completed: true, files: .single(taken.id))
+        // The tile fades on its own; the card — and with it the other file — is untouched,
+        // which is what `.completed` would have taken away.
+        #expect(harness.model.dragOutPhase == .idle)
+        #expect(harness.model.poofingFileIDs == [taken.id])
+
+        harness.clock.advance(by: .milliseconds(249))
+        #expect(harness.model.index.files.count == 2)
+
+        harness.clock.advance(by: .milliseconds(1))
+        let removed = await waitUntil { harness.model.index.files.map(\.name) == ["b.txt"] }
+        #expect(removed)
+        #expect(harness.model.poofingFileIDs.isEmpty)
+        #expect(harness.presenter.live[peekID] != nil)
+        let stored = await harness.store.load()
+        #expect(stored.files.map(\.name) == ["b.txt"])
+    }
+
+    @Test func draggingTheLastFileOutDismissesTheStashLikeAWholeDragOut() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let taken = harness.model.index.files[0]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true, files: .single(taken.id))
+        harness.clock.advance(by: .milliseconds(250))
+
+        let dismissed = await waitUntil { harness.presenter.live[peekID] == nil }
+        #expect(dismissed)
+        #expect(harness.model.index.files.isEmpty)
+        #expect(harness.model.thumbnails.isEmpty)
+        let stored = await harness.store.load()
+        #expect(stored.files.isEmpty)
+    }
+
+    @Test func aCancelledSingleFileDragOutLeavesTheStashAlone() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: false, files: .single(taken.id))
+        harness.clock.advance(by: .seconds(1))
+
+        #expect(harness.model.dragOutPhase == .cancelled)
+        #expect(harness.model.poofingFileIDs.isEmpty)
+        #expect(harness.model.index.files.count == 2)
+    }
+
+    @Test func stoppingMidPoofLeavesTheFileWhereItIs() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+
+        harness.model.poofFile(id: taken.id)
+        harness.model.stop()
+        harness.clock.advance(by: .seconds(1))
+
+        #expect(harness.model.poofingFileIDs.isEmpty)
+        let stored = await harness.store.load()
+        #expect(stored.files.count == 2, "a feature switched off mid-poof must not keep deleting")
+    }
+}
+
 // MARK: - The stash's own lifecycle
 
 @Suite @MainActor struct DropZonesViewModelStashTests {
@@ -959,7 +1098,7 @@ private final class Harness {
         #expect(harness.model.index.files.map(\.name) == ["a.txt"])
         let peek = try #require(harness.presenter.liveCard(.background))
         #expect(peek.style == .peek)
-        #expect(peek.expandedSize == CGSize(width: 0, height: 76))
+        #expect(peek.expandedSize == DropZonesViewModel.stashExpandedSize)
         #expect(harness.model.phase == .stashed)
         let filled = await waitUntil { harness.model.thumbnails.count == 1 }
         #expect(filled)

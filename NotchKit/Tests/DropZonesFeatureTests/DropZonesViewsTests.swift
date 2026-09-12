@@ -5,6 +5,7 @@ import Foundation
 import Testing
 
 @testable import DropZonesFeature
+@testable import IslandCore
 
 /// The numbers and strings the drop-zone views are built from.
 ///
@@ -119,12 +120,79 @@ struct DropZonesViewsTests {
         #expect(FileCountCircle.lineWidth == 1.5)
     }
 
-    @Test("The caption row's centre lands 26 pt below the notch")
+    @Test("The caption row's centre lands 24 pt below the row of tiles")
     func captionPosition() {
-        // The row is laid out under a notch-height peek row, so its centre is
-        // `gap + height / 2` below the notch's bottom edge.
+        // The row is laid out under the tiles, so its centre is `gap + height / 2` below
+        // their bottom edge.
         let centre = StashExpandedView.captionGap + StashExpandedView.captionHeight / 2
-        #expect(centre == 26)
+        #expect(centre == 24)
+    }
+
+    // MARK: - The row of tiles
+
+    @Test("The row's tiles are the 40 pt cards the design asks for")
+    func rowTokens() {
+        #expect(StashRowLayout.tileSize == 40)
+        #expect(StashRowLayout.spacing == 8)
+        #expect(StashRowLayout.cornerRadius == 6)
+        #expect(StashRowLayout.gapBelowNotch == 8)
+        #expect(StashRowLayout.hoverLift == 6)
+        #expect(StashRowLayout.hoverScale == 1.06)
+    }
+
+    @Test("Six 40 pt boxes and their gaps fit the peek's width, seven do not")
+    func rowFitsThePeeksWidth() {
+        // The card is exactly as wide as the peek — 297 pt on the 185 pt notch the render
+        // tests use — because its top row *is* the peek and hovering must not move it.
+        let peekWidth = 185 + 2 * IslandLayout.peekSlotWidth
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) == 280)
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) <= peekWidth)
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes + 1) > peekWidth,
+                "one more box would have to be clipped, which is why the last one is the chip")
+        #expect(StashRowLayout.width(boxes: 1) == StashRowLayout.tileSize)
+        #expect(StashRowLayout.width(boxes: 0) == 0)
+    }
+
+    @Test("The card is 124 pt tall: the peek row, the tiles and the caption")
+    func cardHeight() {
+        // A 32 pt notch, the standard one the render tests use.
+        #expect(StashRowLayout.contentHeight(notchHeight: 32) == 114)
+        #expect(StashRowLayout.contentHeight(notchHeight: 32) <= DropZonesViewModel.stashExpandedSize.height)
+        #expect(DropZonesViewModel.stashExpandedSize == CGSize(width: 0, height: 124))
+    }
+
+    @Test("The row shows the newest file first and every file while they fit")
+    func rowOrder() {
+        let files = (1...4).map { StashedFile(name: "\($0).txt", storedPath: "/tmp/\($0)", bytes: 1) }
+        let plan = StashRowLayout.plan(files: files)
+        // `StashIndex` appends, so the end of the array is the newest drop.
+        #expect(plan.tiles.map(\.name) == ["4.txt", "3.txt", "2.txt", "1.txt"])
+        #expect(plan.overflow == 0)
+    }
+
+    @Test("Past the sixth box the row ends in a chip counting what it could not show")
+    func rowOverflow() {
+        func plan(_ count: Int) -> (tiles: [StashedFile], overflow: Int) {
+            StashRowLayout.plan(
+                files: (1...count).map { StashedFile(name: "\($0).txt", storedPath: "/tmp/\($0)", bytes: 1) }
+            )
+        }
+        // Exactly full: six files, six tiles, no chip.
+        #expect(plan(6).tiles.count == 6)
+        #expect(plan(6).overflow == 0)
+        // Seven: five tiles and a chip standing for the two that did not fit.
+        #expect(plan(7).tiles.map(\.name) == ["7.txt", "6.txt", "5.txt", "4.txt", "3.txt"])
+        #expect(plan(7).overflow == 2)
+        // Whatever the count, the row is never more than six boxes wide.
+        #expect(plan(40).tiles.count + 1 == StashRowLayout.maximumBoxes)
+        #expect(plan(40).overflow == 35)
+    }
+
+    @Test("An empty stash draws no row at all")
+    func emptyRow() {
+        let plan = StashRowLayout.plan(files: [])
+        #expect(plan.tiles.isEmpty)
+        #expect(plan.overflow == 0)
     }
 
     // MARK: - Drag out

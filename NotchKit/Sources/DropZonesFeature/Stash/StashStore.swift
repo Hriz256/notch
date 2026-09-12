@@ -103,6 +103,31 @@ public actor StashStore {
         return index
     }
 
+    /// Takes one file out of the stash: its folder and its index entry.
+    ///
+    /// This is the drag-out-one-file path (and the "Remove <name>" menu row): the rest
+    /// of the pile is left exactly as it was, `stashedAt` included, so taking a file out
+    /// never restarts — or shortens — the 24-hour clock on the ones still there. Removing
+    /// the last file empties the index outright, which is what stops a TTL timer being
+    /// armed for a stash with nothing in it.
+    ///
+    /// An id that is not in the stash is not an error: the file has already gone (a
+    /// second drag-out of the same tile, a menu row clicked twice), and the index the
+    /// caller gets back is simply the current one.
+    @discardableResult
+    public func remove(fileID: UUID) -> StashIndex {
+        var index = load()
+        guard let file = index.files.first(where: { $0.id == fileID }) else { return index }
+
+        index.files.removeAll { $0.id == fileID }
+        if index.files.isEmpty { index.removeAll() }
+        // Index first, folder second — the same order as `stash`, and for the same
+        // reason: an entry whose folder is gone is pruned by `load`, whereas a folder
+        // deleted under an index that still promises it loses the file for good.
+        if writeIndex(index) { deleteFolders(of: [file]) }
+        return index
+    }
+
     /// Empties the stash: both the copies and the index.
     public func clear() {
         remove(stashDirectory)

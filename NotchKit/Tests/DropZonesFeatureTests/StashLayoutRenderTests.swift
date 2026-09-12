@@ -384,7 +384,9 @@ struct StashLayoutRenderTests {
             "the renderer produced no bitmap"
         )
 
-        let stack = try #require(scan(image, matches: Ink.isRed),
+        // Only the top row: the tiles below it are thumbnails of the same file and would
+        // drag the centroid down into the row.
+        let stack = try #require(scan(image, rows: 0...geometry.notchHeight, matches: Ink.isRed),
                                  "no thumbnail in the rendered expanded card")
         #expect(abs(stack.centroid.x - Self.leadingSlotCentre(geometry)) <= 2,
                 "stack centre \(stack.centroid.x) pt, expected \(Self.leadingSlotCentre(geometry)) pt")
@@ -401,8 +403,8 @@ struct StashLayoutRenderTests {
                 "badge centre \(badge.centroid.x) pt, expected \(Self.trailingSlotCentre(geometry)) pt")
     }
 
-    @Test("The caption row sits 26 pt below the notch")
-    func captionSitsBelowTheNotch() async throws {
+    @Test("The caption row sits under the tiles, 24 pt below their bottom edge")
+    func captionSitsBelowTheTiles() async throws {
         let harness = try RenderHarness()
         defer { harness.cleanUp() }
         try await harness.stash(["Screenshot.png"])
@@ -416,14 +418,104 @@ struct StashLayoutRenderTests {
             "the renderer produced no bitmap"
         )
 
-        // Everything blue below the notch is the caption's tray glyph.
+        // Everything blue below the row of tiles is the caption's tray glyph.
+        let tilesBottom = geometry.notchHeight + StashRowLayout.gapBelowNotch + StashRowLayout.tileSize
         let caption = try #require(
-            scan(image, rows: geometry.notchHeight...76, matches: Ink.isBlue),
-            "no caption glyph under the notch"
+            scan(image, rows: tilesBottom...DropZonesViewModel.stashExpandedSize.height, matches: Ink.isBlue),
+            "no caption glyph under the tiles"
         )
-        let expected = geometry.notchHeight + 26
+        let expected = tilesBottom + StashRowLayout.captionGap + StashRowLayout.captionHeight / 2
         #expect(abs(caption.centroid.y - expected) <= 3,
                 "caption centre \(caption.centroid.y) pt, expected \(expected) pt")
+        #expect(caption.maxY <= DropZonesViewModel.stashExpandedSize.height,
+                "the caption runs to \(caption.maxY) pt, past the card's bottom edge")
+    }
+
+    // MARK: The row of tiles
+
+    /// The rows the tiles occupy in a rendered expanded card.
+    static func tileBand(_ geometry: NotchGeometry) -> ClosedRange<CGFloat> {
+        let top = geometry.notchHeight + StashRowLayout.gapBelowNotch
+        return top...(top + StashRowLayout.tileSize)
+    }
+
+    @Test("The stashed files are laid out in one evenly spaced, centred row")
+    func tilesFormACentredRow() async throws {
+        let harness = try RenderHarness()
+        defer { harness.cleanUp() }
+        try await harness.stash(["a.png", "b.png", "c.png"])
+
+        let geometry = try Self.geometry()
+        let image = try #require(
+            try Self.renderExpanded(
+                AnyView(StashExpandedView(model: harness.model)),
+                size: DropZonesViewModel.stashExpandedSize
+            ),
+            "the renderer produced no bitmap"
+        )
+
+        let band = Self.tileBand(geometry)
+        let tiles = Self.cardRuns(image, rows: band, matches: Ink.isRed)
+        try #require(tiles.count == 3, "expected three tiles in the row, found \(tiles.count): \(tiles)")
+
+        let centres = tiles.map { ($0.min + $0.max) / 2 }
+        for (tile, centre) in zip(tiles, centres) {
+            #expect(abs(tile.max - tile.min - StashRowLayout.tileSize) <= 2,
+                    "a tile measured \(tile.max - tile.min) pt across, centred at \(centre) pt")
+        }
+        // 40 pt tiles with 8 pt between them: one pitch is 48.
+        let pitch = StashRowLayout.tileSize + StashRowLayout.spacing
+        #expect(abs(centres[1] - centres[0] - pitch) <= 2,
+                "the first gap measured \(centres[1] - centres[0]) pt between centres")
+        #expect(abs(centres[2] - centres[1] - pitch) <= 2,
+                "the second gap measured \(centres[2] - centres[1]) pt between centres")
+        // Centred on the island, which is centred in the window.
+        let middle = (centres[0] + centres[2]) / 2
+        #expect(abs(middle - Self.windowSize.width / 2) <= 2,
+                "the row is centred on \(middle) pt, expected \(Self.windowSize.width / 2) pt")
+
+        // And the row is where the card's arithmetic says, under the peek row.
+        let ink = try #require(scan(image, rows: band, matches: Ink.isRed), "no tiles at all")
+        #expect(abs(ink.minY - band.lowerBound) <= 2,
+                "the tiles start at \(ink.minY) pt, expected \(band.lowerBound) pt")
+    }
+
+    @Test("A seventh file turns the last box into a +N chip")
+    func theSeventhFileBecomesAChip() async throws {
+        let harness = try RenderHarness()
+        defer { harness.cleanUp() }
+        try await harness.stash((1...7).map { "f\($0).png" })
+
+        let geometry = try Self.geometry()
+        let image = try #require(
+            try Self.renderExpanded(
+                AnyView(StashExpandedView(model: harness.model)),
+                size: DropZonesViewModel.stashExpandedSize
+            ),
+            "the renderer produced no bitmap"
+        )
+
+        let band = Self.tileBand(geometry)
+        let tiles = Self.cardRuns(image, rows: band, matches: Ink.isRed)
+        #expect(tiles.count == StashRowLayout.maximumBoxes - 1,
+                "expected five tiles beside the chip, found \(tiles.count): \(tiles)")
+
+        // The chip is the sixth box: blue ink in the tile band, to the right of every tile.
+        let chip = try #require(scan(image, rows: band, matches: Ink.isBlue),
+                                "the row drew no +N chip")
+        let lastTile = try #require(tiles.last)
+        #expect(chip.minX > lastTile.max, "the chip is at \(chip.minX) pt, not after the tiles")
+        let pitch = StashRowLayout.tileSize + StashRowLayout.spacing
+        let expected = (lastTile.min + lastTile.max) / 2 + pitch
+        #expect(abs(chip.centroid.x - expected) <= 4,
+                "chip centre \(chip.centroid.x) pt, expected \(expected) pt")
+
+        // Six boxes, and nothing runs past the card the peek's width gave us.
+        let row = try #require(scan(image, rows: band, matches: { r, g, b in
+            Ink.isRed(r, g, b) || Ink.isBlue(r, g, b)
+        }), "no row at all")
+        let cardWidth = Self.windowSize.width / 2 + (geometry.notchWidth / 2 + IslandLayout.peekSlotWidth)
+        #expect(row.maxX <= cardWidth, "the row runs to \(row.maxX) pt, past the card's edge")
     }
 
     // MARK: The zones panel
@@ -436,9 +528,18 @@ struct StashLayoutRenderTests {
         try renderExpanded(AnyView(ZonesView(model: model)), size: ZoneLayout.panelSize)
     }
 
-    /// The horizontal runs of blue ink, one per card: the dashed border spans each card's
-    /// full width and the 8 pt gap between cards has nothing in it.
-    static func cardRuns(_ image: CGImage, scale: CGFloat = 2) -> [(min: CGFloat, max: CGFloat)] {
+    /// The horizontal runs of ink, one per card: the dashed border spans each zone card's
+    /// full width and the 8 pt gap between cards has nothing in it — and the same holds,
+    /// in red, for the tiles of the hover-expanded row.
+    ///
+    /// - Parameter rows: the band of the image to look at, in points; the whole image by
+    ///   default.
+    static func cardRuns(
+        _ image: CGImage,
+        scale: CGFloat = 2,
+        rows: ClosedRange<CGFloat>? = nil,
+        matches: (CGFloat, CGFloat, CGFloat) -> Bool = Ink.isBlue
+    ) -> [(min: CGFloat, max: CGFloat)] {
         let width = image.width
         let height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
@@ -454,16 +555,19 @@ struct StashLayoutRenderTests {
               ) else { return [] }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        var blueColumns: [Bool] = Array(repeating: false, count: width)
+        var inkColumns: [Bool] = Array(repeating: false, count: width)
         for y in 0..<height {
-            for x in 0..<width where !blueColumns[x] {
+            if let rows {
+                guard rows.contains(CGFloat(y) / scale) else { continue }
+            }
+            for x in 0..<width where !inkColumns[x] {
                 let offset = (y * width + x) * 4
                 let alpha = CGFloat(pixels[offset + 3]) / 255
                 guard alpha > 0.5 else { continue }
                 let r = CGFloat(pixels[offset]) / 255 / alpha
                 let g = CGFloat(pixels[offset + 1]) / 255 / alpha
                 let b = CGFloat(pixels[offset + 2]) / 255 / alpha
-                if Ink.isBlue(r, g, b) { blueColumns[x] = true }
+                if matches(r, g, b) { inkColumns[x] = true }
             }
         }
 
@@ -476,7 +580,7 @@ struct StashLayoutRenderTests {
         let tolerance = Int(6 * scale)
         var lastSeen = -tolerance - 1
         for x in 0..<width {
-            guard blueColumns[x] else { continue }
+            guard inkColumns[x] else { continue }
             if let begun = start, x - lastSeen > tolerance {
                 runs.append((CGFloat(begun) / scale, CGFloat(lastSeen + 1) / scale))
                 start = x

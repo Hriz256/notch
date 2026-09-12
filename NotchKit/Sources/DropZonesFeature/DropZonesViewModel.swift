@@ -59,11 +59,26 @@ public enum StashPhase: Equatable, Sendable {
 
 /// Where a drag that started *from* our stash stands. `completed` is the only one that
 /// clears the stash, and only after the poof has played.
+///
+/// Only a whole-stash drag-out reaches ``completed``: a single file leaving is a change
+/// to the pile rather than the end of it, and the card that poofs is that one tile (see
+/// ``DropZonesViewModel/poofingFileIDs``).
 public enum DragOutPhase: Equatable, Sendable {
     case idle
     case dragging
     case completed
     case cancelled
+}
+
+/// How much of the stash a drag-out was carrying.
+///
+/// The compact fan in the peek is one handle for everything in the stash; each tile in the
+/// hover-expanded row is a handle for its own file. Both start the same `.dragging` phase —
+/// the panel must offer the stash card alone either way — and they differ only in what a
+/// completed session takes with it.
+public enum DragOutScope: Equatable, Sendable {
+    case all
+    case single(UUID)
 }
 
 /// Everything the zones panel animates on, in one `Equatable` value.
@@ -121,8 +136,13 @@ public final class DropZonesViewModel {
     /// The zones panel (spec §2 "Widths").
     public static let zonesSize = CGSize(width: 280, height: 140)
     /// The hover-expanded stash card. Width 0 means "as wide as the peek": `IslandLayout`
-    /// widens it, so the card cannot be narrower than the row it grew out of.
-    public static let stashExpandedSize = CGSize(width: 0, height: 76)
+    /// widens it, so the card cannot be narrower than the row it grew out of — and the
+    /// row of tiles inside it is sized to fit that width rather than to widen the card
+    /// (see `StashRowLayout`), so hovering never moves the two peek slots.
+    ///
+    /// 124 pt is the peek row (a notch tall) over the 40 pt tile row and the caption:
+    /// `StashExpandedView` owns the arithmetic.
+    public static let stashExpandedSize = CGSize(width: 0, height: 124)
     /// How long the zones stay up after the cursor leaves the hot rect, so a drag that
     /// clips the corner on its way somewhere else does not flicker them.
     public static let leaveDebounce: Duration = .milliseconds(300)
@@ -153,6 +173,10 @@ public final class DropZonesViewModel {
     public private(set) var targeted: Zone?
     /// Thumbnails by ``StashedFile/id``, filled in the background after the index changes.
     public private(set) var thumbnails: [UUID: Thumbnail] = [:]
+    /// The tiles playing their own poof: fading and shrinking on their way out of the row,
+    /// a file at a time. Empty except in the ``poofDuration`` between a single file being
+    /// taken and its copy on disk going.
+    public private(set) var poofingFileIDs: Set<UUID> = []
     /// Whether the zones presentation is on screen. Stored rather than derived from the
     /// presentation id so views observe it.
     public private(set) var isZonesShown = false
@@ -244,6 +268,10 @@ public final class DropZonesViewModel {
     @ObservationIgnored private var settleToken: ScheduledToken?
     @ObservationIgnored private var airDropToken: ScheduledToken?
     @ObservationIgnored private var poofToken: ScheduledToken?
+    /// One per tile currently poofing on its own, so a second file leaving does not cancel
+    /// the first one's fade.
+    @ObservationIgnored private var filePoofTokens: [UUID: ScheduledToken] = [:]
+    @ObservationIgnored private var fileRemovalTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var expiryToken: ScheduledToken?
     @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
     /// The two timers hand off to an actor, so each also owns a `Task`; held here so
@@ -530,18 +558,31 @@ public final class DropZonesViewModel {
     /// be observable, and the distinction is worth keeping (a cancelled drag-out is a
     /// stack that snapped back, an idle one was never dragged). ``zones`` reads only
     /// `.dragging`, so a cancelled phase changes nothing about the panel.
-    public func dragOutEnded(completed: Bool) {
+    /// - Parameter files: what the session was carrying. The compact fan drags the whole
+    ///   stash (``DragOutScope/all``, the default, and the only thing that empties it); a
+    ///   tile in the hover-expanded row drags its own file, and only that file leaves.
+    public func dragOutEnded(completed: Bool, files: DragOutScope = .all) {
         guard completed else {
             dragOutPhase = .cancelled
             return
         }
-        dragOutPhase = .completed
-        poofToken?.cancel()
-        poofToken = clock.schedule(after: Self.poofDuration) { [weak self] in
-            guard let self else { return }
-            poofToken = nil
-            poofTask?.cancel()
-            poofTask = Task { @MainActor [weak self] in await self?.finishPoof() }
+        switch files {
+        case .all:
+            dragOutPhase = .completed
+            poofToken?.cancel()
+            poofToken = clock.schedule(after: Self.poofDuration) { [weak self] in
+                guard let self else { return }
+                poofToken = nil
+                poofTask?.cancel()
+                poofTask = Task { @MainActor [weak self] in await self?.finishPoof() }
+            }
+
+        case let .single(id):
+            // Straight back to `.idle` rather than `.completed`: the stash is still there,
+            // and `.completed` is what fades the *whole* card away. The tile that left
+            // poofs on its own below.
+            dragOutPhase = .idle
+            poofFile(id: id)
         }
     }
 
@@ -550,6 +591,60 @@ public final class DropZonesViewModel {
         guard !Task.isCancelled else { return }
         dragOutPhase = .idle
         poofTask = nil
+    }
+
+    // MARK: - One file at a time
+
+    /// Fades one tile out and takes that file out of the stash when the fade is over.
+    ///
+    /// The poof and the removal are two steps because the fade is a *clock* delay: the
+    /// island's clock schedules callbacks rather than offering something to await, and
+    /// awaiting one through a continuation would strand this work for good the day
+    /// ``stop()`` cancelled the timer under it. So the timer lives here and the work it
+    /// starts is ``removeFile(id:)``, which is also what a test drives directly when the
+    /// fade is not the thing under test.
+    ///
+    /// Both the "Remove <name>" menu row and a completed single-file drag-out land here.
+    public func poofFile(id: UUID) {
+        guard index.files.contains(where: { $0.id == id }) else { return }
+        // No `refreshStash()`: the row reads ``poofingFileIDs`` off this observable model,
+        // so the tile already on screen starts fading where it stands. Re-presenting the
+        // card would hand SwiftUI a fresh view mid-animation, which is how a fade turns
+        // into a jump — the whole-card poof works the same way.
+        poofingFileIDs.insert(id)
+        filePoofTokens[id]?.cancel()
+        filePoofTokens[id] = clock.schedule(after: Self.poofDuration) { [weak self] in
+            guard let self else { return }
+            filePoofTokens[id] = nil
+            fileRemovalTasks[id]?.cancel()
+            fileRemovalTasks[id] = Task { @MainActor [weak self] in
+                await self?.removeFile(id: id)
+                self?.fileRemovalTasks[id] = nil
+            }
+        }
+    }
+
+    /// Takes one file out of the stash: the copy on disk, the index entry, the thumbnail
+    /// and — when it was the last one — the card itself.
+    ///
+    /// The rest of the pile keeps its card, its id and its 24-hour clock, so the row
+    /// closes up around the gap instead of the island collapsing and coming back.
+    public func removeFile(id: UUID) async {
+        guard index.files.contains(where: { $0.id == id }) else {
+            poofingFileIDs.remove(id)
+            return
+        }
+        index = await store.remove(fileID: id)
+        poofingFileIDs.remove(id)
+        thumbnails[id] = nil
+        logger.info("removed one file from the stash; \(self.index.files.count, privacy: .public) left")
+        guard index.files.isEmpty else {
+            refreshStash()
+            return
+        }
+        // The last file has left: the same teardown a completed whole-stash drag-out does,
+        // minus the clearing — `StashStore.remove` has already emptied the index.
+        await stashBecameEmpty()
     }
 
     // MARK: - The stash's lifecycle
@@ -573,10 +668,17 @@ public final class DropZonesViewModel {
     public func clearStash() async {
         await store.clear()
         index = StashIndex()
+        await stashBecameEmpty()
+    }
+
+    /// Everything that has to happen once the last file is gone, however it went — the
+    /// whole stash cleared, expired, or the final tile dragged out on its own.
+    private func stashBecameEmpty() async {
         cancelExpiry()
         thumbnailTask?.cancel()
         thumbnailTask = nil
         thumbnails.removeAll()
+        poofingFileIDs.removeAll()
         await thumbnailProvider.clearCache()
         dismissStash()
         // A panel still up would now be drawing an empty stash.
@@ -633,6 +735,11 @@ public final class DropZonesViewModel {
         airDropToken = nil
         poofToken?.cancel()
         poofToken = nil
+        for token in filePoofTokens.values { token.cancel() }
+        filePoofTokens.removeAll()
+        for task in fileRemovalTasks.values { task.cancel() }
+        fileRemovalTasks.removeAll()
+        poofingFileIDs.removeAll()
         cancelExpiry()
         // The tokens only cancel the *timers*; the work a fired timer handed to an actor
         // is a `Task` of its own and has to be cancelled too.
