@@ -60,10 +60,10 @@ struct CodeActivityView: View {
             // the user was watching for a different one.
             ActivityGlyph(kind: model.visibleActivity, size: 12)
                 .glyphBaseline(height: ActivityGlyph.boxHeight(for: 12), textSize: 13)
-            Text(StageLabel.title(stage))
+            Text(headerTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
-            if let tool = session?.tool, !tool.isEmpty {
+            if let tool = headerTool {
                 Text(tool)
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.55))
@@ -77,6 +77,29 @@ struct CodeActivityView: View {
         }
         .lineLimit(1)
         .frame(height: 18)
+    }
+
+    /// The word beside the glyph, read off the *same smoothed value the glyph is drawn
+    /// from* rather than off the live session.
+    ///
+    /// The panel used to take its word from the honest stage while the glyph was smoothed
+    /// by ``ActivityDwell``, so for the couple of seconds a tool glyph lingers past its
+    /// `PostToolUse` the header said "Thinking" beside a pencil that was still drawing —
+    /// and named no tool at all. A working kind now names itself; the three kinds that are
+    /// about the session rather than about a tool (waiting, done, failed) still come from
+    /// the stage, which is where their wording has always lived.
+    private var headerTitle: String {
+        model.visibleActivity.isTool || model.visibleActivity == .thinking
+            ? model.visibleActivity.label
+            : StageLabel.title(stage)
+    }
+
+    /// The tool the header names: the one captured when the visible glyph appeared, and
+    /// only while that glyph is a tool's. Thinking has no tool by definition, and a waiting
+    /// or finished session is about itself rather than about its last call.
+    private var headerTool: String? {
+        guard model.visibleActivity.isTool, let tool = model.visibleActivityTool, !tool.isEmpty else { return nil }
+        return tool
     }
 
     /// `1:07` — plus `×3` when more than one agent session is running, which is the only

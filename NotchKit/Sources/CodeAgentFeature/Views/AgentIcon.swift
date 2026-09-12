@@ -13,6 +13,11 @@ struct AgentIcon: View {
 
     @State private var dimmed = false
 
+    /// Whether the icon actually breathes. Reduce Motion keeps it at full opacity: the
+    /// pulse says nothing the glyph beside it does not already say, so there is nothing to
+    /// replace it with — same rule the activity glyphs follow.
+    private var pulses: Bool { isPulsing && !GlyphMotion.isReduced }
+
     /// Both inputs the opacity depends on, so `.animation(_:value:)` re-evaluates the
     /// moment pulsing stops and replaces the `repeatForever` with a single fade back
     /// to full opacity — see `VisualizerBars` for the same pattern.
@@ -24,12 +29,12 @@ struct AgentIcon: View {
     var body: some View {
         glyph
             .frame(width: size, height: size)
-            .opacity(isPulsing && dimmed ? 0.6 : 1)
-            .animation(isPulsing ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                                 : .easeOut(duration: 0.2),
-                       value: AnimationKey(isPulsing: isPulsing, dimmed: dimmed))
-            .onAppear { if isPulsing { dimmed = true } }
-            .onChange(of: isPulsing) { _, pulsing in
+            .opacity(pulses && dimmed ? 0.6 : 1)
+            .animation(pulses ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                              : .easeOut(duration: 0.2),
+                       value: AnimationKey(isPulsing: pulses, dimmed: dimmed))
+            .onAppear { if pulses { dimmed = true } }
+            .onChange(of: pulses) { _, pulsing in
                 // Clear unanimated first so a resumed pulse always starts from full
                 // opacity rather than from the middle of a half-finished cycle.
                 withAnimation(nil) { dimmed = false }

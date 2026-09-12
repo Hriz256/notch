@@ -627,6 +627,43 @@ final class CodeAgentViewModelTests {
         #expect(CodeCompactTrailing.slot(for: f.vm) == .activity(.thinking))
     }
 
+    /// The header word and the tool name are read off the *smoothed* glyph, so the panel
+    /// never says "Thinking" beside a pencil that is still drawing.
+    @Test func theHeaderTextIsSmoothedWithTheGlyph() {
+        let f = makeFixture(defaults: defaults)
+
+        f.vm.handle(f.event(.creating, tool: "Edit"))                  // PreToolUse(Edit)
+        #expect(f.vm.visibleActivity == .editing)
+        #expect(f.vm.visibleActivity.label == "Creating")
+        #expect(f.vm.visibleActivityTool == "Edit")
+
+        // PostToolUse: the stage is honestly back on thinking, but the pencil — and the
+        // word and the tool name under it — stay for the linger.
+        f.clock.advance(by: .milliseconds(100))
+        f.vm.handle(f.event(.thinking))
+        #expect(f.vm.visibleStage == .thinking)
+        #expect(f.vm.visibleActivity == .editing)
+        #expect(f.vm.visibleActivity.label == "Creating")
+        #expect(f.vm.visibleActivityTool == "Edit")
+
+        // Once the linger is over the glyph becomes the dots and the tool goes with it.
+        f.clock.advance(by: .seconds(3))
+        #expect(f.vm.visibleActivity == .thinking)
+        #expect(f.vm.visibleActivity.label == "Thinking")
+        #expect(f.vm.visibleActivityTool == nil)
+
+        // A shell command names itself, not the stage it came from.
+        f.vm.handle(f.event(.creating, tool: "Bash"))
+        #expect(f.vm.visibleActivity == .running)
+        #expect(f.vm.visibleActivity.label == "Running")
+        #expect(f.vm.visibleActivityTool == "Bash")
+
+        // The session ends: nothing is left for the header to name.
+        f.vm.handle(f.event(.completed))
+        #expect(f.vm.visibleActivity == .completed)
+        #expect(f.vm.visibleActivityTool == nil)
+    }
+
     /// A prompt is the one thing worth taking the slot from a glyph that has just appeared.
     @Test func waitingInterruptsAGlyphThatHasJustAppeared() {
         let f = makeFixture(defaults: defaults)

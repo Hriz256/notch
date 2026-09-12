@@ -1,5 +1,6 @@
 import CodeAgentShared
 import Foundation
+import SwiftUI
 import Testing
 @testable import CodeAgentFeature
 
@@ -264,36 +265,26 @@ struct ActivitySmoothingTests {
         }
     }
 
-    /// Three dots, each up and back down inside its own third of the loop, one after the
-    /// next — a wave rather than three dots blinking together.
-    @Test("The dots rise in sequence and come back to rest")
+    /// Three dots bobbing one after the next — a wave rather than three dots blinking
+    /// together — handed to Core Animation once instead of redrawn every frame.
+    @Test("The dots bob on a repeating animation, each one a stagger behind the last")
     func thinkingDotsWave() {
         #expect(ThinkingDots.count == 3)
         #expect(ThinkingDots.diameter == 3)
         #expect(ThinkingDots.spacing == 3)
         #expect(ThinkingDots.rise == 2)
-        #expect(ThinkingDots.period == 0.9)
+        #expect(ThinkingDots.duration == 0.45)
         #expect(ThinkingDots.stagger == 0.15)
 
-        let epoch = Date(timeIntervalSinceReferenceDate: 0)
-        // The first dot peaks an sixth of the way in — half of its third of the loop.
-        #expect(abs(ThinkingDots.lift(epoch.addingTimeInterval(0.15), index: 0) - 2) < 0.0001)
-        // …and the second is exactly one stagger behind it.
-        #expect(abs(ThinkingDots.lift(epoch.addingTimeInterval(0.30), index: 1) - 2) < 0.0001)
-        #expect(abs(ThinkingDots.lift(epoch.addingTimeInterval(0.45), index: 2) - 2) < 0.0001)
-
-        // Each dot is on the ground at the start of its loop and for the rest of it.
+        // Each dot's loop repeats forever and starts one stagger after its neighbour's; the
+        // row's whole motion is those three animations, so nothing is asked of the run loop
+        // once the glyph is on screen.
         for index in 0..<ThinkingDots.count {
-            let start = Double(index) * ThinkingDots.stagger
-            #expect(abs(ThinkingDots.lift(epoch.addingTimeInterval(start), index: index)) < 0.0001)
-            #expect(ThinkingDots.lift(epoch.addingTimeInterval(start + 0.4), index: index) == 0)
-            #expect(ThinkingDots.lift(epoch.addingTimeInterval(start + 0.89), index: index) == 0)
+            let animation = ThinkingDots.animation(index: index)
+            #expect(animation == .easeInOut(duration: ThinkingDots.duration)
+                .repeatForever(autoreverses: true)
+                .delay(Double(index) * ThinkingDots.stagger))
         }
-
-        // Never taller than the box claims for it.
-        for hundredths in 0..<90 {
-            let lift = ThinkingDots.lift(epoch.addingTimeInterval(Double(hundredths) / 100), index: 0)
-            #expect(lift >= 0 && lift <= ThinkingDots.rise + 0.0001)
-        }
+        #expect(ThinkingDots.animation(index: 0) != ThinkingDots.animation(index: 1))
     }
 }

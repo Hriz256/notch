@@ -88,6 +88,13 @@ public final class CodeAgentViewModel {
     /// is the whole point: hook events are far quicker than an eye.
     /// Internal because ``ActivityKind`` is: only this module draws the island.
     private(set) var visibleActivity: ActivityKind = .idle
+    /// The tool name that belongs to ``visibleActivity`` — the one captured when that glyph
+    /// took the slot, not whatever the session moved on to since.
+    ///
+    /// The header reads this rather than the live session: a `PostToolUse` clears the tool
+    /// a second or two before the dwell lets the pencil go, and reading the session made
+    /// the header say "Thinking" beside a pencil that was still drawing.
+    private(set) var visibleActivityTool: String?
     /// ``SessionTracker/key(agent:sessionID:)`` of the session the island is about, kept
     /// across events so two agents working at once do not trade the island back and forth.
     public private(set) var displayedSessionKey: String?
@@ -204,6 +211,9 @@ public final class CodeAgentViewModel {
     /// The glyph the session *is* on, before the dwell smooths it. Only moved by a stage the
     /// user's filter lets through, which is how a hidden stage keeps the previous glyph.
     @ObservationIgnored private var activityTarget: ActivityKind = .idle
+    /// The tool name behind ``activityTarget``, carried alongside it so the glyph and its
+    /// word can be captured together once the dwell shows them.
+    @ObservationIgnored private var activityTargetTool: String?
     @ObservationIgnored private var dwell = ActivityDwell()
     /// Brings the glyph forward when the dwell expires with no new event to do it.
     @ObservationIgnored private var dwellToken: ScheduledToken?
@@ -338,8 +348,10 @@ public final class CodeAgentViewModel {
         displayedSessionKey = nil
         visibleStage = nil
         activityTarget = .idle
+        activityTargetTool = nil
         dwell = ActivityDwell()
         visibleActivity = .idle
+        visibleActivityTool = nil
         if let alertID {
             islandPresenter.dismiss(alertID)
             self.alertID = nil
@@ -472,12 +484,14 @@ public final class CodeAgentViewModel {
         guard let driver else {
             visibleStage = nil
             activityTarget = .idle
+            activityTargetTool = nil
             return
         }
         guard settings.showsStage(driver.agent, driver.stage) else { return }
         // Before the stage guard below: the same stage with a different tool is still a
         // different glyph (`creating` covers both an edit and a shell command).
         activityTarget = ActivityKind.from(stage: driver.stage, tool: driver.tool)
+        activityTargetTool = driver.tool.flatMap { $0.isEmpty ? nil : $0 }
         guard visibleStage != driver.stage else { return }
         visibleStage = driver.stage
         // The one line that says what the island is showing. Stage and agent only — never
@@ -492,6 +506,10 @@ public final class CodeAgentViewModel {
         let current = now()
         let due = dwell.update(target: activityTarget, now: current)
         visibleActivity = dwell.visible
+        // The tool moves with the glyph, never ahead of it: only once the dwell has caught
+        // up with the target does the header adopt that target's tool. While a pencil is
+        // lingering past its `PostToolUse` the name it was drawn for stays under it.
+        if dwell.visible == activityTarget { visibleActivityTool = activityTargetTool }
 
         dwellToken?.cancel()
         dwellToken = nil

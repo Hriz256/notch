@@ -111,11 +111,18 @@ enum ActivityKind: Equatable, Sendable {
         }
     }
 
+    /// The one word for this kind — the activity panel's header, and the glyph's
+    /// accessibility label.
+    ///
+    /// Deliberately the same wording ``StageLabel`` uses for the stage each kind comes
+    /// from (`.editing` is a `.creating` stage, so it reads "Creating"): the header word is
+    /// derived from the *smoothed* kind, and a session whose glyph and word disagreed —
+    /// the pencil beside "Thinking" — was the bug this property exists to prevent.
     var label: String {
         switch self {
         case .reading: "Reading"
-        case .editing: "Editing"
-        case .running: "Running a command"
+        case .editing: "Creating"
+        case .running: "Running"
         case .thinking: "Thinking"
         case .waiting: "Waiting for you"
         case .completed: "Done"
@@ -295,55 +302,69 @@ enum GlyphMotion {
 /// minutes at a time. Fixed points rather than multiples of `size`: at 3 pt a dot is already
 /// at the floor of what renders as a circle, so the header and the compact slot draw the
 /// same one.
+/// Unlike the other glyphs these dots are driven by Core Animation — one `repeatForever`
+/// offset per dot, started once on appear — rather than by `TimelineView(.animation)`.
+/// Thinking is the state a session spends most of its life in, and a timeline redraws the
+/// whole island's SwiftUI body every frame for as long as it is on screen: minutes of
+/// display-rate re-renders for three 3 pt circles. A repeating animation is handed to the
+/// render server once and costs nothing per frame. The other glyphs keep their timelines:
+/// each is on screen for a tool call or two, and their shapes are functions of time that
+/// no animatable property could express.
 struct ThinkingDots: View {
     var isAnimating: Bool = true
 
     static let count = 3
     static let diameter: CGFloat = 3
     static let spacing: CGFloat = 3
-    /// One full pass of the wave.
-    static let period: Double = 0.9
+    /// One rise (or one fall): the animation autoreverses, so a full bob is twice this.
+    static let duration: Double = 0.45
     /// How far behind its neighbour each dot runs.
     static let stagger: Double = 0.15
     static let rise: CGFloat = 2
-    /// The share of the loop one dot spends off the ground.
-    private static let bump: Double = 1.0 / 3
 
-    /// How far dot `index` is lifted at `date`, in points. A half sine over the first third
-    /// of its loop and flat for the rest, so the dot eases up, eases down and then rests.
-    static func lift(_ date: Date, index: Int) -> CGFloat {
-        let shifted = date.addingTimeInterval(-Double(index) * stagger)
-        let phase = GlyphMotion.phase(shifted, period: period)
-        guard phase < bump else { return 0 }
-        return CGFloat(sin(phase / bump * .pi)) * rise
+    /// Whether the dots actually move: Reduce Motion is answered here as well as in
+    /// ``ActivityGlyph`` so no caller can start the loop behind the setting's back.
+    private var animates: Bool { isAnimating && !GlyphMotion.isReduced }
+
+    /// The loop for dot `index`: the same easing every chat app's typing indicator uses,
+    /// each dot one ``stagger`` behind the one before it, so the row reads as a wave
+    /// rather than as three dots blinking together.
+    static func animation(index: Int) -> Animation {
+        .easeInOut(duration: duration)
+        .repeatForever(autoreverses: true)
+        .delay(Double(index) * stagger)
     }
 
     var body: some View {
-        if isAnimating {
-            TimelineView(.animation) { context in
-                row(at: context.date)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-        } else {
-            // Reduce Motion: the same three dots, dimmer so a still row still reads as
-            // "waiting" rather than as a finished state.
-            row(at: nil)
-                .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-
-    /// `nil` is the still row — the dots on the ground.
-    private func row(at date: Date?) -> some View {
         HStack(spacing: Self.spacing) {
             ForEach(0..<Self.count, id: \.self) { index in
-                Circle()
-                    .frame(width: Self.diameter, height: Self.diameter)
-                    .offset(y: -(date.map { Self.lift($0, index: index) } ?? 0))
+                Dot(index: index, animates: animates)
             }
         }
         // The tallest the row ever gets, claimed always, so the dots do not shove the
         // baseline around as they rise.
         .frame(height: Self.diameter + Self.rise)
+        // Reduce Motion (and the still row generally) is dimmer, so a row that does not
+        // move still reads as "waiting" rather than as a finished state.
+        .foregroundStyle(.white.opacity(animates ? 0.7 : 0.5))
+    }
+
+    /// One dot, owning its own lifted state so each can carry its own delay.
+    private struct Dot: View {
+        let index: Int
+        let animates: Bool
+
+        @State private var lifted = false
+
+        var body: some View {
+            Circle()
+                .frame(width: ThinkingDots.diameter, height: ThinkingDots.diameter)
+                .offset(y: lifted ? -ThinkingDots.rise : 0)
+                .onAppear {
+                    guard animates else { return }
+                    withAnimation(ThinkingDots.animation(index: index)) { lifted = true }
+                }
+        }
     }
 }
 
