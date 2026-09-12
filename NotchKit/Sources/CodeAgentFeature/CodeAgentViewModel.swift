@@ -57,10 +57,11 @@ public final class CodeAgentViewModel {
     /// The idle card: usage bars plus the sparkline. Also the default for anything that
     /// needs a size before a view model exists.
     public static let expandedSize = CGSize(width: 380, height: 170)
-    /// The activity card with nothing to say beyond the header and the two bars.
-    static let activitySize = CGSize(width: 380, height: 132)
-    /// The activity card with a detail line (a permission prompt, the last assistant line).
-    static let activityWithDetailSize = CGSize(width: 380, height: 160)
+    /// The activity card. Exactly as tall as the idle one: the working panel carries the
+    /// same sparkline, and a detail line *replaces* that sparkline rather than adding to
+    /// it (see ``CodeActivityView``), so the two variants land on the same budget. Equal
+    /// heights also mean the card never resizes as the session moves between stages.
+    static let activitySize = expandedSize
     /// How long the completion / failure alert stays up.
     public static let alertDuration: Duration = .seconds(4)
 
@@ -98,17 +99,16 @@ public final class CodeAgentViewModel {
     /// alert is up — the finished one the alert is for. This is what the views render.
     public var displayedSession: SessionTracker.Session? { tracker.activeSession ?? alertingSession }
 
-    /// How tall the expanded card has to be for what the panel is about to draw, so the
-    /// island animates between heights instead of leaving an empty band under the header.
+    /// How tall the expanded card has to be for what the panel is about to draw.
     ///
     /// Read off the same session ``CodeActivityView`` renders, and recomputed on every
     /// ``refreshPresentation()``.
     public var expandedSize: CGSize { Self.expandedSize(for: displayedSession) }
 
-    /// `nil` means the idle panel, which is the tallest of the three because of the sparkline.
+    /// `nil` means the idle panel. Both panels are 170 pt tall — the seam is kept so a
+    /// future card that needs less room can shrink without touching the presenter.
     static func expandedSize(for session: SessionTracker.Session?) -> CGSize {
-        guard let session else { return expandedSize }
-        return (session.detail ?? "").isEmpty ? activitySize : activityWithDetailSize
+        session == nil ? expandedSize : activitySize
     }
 
     /// Agents the user switched on, in `Agent.allCases` order; the context menu's "Show" list.

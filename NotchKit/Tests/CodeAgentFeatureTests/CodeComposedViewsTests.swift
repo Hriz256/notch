@@ -54,4 +54,23 @@ struct CodeComposedViewsTests {
         let total = padding + header + barRow * 2 + sparkline + spacings
         #expect(total <= CodeExpandedView.usableHeight)
     }
+
+    /// The working panel is the same card and carries the same sparkline, so it is laid
+    /// out against the same budget — and a detail line only fits in the sparkline's place.
+    @Test("The working panel fits, with either the sparkline or a detail line")
+    func activityLayoutBudget() {
+        #expect(CodeActivityView.usableHeight == CodeExpandedView.usableHeight)
+
+        let padding: CGFloat = 2 + 5
+        let header: CGFloat = 18
+        let barRow: CGFloat = 4 + 5 + 15      // bar + spacing + 12 pt label line
+        let sparkline: CGFloat = 22 + 2 + 13  // graph + spacing + 10 pt caption
+        let detail: CGFloat = 13 * 2          // two 11 pt lines
+        let bars = padding + header + barRow * 2 + 8 * 2
+
+        #expect(bars + sparkline + 8 <= CodeActivityView.usableHeight)
+        #expect(bars + detail + 8 <= CodeActivityView.usableHeight)
+        // The two together are exactly what does not fit, which is why one replaces the other.
+        #expect(bars + sparkline + detail + 8 * 2 > CodeActivityView.usableHeight)
+    }
 }

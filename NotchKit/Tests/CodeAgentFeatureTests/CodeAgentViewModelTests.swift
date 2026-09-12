@@ -339,9 +339,9 @@ final class CodeAgentViewModelTests {
         #expect(f.vm.visibleStage == .waiting)
     }
 
-    /// A working panel with nothing to say is header + bars only, so the card shrinks from
-    /// the idle 170 to 132 rather than leaving an empty band where the detail would go.
-    @Test func workingPresentationUsesCompactHeightWithoutDetail() async throws {
+    /// The working panel carries the sparkline the idle one does, so it is the same 170 pt
+    /// card: starting a session must not resize the island.
+    @Test func workingPresentationKeepsTheIdleHeight() async throws {
         let f = makeFixture(results: [.claude: .success(usage(.claude))], defaults: defaults)
         await loadUsage(f)
         #expect(f.mainPresentation?.expandedSize.height == 170)
@@ -349,19 +349,20 @@ final class CodeAgentViewModelTests {
         f.vm.handle(f.event(.thinking, tool: "Bash"))
 
         let presentation = try #require(f.mainPresentation)
-        #expect(presentation.expandedSize == CGSize(width: 380, height: 132))
-        #expect(f.vm.expandedSize.height == 132)
+        #expect(presentation.expandedSize == CGSize(width: 380, height: 170))
+        #expect(f.vm.expandedSize.height == 170)
     }
 
-    /// A permission prompt carries a detail line, which needs the taller card.
-    @Test func waitingWithDetailUsesTallerHeight() throws {
+    /// A permission prompt carries a detail line, which takes the sparkline's room rather
+    /// than the card's — so the height does not move for that either.
+    @Test func waitingWithDetailKeepsTheSameHeight() throws {
         let f = makeFixture(defaults: defaults)
 
         f.vm.handle(f.event(.waiting, tool: "Bash", detail: "Allow Bash to run rm -rf build?"))
 
         let presentation = try #require(f.mainPresentation)
-        #expect(presentation.expandedSize == CGSize(width: 380, height: 160))
-        #expect(f.vm.expandedSize.height == 160)
+        #expect(presentation.expandedSize == CGSize(width: 380, height: 170))
+        #expect(f.vm.expandedSize.height == 170)
     }
 
     // MARK: Completion alerts
