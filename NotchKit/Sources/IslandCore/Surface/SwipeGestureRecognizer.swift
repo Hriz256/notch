@@ -5,9 +5,12 @@ import Foundation
 ///
 /// Two event shapes arrive here. A trackpad gesture carries phases: the deltas are
 /// accumulated from `.began` and fire once, so a single long swipe advances a single
-/// card; momentum deltas that follow the fingers leaving the glass are ignored outright.
-/// A classic mouse wheel carries no phase at all, so each qualifying tick fires directly,
-/// rate-limited so one flick of the wheel cannot run through the whole stack.
+/// card. The momentum tail that follows the fingers leaving the glass *continues* the
+/// same gesture — a quick flick travels only a few points under the fingers and the rest
+/// as momentum, and ignoring the tail made exactly those flicks feel dead — but it can
+/// never make a gesture fire twice. A classic mouse wheel carries no phase at all, so
+/// each qualifying tick fires directly, rate-limited so one flick of the wheel cannot run
+/// through the whole stack.
 ///
 /// It holds no AppKit state and reads no clock of its own, so the whole gesture grammar is
 /// testable by feeding it deltas.
@@ -45,8 +48,24 @@ public struct SwipeGestureRecognizer {
         isOverIsland: @autoclosure () -> Bool,
         now: Date
     ) -> IslandPresenter.CycleDirection? {
-        // Momentum is the tail of a gesture that already fired; it must never fire again.
-        guard rawMomentum == 0 else { return nil }
+        if rawMomentum != 0 {
+            // The momentum tail belongs to the gesture that just left the glass: it keeps
+            // accumulating for a gesture that started over the island and has not fired,
+            // and is dropped for everything else — a gesture that already fired, one that
+            // began elsewhere, or a tail with no gesture on record. Containment is never
+            // re-evaluated here; the latch decided it. The tail's own end closes the
+            // gesture for good.
+            let momentum = NSEvent.Phase(rawValue: rawMomentum)
+            if momentum.contains(.ended) || momentum.contains(.cancelled) {
+                reset()
+                return nil
+            }
+            guard isGestureOverIsland == true, !didFireInGesture else { return nil }
+            accumulatedX += deltaX
+            guard abs(accumulatedX) >= Self.threshold else { return nil }
+            didFireInGesture = true
+            return Self.direction(of: accumulatedX)
+        }
 
         let phase = NSEvent.Phase(rawValue: rawPhase)
         guard !phase.isEmpty else {
@@ -63,10 +82,14 @@ public struct SwipeGestureRecognizer {
         }
 
         if phase.contains(.began) { reset() }
-        if phase.contains(.ended) || phase.contains(.cancelled) {
+        if phase.contains(.cancelled) {
             reset()
             return nil
         }
+        // `.ended` keeps the gesture on record: its momentum tail may still carry the
+        // travel that pushes it over the threshold. The next `.began` — or the tail's own
+        // end — is what forgets it.
+        if phase.contains(.ended) { return nil }
         // Containment is decided once per gesture, at its first event, and latched.
         //
         // Re-testing it per event used to cancel gestures that had every right to fire: the

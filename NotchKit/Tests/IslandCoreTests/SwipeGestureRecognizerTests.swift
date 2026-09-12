@@ -93,7 +93,7 @@ struct SwipeGestureRecognizerTests {
         #expect(feed(&r, deltaX: -8) == nil)
     }
 
-    @Test func momentumIsIgnoredEvenAboveThreshold() {
+    @Test func momentumNeverFiresAGestureTwice() {
         var r = SwipeGestureRecognizer()
         _ = feed(&r, deltaX: 0, phase: .began)
         #expect(feed(&r, deltaX: -Self.threshold) == .next)
@@ -103,6 +103,31 @@ struct SwipeGestureRecognizerTests {
             #expect(feed(&r, deltaX: -60, phase: [], momentum: .changed) == nil)
         }
         #expect(feed(&r, deltaX: -60, phase: [], momentum: .ended) == nil)
+    }
+
+    /// A quick flick: a few points under the fingers, the rest as momentum. The trail on
+    /// the user's Mac showed 3–9 pt gestures followed by a tail — those must still swipe.
+    @Test func aFlickFiresOnItsMomentumTail() {
+        var r = SwipeGestureRecognizer()
+        _ = feed(&r, deltaX: 0, phase: .began)
+        #expect(feed(&r, deltaX: -3) == nil)
+        #expect(feed(&r, deltaX: -4) == nil)
+        #expect(feed(&r, deltaX: 0, phase: .ended) == nil)
+        #expect(feed(&r, deltaX: -3, phase: [], momentum: .began) == nil)
+        #expect(feed(&r, deltaX: -3, phase: [], momentum: .changed) == .next)
+        // Once, and only once.
+        #expect(feed(&r, deltaX: -30, phase: [], momentum: .changed) == nil)
+        #expect(feed(&r, deltaX: 0, phase: [], momentum: .ended) == nil)
+        // The tail's end closed the gesture: a stray momentum event fires nothing.
+        #expect(feed(&r, deltaX: -60, phase: [], momentum: .changed) == nil)
+    }
+
+    @Test func momentumOfAGestureThatBeganOutsideNeverFires() {
+        var r = SwipeGestureRecognizer()
+        _ = feed(&r, deltaX: 0, phase: .began, isOverIsland: false)
+        #expect(feed(&r, deltaX: -8, isOverIsland: false) == nil)
+        _ = feed(&r, deltaX: 0, phase: .ended, isOverIsland: false)
+        #expect(feed(&r, deltaX: -60, phase: [], momentum: .changed) == nil)
     }
 
     @Test func aGestureThatBeginsOutsideTheIslandNeverFires() {
