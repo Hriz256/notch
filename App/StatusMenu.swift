@@ -7,6 +7,7 @@ import MusicFeature
 struct StatusMenu: View {
     @Bindable var coordinator: AppCoordinator
     @AppStorage(MusicViewModel.trackChangePeekDefaultsKey) private var trackChangePeek = true
+    @AppStorage(MusicViewModel.keepPausedTrackDefaultsKey) private var keepPausedTrack = true
 
     var body: some View {
         ForEach(coordinator.registry.features, id: \.id) { feature in
@@ -16,6 +17,7 @@ struct StatusMenu: View {
             ))
         }
         Toggle("Track change peek", isOn: $trackChangePeek)
+        Toggle("Keep paused track", isOn: $keepPausedTrack)
         Divider()
         cards
         codingAgents

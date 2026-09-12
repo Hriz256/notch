@@ -58,7 +58,8 @@ private func snap(_ title: String?, rate: Double = 1, artworkID: String? = "a", 
 
 @MainActor
 struct MusicViewModelTests {
-    func make(trackChangePeekEnabled: Bool = true) -> (MusicViewModel, FakePresenter, ManualClock, SentCommands) {
+    func make(trackChangePeekEnabled: Bool = true,
+              keepPausedTrack: Bool = true) -> (MusicViewModel, FakePresenter, ManualClock, SentCommands) {
         let presenter = FakePresenter()
         let clock = ManualClock()
         let sent = SentCommands()
@@ -66,7 +67,8 @@ struct MusicViewModelTests {
                                 sendCommand: { await sent.append($0) },
                                 viewFactory: .placeholder,
                                 now: { MainActor.assumeIsolated { clock.currentDate } },
-                                isTrackChangePeekEnabled: { trackChangePeekEnabled })
+                                isTrackChangePeekEnabled: { trackChangePeekEnabled },
+                                keepPausedTrack: { keepPausedTrack })
         return (vm, presenter, clock, sent)
     }
 
@@ -186,7 +188,7 @@ struct MusicViewModelTests {
     }
 
     @Test func longPauseDismissesAndResumeRepresents() {
-        let (vm, presenter, clock, _) = make()
+        let (vm, presenter, clock, _) = make(keepPausedTrack: false)
         vm.handle(.snapshot(snap("One")))
         let id = presenter.presented[0].id
         vm.handle(.snapshot(snap("One", rate: 0)))
@@ -200,12 +202,27 @@ struct MusicViewModelTests {
     }
 
     @Test func resumeBeforeDelayCancelsDismiss() {
-        let (vm, presenter, clock, _) = make()
+        let (vm, presenter, clock, _) = make(keepPausedTrack: false)
         vm.handle(.snapshot(snap("One")))
         vm.handle(.snapshot(snap("One", rate: 0)))
         vm.handle(.snapshot(snap("One", rate: 1)))
         clock.advance(by: MusicViewModel.pauseDismissDelay + .seconds(1))
         #expect(presenter.dismissed.isEmpty)
+    }
+
+    /// Seam parity: the card stays in the stack while a track exists, so the user can still swipe
+    /// to music long after pausing. Only a track-less snapshot or `.unavailable` takes it away.
+    @Test func pausedTrackStaysWhenKeepPausedTrackIsOn() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One")))
+        vm.handle(.snapshot(snap("One", rate: 0)))
+        clock.advance(by: .seconds(1200))
+        #expect(presenter.dismissed.isEmpty)
+        #expect(presenter.presented.count == 1)
+
+        // ...and the source going away still dismisses it.
+        vm.handle(.snapshot(snap(nil, rate: 0)))
+        #expect(presenter.dismissed.count == 1)
     }
 
     @Test func unavailableEventDismisses() {

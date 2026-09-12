@@ -40,6 +40,8 @@ public final class MusicViewModel {
     public static let expandedSize = CGSize(width: 380, height: 160)
     /// UserDefaults key backing the "Track change peek" setting (absent means on).
     public nonisolated static let trackChangePeekDefaultsKey = "music.trackChangePeek"
+    /// UserDefaults key backing the "Keep paused track" setting (absent means on).
+    public nonisolated static let keepPausedTrackDefaultsKey = "music.keepPausedTrack"
 
     /// MediaRemote replays the outgoing track for a moment after a skip. A revert to the
     /// immediately previous track inside this window is treated as part of that burst: the
@@ -66,6 +68,10 @@ public final class MusicViewModel {
     @ObservationIgnored private let now: @Sendable () -> Date
     /// User preference (`music.trackChangePeek`, default on) gating the track-change peek.
     @ObservationIgnored private let isTrackChangePeekEnabled: @Sendable () -> Bool
+    /// User preference (`music.keepPausedTrack`, default on). While on, a paused track keeps its
+    /// card in the stack so the user can still swipe to music; the card goes away only when the
+    /// source reports no track at all, or the helper becomes unavailable.
+    @ObservationIgnored private let keepPausedTrack: @Sendable () -> Bool
     @ObservationIgnored private var backgroundID: PresentationID?
     @ObservationIgnored private var pauseToken: ScheduledToken?
     @ObservationIgnored private var tickToken: ScheduledToken?
@@ -97,6 +103,11 @@ public final class MusicViewModel {
                     UserDefaults.standard.object(forKey: MusicViewModel.trackChangePeekDefaultsKey) == nil
                         ? true
                         : UserDefaults.standard.bool(forKey: MusicViewModel.trackChangePeekDefaultsKey)
+                },
+                keepPausedTrack: @escaping @Sendable () -> Bool = {
+                    UserDefaults.standard.object(forKey: MusicViewModel.keepPausedTrackDefaultsKey) == nil
+                        ? true
+                        : UserDefaults.standard.bool(forKey: MusicViewModel.keepPausedTrackDefaultsKey)
                 }) {
         self.islandPresenter = presenter
         self.clock = clock
@@ -104,6 +115,7 @@ public final class MusicViewModel {
         self.viewFactory = viewFactory
         self.now = now
         self.isTrackChangePeekEnabled = isTrackChangePeekEnabled
+        self.keepPausedTrack = keepPausedTrack
     }
 
     // MARK: Events
@@ -154,7 +166,10 @@ public final class MusicViewModel {
             }
         }
 
-        if new.isPlaying {
+        // A paused track keeps its card by default: dropping it takes Music out of the card stack,
+        // so the user cannot swipe back to it. The setting is read on every snapshot, so flipping
+        // it while paused takes effect at the next update rather than at the next launch.
+        if new.isPlaying || keepPausedTrack() {
             pauseToken?.cancel()
             pauseToken = nil
         } else if pauseToken == nil {
