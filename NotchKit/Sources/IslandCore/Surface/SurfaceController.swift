@@ -11,6 +11,12 @@ public final class SurfaceController {
     private let presenter: IslandPresenter
     private var window: SurfaceWindow?
     private var hostingView: PassThroughHostingView<SurfaceView>?
+    /// The twin of ``window`` that stays in the ordinary user Space, so the system's drag
+    /// image can composite above the island while a file is being dragged (see
+    /// ``MirrorSwap``). Built with the window and kept empty and transparent until a drag
+    /// starts.
+    private var mirrorWindow: SurfaceWindow?
+    private var mirrorHostingView: PassThroughHostingView<SurfaceView>?
     private var hoverMonitor: HoverMonitor?
     private var swipeMonitor: ScrollSwipeMonitor?
     private var geometry: NotchGeometry?
@@ -30,6 +36,12 @@ public final class SurfaceController {
         // `activeSpaceDidChangeNotification`: it fires *after* the animation, so it can
         // never fix positioning, and once the panel lives in its own Space there is
         // nothing to re-assert.
+        // Direct callback rather than observation: the presenter calls it in the same
+        // main-actor turn the flag changes, which the grow animation depends on (see
+        // ``IslandPresenter/setSurfaceMirrored(_:)``).
+        presenter.onSurfaceMirroredChange = { [weak self] mirrored in
+            self?.applyMirror(mirrored)
+        }
         privateSpace = PrivateSpace()
         if privateSpace == nil {
             logger.warning("SkyLight private space unavailable; island will ride Space transitions")
@@ -46,6 +58,7 @@ public final class SurfaceController {
     public func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        presenter.onSurfaceMirroredChange = nil
         privateSpace?.destroy()
         privateSpace = nil
         hoverMonitor?.stop()
@@ -55,6 +68,9 @@ public final class SurfaceController {
         window?.orderOut(nil)
         window = nil
         hostingView = nil
+        mirrorWindow?.orderOut(nil)
+        mirrorWindow = nil
+        mirrorHostingView = nil
         isVisible = false
     }
 
@@ -77,6 +93,7 @@ public final class SurfaceController {
         guard let metrics = ScreenMetrics.current(), let newGeometry = NotchGeometry(metrics: metrics) else {
             logger.notice("No notch screen available; hiding surface")
             window?.orderOut(nil)
+            mirrorWindow?.orderOut(nil)
             isVisible = false
             geometry = nil
             return
@@ -90,6 +107,8 @@ public final class SurfaceController {
         hoverMonitor?.stop()
         swipeMonitor?.stop()
         window?.orderOut(nil)
+        mirrorWindow?.orderOut(nil)
+        mirrorHostingView = nil
 
         let frame = CGRect(
             x: geometry.notchRect.midX - Self.windowSize.width / 2,
@@ -108,6 +127,19 @@ public final class SurfaceController {
         // Re-adopting on every rebuild is required and safe (the call is idempotent).
         privateSpace?.adopt(panel)
 
+        // The mirror is built and ordered in *now*, empty and transparent, rather than
+        // when a drag starts: a window created mid-drag does show the drag image on top
+        // (the spike proved that much), but creating one is the most expensive thing that
+        // could happen in the turn the island has to start growing, and the WindowServer
+        // round trip is exactly what the swap cannot afford. It is deliberately *not*
+        // adopted into the private Space — being in the ordinary user Space is the whole
+        // point of it.
+        let mirror = SurfaceWindow(contentRect: frame)
+        mirror.ignoresMouseEvents = true
+        mirror.alphaValue = 0
+        mirror.setFrame(frame, display: false)
+        mirror.orderFrontRegardless()
+
         let monitor = HoverMonitor(
             rectProvider: { [weak self] in self?.islandScreenRect() ?? .zero },
             onChange: { [weak self] inside in self?.presenter.setHovering(inside) }
@@ -122,9 +154,52 @@ public final class SurfaceController {
 
         window = panel
         hostingView = hosting
+        mirrorWindow = mirror
         hoverMonitor = monitor
         swipeMonitor = swipe
         isVisible = true
+        // A screen change mid-drag rebuilds both windows; the fresh pair has to come back
+        // in whichever state the presenter is still in.
+        applyMirror(presenter.isSurfaceMirrored)
         logger.info("Surface window built for notch \(geometry.notchRect.debugDescription, privacy: .public)")
+    }
+
+    // MARK: The mirror
+
+    /// Moves the island's pixels between the primary window and the mirror.
+    ///
+    /// Activation installs a fresh hosting view over the same presenter — so the mirror
+    /// draws exactly what the primary draws — and lays it out synchronously, before the
+    /// alphas are swapped. That forced layout is what keeps the entrance animation: the
+    /// mirror's SwiftUI view has to have rendered the island's *current* (collapsed or
+    /// peek) shape before the zones presentation arrives, or SwiftUI coalesces the first
+    /// render with the expansion and the panel appears fully grown instead of growing out
+    /// of the notch.
+    ///
+    /// The mirror gets no `hitRectProvider`: it ignores mouse events entirely, and clicks
+    /// keep going to the primary window, which is still there at alpha 0 (a transparent
+    /// window still hit-tests — the drop catcher relies on the same thing).
+    private func applyMirror(_ mirrored: Bool) {
+        guard let window, let mirror = mirrorWindow, let geometry else { return }
+        let swap = MirrorSwap.resolve(mirrored: mirrored)
+
+        if swap.mirrorHasContent, mirrorHostingView == nil {
+            let root = SurfaceView(presenter: presenter, geometry: geometry, choreographer: .current())
+            let hosting = PassThroughHostingView(rootView: root)
+            mirror.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+            mirrorHostingView = hosting
+        }
+
+        // Mirror up first, primary down second: the other order shows one frame of
+        // nothing where the island is.
+        mirror.alphaValue = swap.mirrorAlpha
+        window.alphaValue = swap.primaryAlpha
+
+        if !swap.mirrorHasContent {
+            mirror.contentView = nil
+            mirrorHostingView = nil
+        }
+        logger.info("Surface mirror \(mirrored ? "engaged" : "released", privacy: .public)")
     }
 }

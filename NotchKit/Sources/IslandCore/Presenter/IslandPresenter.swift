@@ -11,6 +11,10 @@ public final class IslandPresenter: IslandPresenting {
     /// Insertion-ordered queue. Winner = highest priority, then latest inserted.
     public private(set) var queue: [Presentation] = []
     public private(set) var isHoverPromoted = false
+    /// Whether the surface is drawing itself from the mirror window in the user Space
+    /// rather than from the primary window in the private Space (see
+    /// ``setSurfaceMirrored(_:)``).
+    public private(set) var isSurfaceMirrored = false
     /// The card the user picked, by swiping or from the Cards menu. Cleared as soon as it
     /// leaves `stack`.
     public private(set) var pinnedID: PresentationID?
@@ -24,6 +28,9 @@ public final class IslandPresenter: IslandPresenting {
     /// outcome are separate questions, and reading the two together tells "the gesture never
     /// fired" apart from "it fired and the stack had nowhere to go".
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "surface.cards")
+    /// Set by `SurfaceController` at start-up; called with every change to
+    /// ``isSurfaceMirrored``. `nil` in tests and previews, where there is no window.
+    @ObservationIgnored public var onSurfaceMirroredChange: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private let clock: any IslandClock
     @ObservationIgnored private var ttlTokens: [PresentationID: ScheduledToken] = [:]
     @ObservationIgnored private var hoverToken: ScheduledToken?
@@ -149,6 +156,22 @@ public final class IslandPresenter: IslandPresenting {
         ttlTokens.removeValue(forKey: id)?.cancel()
         queue.removeAll { $0.id == id }
         queueDidChange()
+    }
+
+    /// Hands the island's pixels to the mirror window for the length of a drag, and back
+    /// again afterwards.
+    ///
+    /// ``onSurfaceMirroredChange`` is called *synchronously*, in this same main-actor turn,
+    /// rather than the flag being observed. `withObservationTracking`'s `onChange` fires
+    /// before the new value is even stored, so a surface that observed this would install
+    /// the mirror's SwiftUI view one turn late — after the caller has presented the zones
+    /// panel in the same turn. The mirror's first render would then already contain the
+    /// expanded panel, and the island would pop rather than grow. (``DropZonesViewModel``'s
+    /// `onCatcherFrameChange` is a direct callback for the same reason.)
+    public func setSurfaceMirrored(_ mirrored: Bool) {
+        guard isSurfaceMirrored != mirrored else { return }
+        isSurfaceMirrored = mirrored
+        onSurfaceMirroredChange?(mirrored)
     }
 
     // MARK: Card stack

@@ -844,6 +844,51 @@ struct IslandPresenterTests {
         #expect(p.current?.id == quiet.id)
         #expect(p.current?.showsStackDots == false)
     }
+
+    // MARK: - The surface mirror
+
+    @Test func mirroringTheSurfaceFlipsTheFlagAndTellsTheSurfaceOnce() {
+        let p = IslandPresenter(clock: ManualClock())
+        var changes: [Bool] = []
+        p.onSurfaceMirroredChange = { changes.append($0) }
+        #expect(!p.isSurfaceMirrored)
+
+        p.setSurfaceMirrored(true)
+        #expect(p.isSurfaceMirrored)
+        // A second drag event asking for what is already on screen must not rebuild the
+        // mirror's hosting view out from under the island.
+        p.setSurfaceMirrored(true)
+        #expect(changes == [true])
+
+        p.setSurfaceMirrored(false)
+        #expect(!p.isSurfaceMirrored)
+        p.setSurfaceMirrored(false)
+        #expect(changes == [true, false])
+    }
+
+    /// Nothing is wired up in tests and previews, so the callback is optional.
+    @Test func mirroringWithoutASurfaceIsHarmless() {
+        let p = IslandPresenter(clock: ManualClock())
+        p.setSurfaceMirrored(true)
+        #expect(p.isSurfaceMirrored)
+    }
+
+    /// Every other presenter — the test doubles, anything that owns no window — inherits
+    /// the no-op, which is what keeps `IslandPresenting` conformances unchanged.
+    @Test func theProtocolDefaultIsANoOp() {
+        let presenter: any IslandPresenting = WindowlessPresenter()
+        presenter.setSurfaceMirrored(true)
+        presenter.setSurfaceMirrored(false)
+    }
+}
+
+/// A presenter that implements only the three required methods, to prove
+/// `setSurfaceMirrored` needs no implementation.
+@MainActor
+private final class WindowlessPresenter: IslandPresenting {
+    func present(_ presentation: Presentation) {}
+    func update(_ presentation: Presentation) {}
+    func dismiss(_ id: PresentationID) {}
 }
 
 private extension Presentation {
