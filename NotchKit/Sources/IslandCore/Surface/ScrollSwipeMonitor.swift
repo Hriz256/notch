@@ -52,15 +52,16 @@ public final class ScrollSwipeMonitor {
     /// Only `Sendable` scalars are read off the event; `NSEvent` itself never escapes.
     private nonisolated func dispatch(_ event: NSEvent) {
         let deltaX = event.scrollingDeltaX
+        let deltaY = event.scrollingDeltaY
         let phase = event.phase.rawValue
         let momentum = event.momentumPhase.rawValue
         if Thread.isMainThread {
             MainActor.assumeIsolated {
-                handle(deltaX: deltaX, phase: phase, momentum: momentum)
+                handle(deltaX: deltaX, deltaY: deltaY, phase: phase, momentum: momentum)
             }
         } else {
             Task { @MainActor [weak self] in
-                self?.handle(deltaX: deltaX, phase: phase, momentum: momentum)
+                self?.handle(deltaX: deltaX, deltaY: deltaY, phase: phase, momentum: momentum)
             }
         }
     }
@@ -75,9 +76,10 @@ public final class ScrollSwipeMonitor {
 
     // MARK: Private
 
-    private func handle(deltaX: CGFloat, phase: UInt, momentum: UInt) {
+    private func handle(deltaX: CGFloat, deltaY: CGFloat, phase: UInt, momentum: UInt) {
         let direction = recognizer.receive(
             deltaX: deltaX,
+            deltaY: deltaY,
             phase: phase,
             momentum: momentum,
             // Autoclosure: not evaluated for the momentum events that make up most of the traffic.
@@ -87,8 +89,8 @@ public final class ScrollSwipeMonitor {
         // Diagnostic trail for gestures over the island: sideways scroll events with their
         // phase, momentum and outcome, so a swipe that "did not take" can be told apart
         // from one that never reached the recognizer. Debug level: dropped unless streamed.
-        if abs(deltaX) >= 1, rectProvider().contains(NSEvent.mouseLocation) {
-            logger.debug("scroll over island dx=\(deltaX, privacy: .public) phase=\(phase, privacy: .public) momentum=\(momentum, privacy: .public) → \(direction.map { $0 == .next ? "next" : "previous" } ?? "-", privacy: .public)")
+        if abs(deltaX) >= 1 || abs(deltaY) >= 1, rectProvider().contains(NSEvent.mouseLocation) {
+            logger.debug("scroll over island dx=\(deltaX, privacy: .public) dy=\(deltaY, privacy: .public) phase=\(phase, privacy: .public) momentum=\(momentum, privacy: .public) → \(direction.map { $0 == .next ? "next" : "previous" } ?? "-", privacy: .public)")
         }
         guard let direction else { return }
         // Info, not debug: this is one half of the swipe trail, and a `log show --info`

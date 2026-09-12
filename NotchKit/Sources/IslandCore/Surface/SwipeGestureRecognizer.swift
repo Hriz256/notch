@@ -3,6 +3,11 @@ import Foundation
 
 /// The pure half of ``ScrollSwipeMonitor``: scroll-event scalars in, cycle directions out.
 ///
+/// Nothing on the island scrolls, so any two-finger scroll over it is a request to turn
+/// the page: both axes count (whichever the fingers travelled further along decides),
+/// and the travel that counts is short — a flick of a few points. Fingers moving left
+/// or down pull the next card in; right or up, the previous one.
+///
 /// Two event shapes arrive here. A trackpad gesture carries phases: the deltas are
 /// accumulated from `.began` and fire once, so a single long swipe advances a single
 /// card. The momentum tail that follows the fingers leaving the glass *continues* the
@@ -16,12 +21,14 @@ import Foundation
 /// testable by feeding it deltas.
 @MainActor
 public struct SwipeGestureRecognizer {
-    /// Horizontal travel, in points, that counts as a swipe.
-    public static let threshold: CGFloat = 12
+    /// Travel along the dominant axis, in points, that counts as a swipe. Short on
+    /// purpose: the user's trail showed flicks of 3–9 pt that read as dead at 12.
+    public static let threshold: CGFloat = 4
     /// Minimum gap between two phase-less wheel ticks that both fire.
     public static let wheelInterval: TimeInterval = 0.4
 
     private var accumulatedX: CGFloat = 0
+    private var accumulatedY: CGFloat = 0
     private var didFireInGesture = false
     private var lastWheelFire: Date?
     /// Whether the gesture in flight started over the island. Latched on the first event of
@@ -35,6 +42,8 @@ public struct SwipeGestureRecognizer {
     ///
     /// - Parameters:
     ///   - deltaX: `NSEvent.scrollingDeltaX`, in points.
+    ///   - deltaY: `NSEvent.scrollingDeltaY`, in points (natural scrolling: positive when
+    ///     the fingers move down).
     ///   - rawPhase: `NSEvent.phase.rawValue`.
     ///   - rawMomentum: `NSEvent.momentumPhase.rawValue`; anything non-zero is discarded.
     ///   - isOverIsland: whether the pointer sits inside the island. An `@autoclosure` so
@@ -43,6 +52,7 @@ public struct SwipeGestureRecognizer {
     ///   - now: the caller's clock, for the wheel rate limit only.
     public mutating func receive(
         deltaX: CGFloat,
+        deltaY: CGFloat = 0,
         phase rawPhase: UInt,
         momentum rawMomentum: UInt,
         isOverIsland: @autoclosure () -> Bool,
@@ -62,9 +72,10 @@ public struct SwipeGestureRecognizer {
             }
             guard isGestureOverIsland == true, !didFireInGesture else { return nil }
             accumulatedX += deltaX
-            guard abs(accumulatedX) >= Self.threshold else { return nil }
+            accumulatedY += deltaY
+            guard let direction = accumulatedDirection else { return nil }
             didFireInGesture = true
-            return Self.direction(of: accumulatedX)
+            return direction
         }
 
         let phase = NSEvent.Phase(rawValue: rawPhase)
@@ -73,12 +84,12 @@ public struct SwipeGestureRecognizer {
             // fires on its own. The cheap scalar test comes first — most wheel events on
             // the machine are vertical scrolling that could never be a swipe, and the
             // pointer test behind the autoclosure is a rect lookup.
-            guard abs(deltaX) >= Self.threshold else { return nil }
+            guard let direction = Self.direction(x: deltaX, y: deltaY) else { return nil }
             guard isOverIsland() else { return nil }
             // Rate-limited, so one flick of the wheel cannot run through the whole stack.
             if let lastWheelFire, now.timeIntervalSince(lastWheelFire) < Self.wheelInterval { return nil }
             lastWheelFire = now
-            return Self.direction(of: deltaX)
+            return direction
         }
 
         if phase.contains(.began) { reset() }
@@ -106,21 +117,36 @@ public struct SwipeGestureRecognizer {
         }
         guard isInside else { return nil }
         accumulatedX += deltaX
-        guard !didFireInGesture, abs(accumulatedX) >= Self.threshold else { return nil }
+        accumulatedY += deltaY
+        guard !didFireInGesture, let direction = accumulatedDirection else { return nil }
         didFireInGesture = true
-        return Self.direction(of: accumulatedX)
+        return direction
+    }
+
+    /// The direction the travel so far asks for, once the dominant axis has covered the
+    /// threshold; nil while it has not.
+    private var accumulatedDirection: IslandPresenter.CycleDirection? {
+        Self.direction(x: accumulatedX, y: accumulatedY)
+    }
+
+    /// Whichever axis the fingers travelled further along decides; below the threshold on
+    /// both, nothing. Left or down → next; right or up → previous.
+    private static func direction(x: CGFloat, y: CGFloat) -> IslandPresenter.CycleDirection? {
+        if abs(x) >= abs(y) {
+            guard abs(x) >= threshold else { return nil }
+            return x < 0 ? .next : .previous
+        }
+        guard abs(y) >= threshold else { return nil }
+        return y > 0 ? .next : .previous
     }
 
     /// Forgets the gesture in flight. The wheel rate limit is deliberately kept: it guards
     /// against a flick of the wheel, not against a particular gesture.
     public mutating func reset() {
         accumulatedX = 0
+        accumulatedY = 0
         didFireInGesture = false
         isGestureOverIsland = nil
     }
 
-    /// Natural direction: fingers moving left (negative delta) pull the next card in.
-    private static func direction(of deltaX: CGFloat) -> IslandPresenter.CycleDirection {
-        deltaX < 0 ? .next : .previous
-    }
 }
