@@ -33,6 +33,22 @@ struct CodeContextMenu: ViewModifier {
 
             ForEach(model.enabledAgents, id: \.self) { agent in
                 Divider()
+                // One submenu per agent: which stages that agent may show, and whether it
+                // keeps a card up when nothing is running.
+                Menu(agent.displayName) {
+                    ForEach(CodeSettings.filterableStages, id: \.self) { stage in
+                        checkmarked(
+                            CodeAgentViewModel.stageMenuTitle(stage),
+                            isOn: model.showsStage(agent, stage)
+                        ) {
+                            model.toggleStage(agent, stage)
+                        }
+                    }
+                    Divider()
+                    checkmarked("Show when idle", isOn: model.showsWhenIdle(agent)) {
+                        model.toggleShowWhenIdle(agent)
+                    }
+                }
                 Section(Self.hookTitle(agent, model.hookStates[agent])) {
                     Button("Install hooks") { model.setHooksInstalled(agent, true) }
                     Button("Remove hooks") { model.setHooksInstalled(agent, false) }

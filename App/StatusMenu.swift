@@ -42,6 +42,26 @@ struct StatusMenu: View {
                     set: { coordinator.codeFeature.setAgentEnabled(agent, $0) }
                 ))
             }
+            // Per-agent stage filters. Nested one level down because there are four of them
+            // per agent, and the top level has to stay readable at a glance.
+            if !coordinator.codeFeature.settings.enabledAgents.isEmpty {
+                Divider()
+                ForEach(coordinator.codeFeature.settings.enabledAgents, id: \.self) { agent in
+                    Menu(agent.displayName) {
+                        ForEach(CodeSettings.filterableStages, id: \.self) { stage in
+                            Toggle(CodeAgentViewModel.stageMenuTitle(stage), isOn: Binding(
+                                get: { coordinator.codeFeature.showsStage(agent, stage) },
+                                set: { coordinator.codeFeature.setShowsStage(agent, stage, $0) }
+                            ))
+                        }
+                        Divider()
+                        Toggle("Show when idle", isOn: Binding(
+                            get: { coordinator.codeFeature.showWhenIdle(agent) },
+                            set: { coordinator.codeFeature.setShowWhenIdle(agent, $0) }
+                        ))
+                    }
+                }
+            }
             Divider()
             Toggle("Play completion sound", isOn: Binding(
                 get: { coordinator.codeFeature.settings.playCompleteSound },

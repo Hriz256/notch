@@ -116,6 +116,23 @@ public final class CodeAgentFeature: IslandFeature {
     /// Codex ignores `[hooks]` until the user approves them with `/hooks` in its TUI.
     public var codexNeedsTrust: Bool { installer.codexNeedsTrust }
 
+    /// Per-agent stage filters, mirrored from the island's context menu so they can also be
+    /// changed without waiting for a card to be on screen. Written through the feature rather
+    /// than straight into `settings` so the island re-derives immediately.
+    public func showsStage(_ agent: Agent, _ stage: Stage) -> Bool { settings.showsStage(agent, stage) }
+
+    public func setShowsStage(_ agent: Agent, _ stage: Stage, _ on: Bool) {
+        settings.setShowsStage(agent, stage, on)
+        model?.refreshPresentation()
+    }
+
+    public func showWhenIdle(_ agent: Agent) -> Bool { settings.showWhenIdle(agent) }
+
+    public func setShowWhenIdle(_ agent: Agent, _ on: Bool) {
+        settings.setShowWhenIdle(agent, on)
+        model?.refreshPresentation()
+    }
+
     // MARK: - Hooks
 
     /// Repairs hook commands that point at an older copy of the app, then installs hooks

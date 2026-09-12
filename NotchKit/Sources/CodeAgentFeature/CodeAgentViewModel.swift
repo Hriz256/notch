@@ -220,6 +220,36 @@ public final class CodeAgentViewModel {
         refreshPresentation()
     }
 
+    // MARK: - Per-agent visibility (the context menu's per-agent submenu)
+
+    /// Whether a stage is allowed to change what the island shows for `agent`.
+    public func showsStage(_ agent: Agent, _ stage: Stage) -> Bool {
+        settings.showsStage(agent, stage)
+    }
+
+    public func toggleStage(_ agent: Agent, _ stage: Stage) {
+        settings.setShowsStage(agent, stage, !settings.showsStage(agent, stage))
+        refreshPresentation()
+    }
+
+    public func showsWhenIdle(_ agent: Agent) -> Bool { settings.showWhenIdle(agent) }
+
+    public func toggleShowWhenIdle(_ agent: Agent) {
+        settings.setShowWhenIdle(agent, !settings.showWhenIdle(agent))
+        refreshPresentation()
+    }
+
+    /// The menu title for a stage the user may hide. Same wording in the island's context
+    /// menu and in the status menu, so the two read as one setting.
+    public static func stageMenuTitle(_ stage: Stage) -> String {
+        switch stage {
+        case .analyzing: "Show Analyzing"
+        case .thinking: "Show Thinking"
+        case .creating: "Show Creating"
+        case .waiting, .completed, .failed: "Show \(stage.rawValue)"
+        }
+    }
+
     /// Fetches every agent's usage right now, bypassing the poll cadence.
     public func refreshUsage() {
         usage.refreshNow()
