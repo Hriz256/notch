@@ -140,9 +140,12 @@ public final class DropZonesViewModel {
     /// row of tiles inside it is sized to fit that width rather than to widen the card
     /// (see `StashRowLayout`), so hovering never moves the two peek slots.
     ///
-    /// 124 pt is the peek row (a notch tall) over the 40 pt tile row and the caption:
-    /// `StashExpandedView` owns the arithmetic.
-    public static let stashExpandedSize = CGSize(width: 0, height: 124)
+    /// 380 pt wide like the Music and Code cards — the user wants every page the same
+    /// width — and 124 pt tall: the peek row (a notch tall) over the 40 pt tile row and
+    /// the caption. `StashExpandedView` owns the arithmetic. The top row is a `PeekRow`,
+    /// whose slots hug the island's edges at any width, so it still lines up with the
+    /// peek while the island grows.
+    public static let stashExpandedSize = CGSize(width: 380, height: 124)
     /// How long the zones stay up after the cursor leaves the hot rect, so a drag that
     /// clips the corner on its way somewhere else does not flicker them.
     public static let leaveDebounce: Duration = .milliseconds(300)

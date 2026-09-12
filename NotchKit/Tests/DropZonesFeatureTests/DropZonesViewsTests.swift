@@ -140,15 +140,15 @@ struct DropZonesViewsTests {
         #expect(StashRowLayout.hoverScale == 1.06)
     }
 
-    @Test("Six 40 pt boxes and their gaps fit the peek's width, seven do not")
-    func rowFitsThePeeksWidth() {
-        // The card is exactly as wide as the peek — 297 pt on the 185 pt notch the render
-        // tests use — because its top row *is* the peek and hovering must not move it.
-        let peekWidth = 185 + 2 * IslandLayout.peekSlotWidth
-        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) == 280)
-        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) <= peekWidth)
-        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes + 1) > peekWidth,
-                "one more box would have to be clipped, which is why the last one is the chip")
+    @Test("Seven 40 pt boxes and their gaps fit the 380 pt card with its corner margins, eight do not")
+    func rowFitsTheCardsWidth() {
+        // The card is as wide as the Music and Code pages; the row keeps clear of the
+        // 24 pt bottom corners on each side.
+        let usable = DropZonesViewModel.stashExpandedSize.width - 2 * 24
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) == 328)
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes) <= usable)
+        #expect(StashRowLayout.width(boxes: StashRowLayout.maximumBoxes + 1) > usable,
+                "one more box would run into the corners, which is why the last one is the chip")
         #expect(StashRowLayout.width(boxes: 1) == StashRowLayout.tileSize)
         #expect(StashRowLayout.width(boxes: 0) == 0)
     }
@@ -158,7 +158,7 @@ struct DropZonesViewsTests {
         // A 32 pt notch, the standard one the render tests use.
         #expect(StashRowLayout.contentHeight(notchHeight: 32) == 114)
         #expect(StashRowLayout.contentHeight(notchHeight: 32) <= DropZonesViewModel.stashExpandedSize.height)
-        #expect(DropZonesViewModel.stashExpandedSize == CGSize(width: 0, height: 124))
+        #expect(DropZonesViewModel.stashExpandedSize == CGSize(width: 380, height: 124))
     }
 
     @Test("The row shows the newest file first and every file while they fit")
@@ -177,15 +177,15 @@ struct DropZonesViewsTests {
                 files: (1...count).map { StashedFile(name: "\($0).txt", storedPath: "/tmp/\($0)", bytes: 1) }
             )
         }
-        // Exactly full: six files, six tiles, no chip.
-        #expect(plan(6).tiles.count == 6)
-        #expect(plan(6).overflow == 0)
-        // Seven: five tiles and a chip standing for the two that did not fit.
-        #expect(plan(7).tiles.map(\.name) == ["7.txt", "6.txt", "5.txt", "4.txt", "3.txt"])
-        #expect(plan(7).overflow == 2)
-        // Whatever the count, the row is never more than six boxes wide.
+        // Exactly full: seven files, seven tiles, no chip.
+        #expect(plan(7).tiles.count == 7)
+        #expect(plan(7).overflow == 0)
+        // Eight: six tiles and a chip standing for the two that did not fit.
+        #expect(plan(8).tiles.map(\.name) == ["8.txt", "7.txt", "6.txt", "5.txt", "4.txt", "3.txt"])
+        #expect(plan(8).overflow == 2)
+        // Whatever the count, the row is never more than seven boxes wide.
         #expect(plan(40).tiles.count + 1 == StashRowLayout.maximumBoxes)
-        #expect(plan(40).overflow == 35)
+        #expect(plan(40).overflow == 34)
     }
 
     @Test("An empty stash draws no row at all")

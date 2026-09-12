@@ -18,13 +18,11 @@ enum StashRowLayout {
 
     /// The most boxes the row ever draws, tiles and the "+N" chip together.
     ///
-    /// The card is exactly as wide as the peek — ``DropZonesViewModel/stashExpandedSize``
-    /// asks for width 0 — because the top row *is* the peek and hovering must not move it.
-    /// On a 185 pt notch that is 297 pt, and six 40 pt boxes with 8 pt between them come to
-    /// 280: a seventh would have to be clipped, so the sixth box becomes the chip instead.
-    /// (The design brief said six tiles *plus* a chip; seven boxes are 328 pt and do not
-    /// fit a card that may not grow. Six boxes is the same idea at the width we have.)
-    static let maximumBoxes = 6
+    /// The card is 380 pt wide (``DropZonesViewModel/stashExpandedSize``, the width of
+    /// every other page). Seven 40 pt boxes with 8 pt between them come to 328, which
+    /// leaves the 26 pt side margins the peek slots' centres sit on; an eighth (376 pt)
+    /// would run into the island's rounded corners, so the seventh box becomes the chip.
+    static let maximumBoxes = 7
 
     /// The gap between the peek row and the tiles.
     static let gapBelowNotch: CGFloat = 8

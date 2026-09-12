@@ -242,6 +242,17 @@ struct StashLayoutRenderTests {
         windowSize.width / 2 + geometry.notchWidth / 2 + IslandLayout.peekSlotWidth / 2
     }
 
+    /// Where the peek slots' centres land once the island has grown to the stash card's
+    /// 380 pt: `PeekRow` hugs the island's edges at every width, so each slot's centre is
+    /// half a slot in from the card's edge.
+    static func expandedLeadingSlotCentre() -> CGFloat {
+        windowSize.width / 2 - DropZonesViewModel.stashExpandedSize.width / 2 + IslandLayout.peekSlotWidth / 2
+    }
+
+    static func expandedTrailingSlotCentre() -> CGFloat {
+        windowSize.width / 2 + DropZonesViewModel.stashExpandedSize.width / 2 - IslandLayout.peekSlotWidth / 2
+    }
+
     /// The vertical middle of the peek row — the island's top edge is the window's top.
     static func slotCentreY(_ geometry: NotchGeometry) -> CGFloat {
         geometry.notchHeight / 2
@@ -388,8 +399,8 @@ struct StashLayoutRenderTests {
         // drag the centroid down into the row.
         let stack = try #require(scan(image, rows: 0...geometry.notchHeight, matches: Ink.isRed),
                                  "no thumbnail in the rendered expanded card")
-        #expect(abs(stack.centroid.x - Self.leadingSlotCentre(geometry)) <= 2,
-                "stack centre \(stack.centroid.x) pt, expected \(Self.leadingSlotCentre(geometry)) pt")
+        #expect(abs(stack.centroid.x - Self.expandedLeadingSlotCentre()) <= 2,
+                "stack centre \(stack.centroid.x) pt, expected \(Self.expandedLeadingSlotCentre()) pt")
         #expect(abs(stack.centroid.y - Self.slotCentreY(geometry)) <= 2,
                 "stack centre \(stack.centroid.y) pt, expected \(Self.slotCentreY(geometry)) pt; the expanded card must not push the peek row down")
 
@@ -399,8 +410,8 @@ struct StashLayoutRenderTests {
             scan(image, rows: 0...geometry.notchHeight, matches: Ink.isBlue),
             "no count badge in the expanded card's top row"
         )
-        #expect(abs(badge.centroid.x - Self.trailingSlotCentre(geometry)) <= 2,
-                "badge centre \(badge.centroid.x) pt, expected \(Self.trailingSlotCentre(geometry)) pt")
+        #expect(abs(badge.centroid.x - Self.expandedTrailingSlotCentre()) <= 2,
+                "badge centre \(badge.centroid.x) pt, expected \(Self.expandedTrailingSlotCentre()) pt")
     }
 
     @Test("The caption row sits under the tiles, 24 pt below their bottom edge")
@@ -480,11 +491,11 @@ struct StashLayoutRenderTests {
                 "the tiles start at \(ink.minY) pt, expected \(band.lowerBound) pt")
     }
 
-    @Test("A seventh file turns the last box into a +N chip")
-    func theSeventhFileBecomesAChip() async throws {
+    @Test("One file more than the row holds turns the last box into a +N chip")
+    func theOverflowingFileBecomesAChip() async throws {
         let harness = try RenderHarness()
         defer { harness.cleanUp() }
-        try await harness.stash((1...7).map { "f\($0).png" })
+        try await harness.stash((1...(StashRowLayout.maximumBoxes + 1)).map { "f\($0).png" })
 
         let geometry = try Self.geometry()
         let image = try #require(
@@ -498,7 +509,7 @@ struct StashLayoutRenderTests {
         let band = Self.tileBand(geometry)
         let tiles = Self.cardRuns(image, rows: band, matches: Ink.isRed)
         #expect(tiles.count == StashRowLayout.maximumBoxes - 1,
-                "expected five tiles beside the chip, found \(tiles.count): \(tiles)")
+                "expected \(StashRowLayout.maximumBoxes - 1) tiles beside the chip, found \(tiles.count): \(tiles)")
 
         // The chip is the sixth box: blue ink in the tile band, to the right of every tile.
         let chip = try #require(scan(image, rows: band, matches: Ink.isBlue),
@@ -510,11 +521,11 @@ struct StashLayoutRenderTests {
         #expect(abs(chip.centroid.x - expected) <= 4,
                 "chip centre \(chip.centroid.x) pt, expected \(expected) pt")
 
-        // Six boxes, and nothing runs past the card the peek's width gave us.
+        // Seven boxes, and nothing runs past the card's edge.
         let row = try #require(scan(image, rows: band, matches: { r, g, b in
             Ink.isRed(r, g, b) || Ink.isBlue(r, g, b)
         }), "no row at all")
-        let cardWidth = Self.windowSize.width / 2 + (geometry.notchWidth / 2 + IslandLayout.peekSlotWidth)
+        let cardWidth = Self.windowSize.width / 2 + DropZonesViewModel.stashExpandedSize.width / 2
         #expect(row.maxX <= cardWidth, "the row runs to \(row.maxX) pt, past the card's edge")
     }
 
