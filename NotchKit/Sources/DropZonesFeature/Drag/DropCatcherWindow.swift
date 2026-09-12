@@ -2,6 +2,11 @@ import AppKit
 import DropZonesShared
 import os
 
+/// The window and its view are two halves of one thing and log as one: the ordering
+/// belongs to the window, the drag messages to the view, and reading them apart is exactly
+/// what makes a missing drop hard to explain.
+private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
+
 /// What the catcher tells the feature about the drag passing over it.
 ///
 /// Everything is in panel coordinates (origin top-left, the space
@@ -41,8 +46,6 @@ public final class DropCatcherWindow: NSPanel {
     /// The destination view. Exposed so the feature can set its `panelFrame` and
     /// delegate; it is always this window's `contentView`.
     public let catcherView: DropCatcherView
-
-    let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
 
     public init() {
         catcherView = DropCatcherView(frame: .zero)
@@ -174,8 +177,6 @@ public final class DropCatcherView: NSView {
     /// catcher's idea of "over the stash card" the same as the one the user sees,
     /// even when the catcher's own frame is larger than the panel.
     public var panelFrame: CGRect = .zero
-
-    private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
 
     /// How many drags have entered since the zones last went up. Zero at the end of a
     /// showing means AppKit never offered this window the drag at all — the one failure

@@ -135,16 +135,15 @@ public final class DropZonesViewModel {
     public static let displayTitle = "Drop Zones"
     /// The zones panel (spec §2 "Widths").
     public static let zonesSize = CGSize(width: 280, height: 140)
-    /// The hover-expanded stash card. Width 0 means "as wide as the peek": `IslandLayout`
-    /// widens it, so the card cannot be narrower than the row it grew out of — and the
-    /// row of tiles inside it is sized to fit that width rather than to widen the card
-    /// (see `StashRowLayout`), so hovering never moves the two peek slots.
+    /// The hover-expanded stash card: 380 pt wide like the Music and Code cards — the user
+    /// wants every page the same width — and 124 pt tall, the peek row (a notch tall) over
+    /// the 40 pt tile row and the caption. `StashRowLayout` owns that arithmetic, including
+    /// how many tiles 380 pt holds.
     ///
-    /// 380 pt wide like the Music and Code cards — the user wants every page the same
-    /// width — and 124 pt tall: the peek row (a notch tall) over the 40 pt tile row and
-    /// the caption. `StashExpandedView` owns the arithmetic. The top row is a `PeekRow`,
-    /// whose slots hug the island's edges at any width, so it still lines up with the
-    /// peek while the island grows.
+    /// The top row is a real `PeekRow`, whose two slots hug the island's edges at whatever
+    /// width it is given: hovering widens the island, so the slots slide outward with it
+    /// rather than staying where the peek had them. That is the user's ask — the card is a
+    /// page like the others first, and a grown peek second.
     public static let stashExpandedSize = CGSize(width: 380, height: 124)
     /// How long the zones stay up after the cursor leaves the hot rect, so a drag that
     /// clips the corner on its way somewhere else does not flicker them.

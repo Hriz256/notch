@@ -10,8 +10,8 @@ import SwiftUI
 /// one place that decides how many tiles fit is the one place the card's height is derived
 /// from.
 enum StashRowLayout {
-    /// The side of one tile. Big enough to recognise a screenshot by, small enough that six
-    /// of them fit the peek's width.
+    /// The side of one tile. Big enough to recognise a screenshot by, small enough that
+    /// seven of them fit the card's width.
     static let tileSize: CGFloat = 40
     static let spacing: CGFloat = 8
     static let cornerRadius: CGFloat = 6
@@ -77,18 +77,16 @@ enum StashRowLayout {
 ///
 /// The top row is a real `PeekRow` at the real notch size rather than a re-creation of it,
 /// because "unmoved" is the whole point: hovering the island must add rows, not shuffle the
-/// two things the user was already looking at. `SurfaceView` pushes expanded content below
-/// the notch — right for a panel, wrong for a card whose first row *is* the peek — so that
+/// two things the user was already looking at. The card is 380 pt wide like every other
+/// page, so the row is *wider* than the peek and its two slots slide outward to hug the
+/// island's new edges — at the user's request, and the reason `PeekRow` is asked for the
+/// slots rather than told where they are. `SurfaceView` pushes expanded content below the
+/// notch — right for a panel, wrong for a card whose first row *is* the peek — so that
 /// padding is cancelled here and the row lands back at the island's top edge.
 struct StashExpandedView: View {
     let model: DropZonesViewModel
 
     @Environment(\.notchSize) private var notchSize
-
-    /// The caption row's height, and the gap above it: together they put the row's centre
-    /// `captionGap + captionHeight / 2` below the tiles (spec §3.3).
-    static let captionHeight = StashRowLayout.captionHeight
-    static let captionGap = StashRowLayout.captionGap
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,8 +101,8 @@ struct StashExpandedView: View {
                 .padding(.top, StashRowLayout.gapBelowNotch)
 
             caption
-                .frame(height: Self.captionHeight)
-                .padding(.top, Self.captionGap)
+                .frame(height: StashRowLayout.captionHeight)
+                .padding(.top, StashRowLayout.captionGap)
                 .stashPoof(model)
         }
         .frame(maxWidth: .infinity, alignment: .top)

@@ -124,7 +124,7 @@ struct DropZonesViewsTests {
     func captionPosition() {
         // The row is laid out under the tiles, so its centre is `gap + height / 2` below
         // their bottom edge.
-        let centre = StashExpandedView.captionGap + StashExpandedView.captionHeight / 2
+        let centre = StashRowLayout.captionGap + StashRowLayout.captionHeight / 2
         #expect(centre == 24)
     }
 

@@ -45,7 +45,11 @@ public struct SwipeGestureRecognizer {
     ///   - deltaY: `NSEvent.scrollingDeltaY`, in points (natural scrolling: positive when
     ///     the fingers move down).
     ///   - rawPhase: `NSEvent.phase.rawValue`.
-    ///   - rawMomentum: `NSEvent.momentumPhase.rawValue`; anything non-zero is discarded.
+    ///   - rawMomentum: `NSEvent.momentumPhase.rawValue`. Non-zero means the fingers have
+    ///     left the glass: the tail *continues* the gesture that was latched over the
+    ///     island (a quick flick travels only a few points under the fingers), and its own
+    ///     end closes that gesture for good. It is only discarded when no such gesture is
+    ///     on record, or one has already fired.
     ///   - isOverIsland: whether the pointer sits inside the island. An `@autoclosure` so
     ///     the momentum test — by far the commonest rejection — runs before the caller
     ///     pays for a rect lookup on every scroll event on the machine.
