@@ -4,13 +4,14 @@ import SwiftUI
 
 /// The expanded panel while a session is running, waiting or has just finished.
 ///
-/// Same 380 × 170 card as ``CodeExpandedView`` and the same usage bars at the bottom, so
-/// the panel does not re-lay-out when a session starts: only the top half changes, from
-/// the sparkline to the stage.
+/// Same 380 pt-wide card as ``CodeExpandedView`` and the same usage bars, but the card
+/// shrinks to what there is to show: ``CodeAgentViewModel/expandedSize`` is 132 pt tall
+/// without a detail line and 160 pt with one. Nothing here reserves space — an empty
+/// detail renders nothing rather than an empty band, and there is no spacer pushing the
+/// bars to a bottom edge that is no longer there.
 ///
-/// Height budget (138 pt usable under the notch):
-/// `2 (top) + 18 (header) + 8 + 28 (detail, 2 lines) + 8 + 24 + 8 + 24 + 5 (bottom) = 125`,
-/// with the slack taken by a spacer so the bars stay pinned to the bottom edge.
+/// Height budget (132 pt card, 32 pt of it under the notch):
+/// `2 (top) + 18 (header) + 10 + 24 (bar row) + 10 + 24 (bar row) + 10 (bottom) = 98`.
 struct CodeActivityView: View {
     let model: CodeAgentViewModel
 
@@ -18,15 +19,14 @@ struct CodeActivityView: View {
     private var session: SessionTracker.Session? { model.displayedSession }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             header
             detail
-            Spacer(minLength: 0)
             CodeUsageBars(model: model, compact: true)
         }
         .padding(.horizontal, 14)
         .padding(.top, 2)
-        .padding(.bottom, 5)
+        .padding(.bottom, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { model.startTicking() }
         .onDisappear { model.stopTicking() }
@@ -62,6 +62,8 @@ struct CodeActivityView: View {
         return "\(elapsed) ×\(model.activeCount)"
     }
 
+    /// Only ever present when there is something to say. ``CodeAgentViewModel/expandedSize``
+    /// asks the same session the same question, so the card is exactly as tall as this.
     @ViewBuilder
     private var detail: some View {
         if let text = session?.detail, !text.isEmpty {

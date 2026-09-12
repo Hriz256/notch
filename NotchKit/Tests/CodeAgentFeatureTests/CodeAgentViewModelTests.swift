@@ -130,13 +130,15 @@ private struct Fixture {
         _ stage: Stage,
         agent: Agent = .claude,
         session: String = "s1",
-        tool: String? = nil
+        tool: String? = nil,
+        detail: String? = nil
     ) -> AgentEvent {
         AgentEvent(
             agent: agent,
             sessionID: session,
             stage: stage,
             tool: tool,
+            detail: detail,
             timestamp: clock.currentDate
         )
     }
@@ -301,6 +303,31 @@ final class CodeAgentViewModelTests {
         #expect(f.presenter.live[id]?.style == .peek)
         #expect(f.presenter.live[id]?.ttl == nil)          // sticky: the user must answer it
         #expect(f.vm.visibleStage == .waiting)
+    }
+
+    /// A working panel with nothing to say is header + bars only, so the card shrinks from
+    /// the idle 170 to 132 rather than leaving an empty band where the detail would go.
+    @Test func workingPresentationUsesCompactHeightWithoutDetail() async throws {
+        let f = makeFixture(results: [.claude: .success(usage(.claude))], defaults: defaults)
+        await loadUsage(f)
+        #expect(f.mainPresentation?.expandedSize.height == 170)
+
+        f.vm.handle(f.event(.thinking, tool: "Bash"))
+
+        let presentation = try #require(f.mainPresentation)
+        #expect(presentation.expandedSize == CGSize(width: 380, height: 132))
+        #expect(f.vm.expandedSize.height == 132)
+    }
+
+    /// A permission prompt carries a detail line, which needs the taller card.
+    @Test func waitingWithDetailUsesTallerHeight() throws {
+        let f = makeFixture(defaults: defaults)
+
+        f.vm.handle(f.event(.waiting, tool: "Bash", detail: "Allow Bash to run rm -rf build?"))
+
+        let presentation = try #require(f.mainPresentation)
+        #expect(presentation.expandedSize == CGSize(width: 380, height: 160))
+        #expect(f.vm.expandedSize.height == 160)
     }
 
     // MARK: Completion alerts

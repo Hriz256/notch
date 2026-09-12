@@ -54,7 +54,13 @@ public struct CodeViewFactory {
 @Observable
 public final class CodeAgentViewModel {
     public static let featureID = FeatureID("code")
+    /// The idle card: usage bars plus the sparkline. Also the default for anything that
+    /// needs a size before a view model exists.
     public static let expandedSize = CGSize(width: 380, height: 170)
+    /// The activity card with nothing to say beyond the header and the two bars.
+    static let activitySize = CGSize(width: 380, height: 132)
+    /// The activity card with a detail line (a permission prompt, the last assistant line).
+    static let activityWithDetailSize = CGSize(width: 380, height: 160)
     /// How long the completion / failure alert stays up.
     public static let alertDuration: Duration = .seconds(4)
 
@@ -91,6 +97,19 @@ public final class CodeAgentViewModel {
     /// The session the island is currently about: the running one, or — while a completion
     /// alert is up — the finished one the alert is for. This is what the views render.
     public var displayedSession: SessionTracker.Session? { tracker.activeSession ?? alertingSession }
+
+    /// How tall the expanded card has to be for what the panel is about to draw, so the
+    /// island animates between heights instead of leaving an empty band under the header.
+    ///
+    /// Read off the same session ``CodeActivityView`` renders, and recomputed on every
+    /// ``refreshPresentation()``.
+    public var expandedSize: CGSize { Self.expandedSize(for: displayedSession) }
+
+    /// `nil` means the idle panel, which is the tallest of the three because of the sparkline.
+    static func expandedSize(for session: SessionTracker.Session?) -> CGSize {
+        guard let session else { return expandedSize }
+        return (session.detail ?? "").isEmpty ? activitySize : activityWithDetailSize
+    }
 
     /// Agents the user switched on, in `Agent.allCases` order; the context menu's "Show" list.
     public var enabledAgents: [Agent] { settings.enabledAgents }
@@ -324,20 +343,25 @@ public final class CodeAgentViewModel {
                 dismissMain()
                 return
             }
-            showMain(priority: .background, expanded: viewFactory.expandedIdle(self))
+            showMain(
+                priority: .background,
+                expanded: viewFactory.expandedIdle(self),
+                size: Self.expandedSize
+            )
             return
         }
         // A running session can only be analyzing, thinking, creating or waiting — the
         // finished stages leave `activeSession` by construction.
         showMain(
             priority: active.stage == .waiting ? .alert : .activity,
-            expanded: viewFactory.expandedActivity(self)
+            expanded: viewFactory.expandedActivity(self),
+            size: Self.expandedSize(for: active)
         )
     }
 
     /// Keeps one presentation id for the whole life of the feature. `Presentation.priority`
     /// is immutable, so a priority change means a fresh value with the *same* id.
-    private func showMain(priority: Priority, expanded: AnyView) {
+    private func showMain(priority: Priority, expanded: AnyView, size: CGSize) {
         let presentation = Presentation(
             id: mainID ?? PresentationID(),
             featureID: Self.featureID,
@@ -346,7 +370,7 @@ public final class CodeAgentViewModel {
             leading: viewFactory.compactLeading(self),
             trailing: viewFactory.compactTrailing(self),
             expanded: expanded,
-            expandedSize: Self.expandedSize
+            expandedSize: size
         )
         if mainID == nil {
             mainID = presentation.id
@@ -385,7 +409,7 @@ public final class CodeAgentViewModel {
                 leading: viewFactory.compactLeading(self),
                 trailing: viewFactory.compactTrailing(self),
                 expanded: viewFactory.expandedActivity(self),
-                expandedSize: Self.expandedSize
+                expandedSize: Self.expandedSize(for: session)
             )
         )
 
