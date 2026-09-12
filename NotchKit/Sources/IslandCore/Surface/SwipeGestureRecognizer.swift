@@ -50,10 +50,13 @@ public struct SwipeGestureRecognizer {
 
         let phase = NSEvent.Phase(rawValue: rawPhase)
         guard !phase.isEmpty else {
-            // Phase-less wheel tick: no gesture to belong to, so the pointer is tested live.
-            guard isOverIsland() else { return nil }
-            // Fire per tick, rate-limited.
+            // Phase-less wheel tick: no gesture to belong to, and each qualifying tick
+            // fires on its own. The cheap scalar test comes first — most wheel events on
+            // the machine are vertical scrolling that could never be a swipe, and the
+            // pointer test behind the autoclosure is a rect lookup.
             guard abs(deltaX) >= Self.threshold else { return nil }
+            guard isOverIsland() else { return nil }
+            // Rate-limited, so one flick of the wheel cannot run through the whole stack.
             if let lastWheelFire, now.timeIntervalSince(lastWheelFire) < Self.wheelInterval { return nil }
             lastWheelFire = now
             return Self.direction(of: deltaX)
