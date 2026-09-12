@@ -50,24 +50,31 @@ struct CompactLayoutRenderTests {
 
     // MARK: Render harness
 
-    /// A horizontal extent measured in points of the rendered view.
+    /// A horizontal extent measured in points of the rendered view, and how many device
+    /// pixels went into it.
     struct Extent {
         var minX: CGFloat
         var maxX: CGFloat
+        /// Matching pixels, at the render scale. A handful of stray antialiased pixels can
+        /// satisfy any position assertion, so every test also states how much of the sprite
+        /// it expects to have found.
+        var count: Int
         var midX: CGFloat { (minX + maxX) / 2 }
     }
 
-    /// Renders a peek presentation with `leading` in the leading slot and returns the
-    /// bounding extent of every pixel matching `color`.
+    /// The fewest matching pixels an 18 pt sprite rendered at 2× may produce and still be
+    /// the sprite rather than a rounding artefact.
+    static let minimumSpritePixels = 600
+
+    /// Renders a peek presentation with `leading` in the leading slot.
     ///
-    /// Returns `nil` when `ImageRenderer` cannot produce a bitmap (a headless CI box with no
-    /// window server), so the test skips rather than fails.
+    /// Returns `nil` — and only then — when `ImageRenderer` cannot produce a bitmap (a
+    /// headless box with no window server), which is the one case a test may skip. Whether
+    /// the sprite is *in* that bitmap is the assertion, so it is left to the caller.
     static func renderPeek(
         leading: AnyView,
-        trailing: AnyView = AnyView(Color.clear),
-        matching color: (red: CGFloat, green: CGFloat, blue: CGFloat),
-        tolerance: CGFloat = 0.08
-    ) throws -> Extent? {
+        trailing: AnyView = AnyView(Color.clear)
+    ) throws -> CGImage? {
         let geometry = try geometry()
         let presenter = IslandPresenter(clock: TaskClock())
         presenter.present(
@@ -87,34 +94,39 @@ struct CompactLayoutRenderTests {
                 .frame(width: windowSize.width, height: windowSize.height)
         )
         renderer.scale = 2
-        guard let image = renderer.cgImage else { return nil }
-        return extent(of: image, matching: color, tolerance: tolerance, scale: 2)
+        return renderer.cgImage
     }
 
     /// Scans a rendered bitmap for pixels close to `color` and returns their horizontal
-    /// extent in points.
+    /// extent in points. `nil` means the color is not in the bitmap at all — a failure for
+    /// every caller, never a skip.
     static func extent(
         of image: CGImage,
         matching color: (red: CGFloat, green: CGFloat, blue: CGFloat),
-        tolerance: CGFloat,
-        scale: CGFloat
+        tolerance: CGFloat = 0.08,
+        scale: CGFloat = 2
     ) -> Extent? {
         let width = image.width
         let height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        guard let context = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
+        // sRGB, not the device space: `CodePalette.salmon` is an sRGB literal, and reading
+        // it back through a display profile would shift every component by more than the
+        // match tolerance on a wide-gamut screen.
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: &pixels,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: width * 4,
+                  space: space,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         var minX = Int.max
         var maxX = Int.min
+        var count = 0
         for y in 0..<height {
             for x in 0..<width {
                 let offset = (y * width + x) * 4
@@ -130,10 +142,11 @@ struct CompactLayoutRenderTests {
                       abs(blue - color.blue) <= tolerance else { continue }
                 minX = min(minX, x)
                 maxX = max(maxX, x)
+                count += 1
             }
         }
         guard minX <= maxX else { return nil }
-        return Extent(minX: CGFloat(minX) / scale, maxX: CGFloat(maxX + 1) / scale)
+        return Extent(minX: CGFloat(minX) / scale, maxX: CGFloat(maxX + 1) / scale, count: count)
     }
 
     // MARK: Tests
@@ -141,10 +154,15 @@ struct CompactLayoutRenderTests {
     @Test("The Claude sprite is centred in the leading peek slot")
     func agentIconIsCentredInItsSlot() throws {
         let geometry = try Self.geometry()
-        guard let extent = try Self.renderPeek(
-            leading: AnyView(AgentIcon(agent: .claude, size: 18).codeSlot()),
-            matching: (0.96, 0.63, 0.54)
-        ) else { return }  // No renderer on this machine; nothing to assert.
+        // No renderer on this machine (a headless box) is the only reason to skip; a
+        // bitmap without the sprite in it is the regression this file is here to catch.
+        guard let image = try Self.renderPeek(
+            leading: AnyView(AgentIcon(agent: .claude, size: 18).codeSlot())
+        ) else { return }
+        let extent = try #require(Self.extent(of: image, matching: (0.96, 0.63, 0.54)),
+                                  "the sprite is not in the rendered island at all")
+        #expect(extent.count >= Self.minimumSpritePixels,
+                "only \(extent.count) sprite pixels rendered")
 
         let expected = Self.leadingSlotCentre(geometry)
         #expect(abs(extent.midX - expected) <= 2,
@@ -163,7 +181,12 @@ struct CompactLayoutRenderTests {
                 .frame(width: 18, height: 18)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         )
-        guard let extent = try Self.renderPeek(leading: control, matching: (0.96, 0.63, 0.54)) else { return }
+        guard let image = try Self.renderPeek(leading: control) else { return }
+        let extent = try #require(Self.extent(of: image, matching: (0.96, 0.63, 0.54)),
+                                  "the control square is not in the rendered island at all")
+        // An 18 × 18 pt square at 2× is 1296 device pixels; anything far under that means
+        // the slot clipped it.
+        #expect(extent.count >= 1000, "only \(extent.count) pixels of the square rendered")
 
         let expected = Self.leadingSlotCentre(geometry)
         #expect(abs(extent.midX - expected) <= 2,
@@ -197,9 +220,13 @@ struct CompactLayoutRenderTests {
                     .frame(width: Self.windowSize.width, height: 64)
             )
             renderer.scale = 2
-            guard let image = renderer.cgImage,
-                  let extent = Self.extent(of: image, matching: (0.96, 0.63, 0.54), tolerance: 0.08, scale: 2)
-            else { return }
+            // Only a missing renderer ends the loop; a width whose sprite cannot be found
+            // fails *that* width instead of quietly passing the ones behind it.
+            guard let image = renderer.cgImage else { return }
+            let extent = try #require(Self.extent(of: image, matching: (0.96, 0.63, 0.54)),
+                                      "no sprite in the row rendered at island width \(width)")
+            #expect(extent.count >= Self.minimumSpritePixels,
+                    "only \(extent.count) sprite pixels at island width \(width)")
 
             let islandLeft = Self.windowSize.width / 2 - width / 2
             #expect(abs(extent.midX - islandLeft - IslandLayout.peekSlotWidth / 2) <= 1,
