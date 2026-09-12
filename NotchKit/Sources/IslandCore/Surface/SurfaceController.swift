@@ -68,10 +68,21 @@ public final class SurfaceController {
         window?.orderOut(nil)
         window = nil
         hostingView = nil
+        // Closed, not merely ordered out: the mirror is rebuilt whenever the screen
+        // changes, and a window that is only ordered out keeps its server-side backing
+        // store for the rest of the session. `SurfaceWindow` is
+        // `isReleasedWhenClosed = false`, so closing it with the last reference in hand
+        // is safe (the drop catcher is torn down the same way).
+        closeMirror()
+        isVisible = false
+    }
+
+    /// Takes the mirror window down for good. The one place that closes it.
+    private func closeMirror() {
         mirrorWindow?.orderOut(nil)
+        mirrorWindow?.close()
         mirrorWindow = nil
         mirrorHostingView = nil
-        isVisible = false
     }
 
     // MARK: Layout helpers
@@ -122,8 +133,9 @@ public final class SurfaceController {
         hoverMonitor?.stop()
         swipeMonitor?.stop()
         window?.orderOut(nil)
-        mirrorWindow?.orderOut(nil)
-        mirrorHostingView = nil
+        // The old mirror is replaced a few lines down, so it is closed rather than left
+        // ordered out: every screen change would otherwise leak one for the session.
+        closeMirror()
 
         let frame = CGRect(
             x: geometry.notchRect.midX - Self.windowSize.width / 2,

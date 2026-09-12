@@ -71,7 +71,7 @@ import Testing
         let window = makeWindow()
 
         #expect(window.ignoresMouseEvents)
-        #expect(!window.isVisible)
+        #expect(!window.isVisible, "and it is not in the window list until it is activated")
     }
 
     @Test func theContentViewIsTheCatcherView() {
@@ -95,11 +95,30 @@ import Testing
         }
     }
 
-    // MARK: - show / hide
+    // MARK: - activate / show / hide / deactivate
+
+    @Test func activateOrdersItInWithoutLettingTheMouseIn() {
+        // The whole point of ordering in ahead of time: AppKit resolves a drag's
+        // destination from the windows that were already there when the pointer
+        // moved, and a window that joins the list mid-drag can be skipped — no
+        // `draggingEntered`, no drop, the file lands on whatever is behind us.
+        let window = makeWindow()
+        let frame = CGRect(x: 100, y: 200, width: 280, height: 140)
+
+        window.activate(frame: frame)
+        defer { window.deactivate() }
+
+        #expect(window.isVisible)
+        #expect(window.ignoresMouseEvents, "invisible to the mouse until a drag opens the zones")
+        #expect(window.frame == frame)
+        #expect(window.alphaValue == 0)
+    }
 
     @Test func showPutsTheWindowUpAndLetsTheMouseIn() {
         let window = makeWindow()
         let frame = CGRect(x: 100, y: 200, width: 280, height: 140)
+        window.activate(frame: CGRect(x: 0, y: 0, width: 280, height: 140))
+        defer { window.deactivate() }
 
         window.show(frame: frame)
 
@@ -108,27 +127,70 @@ import Testing
         #expect(window.frame == frame)
     }
 
-    @Test func hideTakesItDownAgain() {
+    @Test func hideOnlyStopsTheMouseAndLeavesTheWindowInTheList() {
+        // Ordering out here is what cost the occasional drop: the window went out
+        // from under a drag that was still over it and never came back into the
+        // hit test when it was ordered in again.
         let window = makeWindow()
+        window.activate(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
+        defer { window.deactivate() }
         window.show(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
 
         window.hide()
 
+        #expect(window.isVisible, "the catcher stays ordered in for the whole activation")
+        #expect(window.ignoresMouseEvents)
+
+        // And it takes drags again without ever having left the list.
+        window.show(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
+        #expect(window.isVisible)
+        #expect(!window.ignoresMouseEvents)
+    }
+
+    @Test func deactivateIsTheOnlyThingThatTakesItDown() {
+        let window = makeWindow()
+        window.activate(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
+        window.show(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
+
+        window.deactivate()
+
         #expect(!window.isVisible)
         #expect(window.ignoresMouseEvents)
+    }
+
+    @Test func aShowingCountsTheDragsThatReachIt() {
+        // Zero entries at the end of a showing is the signature of the failure this
+        // ordering exists to prevent, and the only way to tell it from a user who
+        // let go a pixel outside a card.
+        let window = makeWindow()
+        window.activate(frame: CGRect(x: 700, y: 900, width: 280, height: 140))
+        defer { window.deactivate() }
+        window.catcherView.delegate = RecordingCatcherDelegate(zone: .stash)
+
+        window.show(frame: CGRect(x: 700, y: 900, width: 280, height: 140))
+        #expect(window.catcherView.entryCount == 0)
+
+        _ = window.catcherView.draggingEntered(FakeDraggingInfo())
+        #expect(window.catcherView.entryCount == 1)
+
+        // A fresh showing starts the count again: it describes the drag in flight.
+        window.hide()
+        window.show(frame: CGRect(x: 700, y: 900, width: 280, height: 140))
+        #expect(window.catcherView.entryCount == 0)
     }
 
     @Test func showCanMoveTheWindowWhileItIsUp() {
         // The panel's frame changes as the zones widen under the cursor; the
         // catcher follows it without being torn down.
         let window = makeWindow()
+        window.activate(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
+        defer { window.deactivate() }
         window.show(frame: CGRect(x: 100, y: 200, width: 280, height: 140))
 
         window.show(frame: CGRect(x: 120, y: 200, width: 300, height: 140))
 
         #expect(window.frame == CGRect(x: 120, y: 200, width: 300, height: 140))
         #expect(window.isVisible)
-        window.hide()
     }
 
     @Test func showDefaultsAnUnsetPanelFrameToItsOwn() {
@@ -140,7 +202,7 @@ import Testing
         let frame = CGRect(x: 700, y: 900, width: 320, height: 180)
 
         window.show(frame: frame)
-        defer { window.hide() }
+        defer { window.deactivate() }
 
         #expect(window.catcherView.panelFrame == frame)
     }
@@ -153,7 +215,7 @@ import Testing
         window.catcherView.panelFrame = panel
 
         window.show(frame: CGRect(x: 700, y: 900, width: 320, height: 180))
-        defer { window.hide() }
+        defer { window.deactivate() }
 
         #expect(window.catcherView.panelFrame == panel)
     }
@@ -171,7 +233,7 @@ import Testing
         #expect(window.constrainFrameRect(frame, to: screen) == frame)
 
         window.show(frame: frame)
-        defer { window.hide() }
+        defer { window.deactivate() }
 
         #expect(window.frame == frame)
     }
@@ -198,7 +260,7 @@ import Testing
         let window = makeWindow()
         let frame = CGRect(x: 700, y: 900, width: 280, height: 140)
         window.show(frame: frame)
-        defer { window.hide() }
+        defer { window.deactivate() }
         window.catcherView.panelFrame = frame
 
         let delegate = RecordingCatcherDelegate(zone: .stash)
@@ -219,7 +281,7 @@ import Testing
     @Test func enteringOverAGapRejectsTheDrag() {
         let window = makeWindow()
         window.show(frame: CGRect(x: 700, y: 900, width: 280, height: 140))
-        defer { window.hide() }
+        defer { window.deactivate() }
         window.catcherView.panelFrame = window.frame
 
         let delegate = RecordingCatcherDelegate(zone: nil)
@@ -243,7 +305,7 @@ import Testing
     @Test func theDropIsAlwaysPreparedAndItsResultComesFromTheDelegate() {
         let window = makeWindow()
         window.show(frame: CGRect(x: 700, y: 900, width: 280, height: 140))
-        defer { window.hide() }
+        defer { window.deactivate() }
         window.catcherView.panelFrame = window.frame
 
         let delegate = RecordingCatcherDelegate(zone: .airDrop)

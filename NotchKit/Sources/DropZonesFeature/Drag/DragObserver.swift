@@ -74,11 +74,6 @@ public final class DragObserver {
     /// an `Int` comparison until a mouse-down).
     public var onEvent: ((DragDetector.Output, CGPoint) -> Void)?
 
-    /// Set by `StashDragSource` for the life of a drag that started from our own
-    /// stash. The view model shows only the stash zone for those, so that dragging
-    /// files out and letting go near the notch is a no-op rather than a re-stash.
-    public var isDragOutActive = false
-
     private let hotRect: @MainActor () -> CGRect
     private let pasteboard: NSPasteboard
     private var detector = DragDetector(hotRect: .zero)
@@ -175,16 +170,10 @@ public final class DragObserver {
     public var monitorCount: Int { monitors.count }
 
     /// Removes every monitor and forgets the gesture in flight. Safe to call twice.
-    ///
-    /// `isDragOutActive` is reset too: it is set by `StashDragSource` for the life
-    /// of one drag out of the stash, and a stop mid-drag (the feature being
-    /// disabled, the island going away) would otherwise leave it latched `true`
-    /// forever, permanently hiding every zone but the stash.
     public func stop() {
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         monitors = []
         detector = DragDetector(hotRect: .zero)
-        isDragOutActive = false
     }
 
     /// The monitors are process-wide: `NSEvent` keeps them alive with no reference
@@ -201,7 +190,8 @@ public final class DragObserver {
     /// One monitored event, at the cost the design budgets for it.
     ///
     /// `NSEvent.mouseLocation` is a WindowServer round trip, so it is read *only*
-    /// in the two branches whose outputs carry it. `.flagsChanged` in particular
+    /// in the one branch whose outputs carry it, and there only once the detector
+    /// is in a phase that can still produce one. `.flagsChanged` in particular
     /// fires whenever the user so much as taps ⌘ with no drag anywhere, and it is
     /// delivered to eight monitors; reading the cursor there would spend the whole
     /// idle budget on an answer nobody looks at.
@@ -217,11 +207,23 @@ public final class DragObserver {
             emit(detector.receive(.mouseDown(changeCount: pasteboard.changeCount)), at: .zero)
 
         case .leftMouseDragged:
+            // Every left-drag on the machine arrives here, including the ones that will
+            // never become anything: a window being moved, a selection rectangle, a drag
+            // the user cancelled with a modifier. Nothing the detector does with those
+            // events can produce an output, so they are dropped *before* the cursor and
+            // the pasteboard are read — both of which are round trips out of the process
+            // (design §5).
+            switch detector.phase {
+            case .idle, .cancelled:
+                return
+            case .mouseDown, .dragging:
+                break
+            }
             let location = NSEvent.mouseLocation
             emit(
                 detector.receive(
                     .dragged(
-                        changeCount: pasteboard.changeCount,
+                        changeCount: pasteboardChangeCount(),
                         hasFiles: hasFileContent(),
                         location: location
                     )
@@ -238,6 +240,17 @@ public final class DragObserver {
         default:
             break
         }
+    }
+
+    /// The drag pasteboard's change count, but only while it can still change the answer.
+    ///
+    /// ``DragDetector`` compares it against the mouse-down snapshot in `.mouseDown` and
+    /// ignores it in every other phase, so once the gesture has been promoted this is a
+    /// round trip to the pasteboard server for a number nobody reads — on every mouse-move
+    /// of every drag on the machine. The `0` stands for "not read"; it is never compared.
+    private func pasteboardChangeCount() -> Int {
+        guard case .mouseDown = detector.phase else { return 0 }
+        return pasteboard.changeCount
     }
 
     /// The pasteboard's type list, but only while it can still change the answer.

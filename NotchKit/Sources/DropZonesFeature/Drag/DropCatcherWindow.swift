@@ -28,16 +28,21 @@ public protocol DropCatcherDelegate: AnyObject {
 /// sitting in the ordinary space exactly over them at `alphaValue 0`, takes the
 /// drag messages. AppKit routes them to a fully transparent window quite happily.
 ///
-/// It is ordered in only while the zones are shown, and `ignoresMouseEvents`
-/// whenever it is not — a window parked over the notch that swallowed clicks
-/// would be a desktop-wide bug.
+/// It is ordered in **once**, at activation, and from then on only moved and
+/// toggled between opaque and transparent to the mouse. That is not tidiness: a
+/// drag's destination is re-resolved by AppKit as the pointer moves, and a window
+/// that joins the window list while a drag is already in flight can be skipped
+/// altogether — which is what a session with no `draggingEntered` at all, and a
+/// drop that fell through to the desktop, looks like. Between drags the window
+/// is invisible (`alphaValue 0`) and `ignoresMouseEvents`, so a window parked
+/// over the notch never swallows a click.
 public final class DropCatcherWindow: NSPanel {
 
     /// The destination view. Exposed so the feature can set its `panelFrame` and
     /// delegate; it is always this window's `contentView`.
     public let catcherView: DropCatcherView
 
-    private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
+    let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
 
     public init() {
         catcherView = DropCatcherView(frame: .zero)
@@ -75,11 +80,29 @@ public final class DropCatcherWindow: NSPanel {
         frameRect
     }
 
+    /// Puts the window into the window list, at `frame`, invisible and transparent
+    /// to the mouse. Called once per activation, before any drag can start.
+    ///
+    /// `orderFrontRegardless` rather than `orderFront`: the app is an accessory and
+    /// is never the active one, and an ordinary `orderFront` from a background app
+    /// can be ignored.
+    public func activate(frame: CGRect) {
+        ignoresMouseEvents = true
+        setFrame(frame, display: false)
+        orderFrontRegardless()
+        logger.info("""
+            catcher ordered in window=\(self.windowNumber, privacy: .public) \
+            visible=\(self.isVisible, privacy: .public) \
+            frame=\(NSStringFromRect(frame), privacy: .public)
+            """)
+    }
+
     /// Puts the catcher over `frame` (screen coordinates) and starts accepting
     /// drags. Calling it again while shown just moves it, which is what happens
     /// as the panel widens under the cursor.
     public func show(frame: CGRect) {
         setFrame(frame, display: false)
+        catcherView.resetEntryCount()
         // A `panelFrame` nobody set is the one failure mode of this window that is
         // completely silent: every hit test lands at a screen-absolute coordinate,
         // no zone is ever under the cursor, and the drop is refused with no sign of
@@ -90,18 +113,48 @@ public final class DropCatcherWindow: NSPanel {
             catcherView.panelFrame = frame
         }
         ignoresMouseEvents = false
-        // `orderFrontRegardless` rather than `orderFront`: the app is an
-        // accessory and is never the active one, and an ordinary `orderFront`
-        // from a background app can be ignored.
-        orderFrontRegardless()
-        logger.debug("catcher shown at \(NSStringFromRect(frame), privacy: .public)")
+        // A window that is somehow not in the list any more (the app was hidden,
+        // the screen configuration changed under us) is put back — and said so,
+        // because ordering in mid-drag is exactly the case that can cost a drop.
+        if !isVisible {
+            logger.error("catcher was not in the window list when the zones opened; ordering it in mid-drag")
+            orderFrontRegardless()
+        }
+        // Info rather than debug: this is the state that decides whether a drop
+        // can reach us at all, and debug lines are dropped unless streamed.
+        logger.info("""
+            catcher shown at \(NSStringFromRect(frame), privacy: .public) \
+            window=\(self.windowNumber, privacy: .public) \
+            visible=\(self.isVisible, privacy: .public) \
+            occlusion=\(self.occlusionState.rawValue, privacy: .public) \
+            screen=\(self.screen.map { NSStringFromRect($0.frame) } ?? "none", privacy: .public)
+            """)
     }
 
-    /// Takes the catcher down and makes it transparent to the mouse again.
+    /// Stops the catcher taking drags. The window stays in the list, invisible and
+    /// transparent to the mouse — see the type's note on ordering.
     public func hide() {
         ignoresMouseEvents = true
+        logger.debug("catcher hidden (still ordered in)")
+    }
+
+    /// Takes the window out of the list for good. The one place that orders it out,
+    /// called when the feature is switched off.
+    public func deactivate() {
+        ignoresMouseEvents = true
         orderOut(nil)
-        logger.debug("catcher hidden")
+        close()
+        logger.info("catcher ordered out and closed")
+    }
+
+    /// One line describing where the catcher stands, for the log when a drop that
+    /// should have arrived never did.
+    var diagnostics: String {
+        """
+        catcher window=\(windowNumber) visible=\(isVisible) \
+        ignoresMouse=\(ignoresMouseEvents) occlusion=\(occlusionState.rawValue) \
+        frame=\(NSStringFromRect(frame)) entered=\(catcherView.entryCount)
+        """
     }
 }
 
@@ -123,6 +176,12 @@ public final class DropCatcherView: NSView {
     public var panelFrame: CGRect = .zero
 
     private let logger = Logger(subsystem: "app.notch", category: "dropzones.catcher")
+
+    /// How many drags have entered since the zones last went up. Zero at the end of a
+    /// showing means AppKit never offered this window the drag at all — the one failure
+    /// that is indistinguishable, from the view model's side, from a user who let go
+    /// just outside a card.
+    private(set) var entryCount = 0
 
     /// `panelFrame` is defaulted by `DropCatcherWindow.show(frame:)`, so a zero one
     /// here means the view is receiving drags without ever having been shown —
@@ -179,9 +238,20 @@ public final class DropCatcherView: NSView {
 
     // MARK: - NSDraggingDestination
 
+    /// Forgets the entries of the previous showing. Called by the window as the zones
+    /// go up, so ``entryCount`` always describes the drag in flight.
+    func resetEntryCount() {
+        entryCount = 0
+    }
+
     public override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        entryCount += 1
         let op = operation(for: sender)
-        logger.debug("draggingEntered → \(op.rawValue, privacy: .public) at \(NSStringFromPoint(self.panelPoint(of: sender)), privacy: .public) panelFrame=\(NSStringFromRect(self.panelFrame), privacy: .public)")
+        logger.info("""
+            draggingEntered → \(op.rawValue, privacy: .public) \
+            at \(NSStringFromPoint(self.panelPoint(of: sender)), privacy: .public) \
+            panelFrame=\(NSStringFromRect(self.panelFrame), privacy: .public)
+            """)
         return op
     }
 
@@ -190,6 +260,10 @@ public final class DropCatcherView: NSView {
     }
 
     public override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        // The other half of the entry trail: an exit with no drop after it is a drag that
+        // left the notch, and an exit that arrives *instead* of `performDragOperation` is
+        // a drop AppKit decided was not ours.
+        logger.info("draggingExited after \(self.entryCount, privacy: .public) entry/entries")
         delegate?.catcherExited(self)
     }
 

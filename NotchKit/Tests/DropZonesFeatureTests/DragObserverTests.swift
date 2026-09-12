@@ -130,19 +130,6 @@ import Testing
         #expect(observer.monitorCount == 0)
     }
 
-    @Test func stopClearsTheDragOutFlag() {
-        // `StashDragSource` sets this for the life of one drag out of the stash.
-        // Latched `true` across a stop it would hide every zone but the stash for
-        // the rest of the session.
-        let observer = makeObserver()
-        observer.start()
-        observer.isDragOutActive = true
-
-        observer.stop()
-
-        #expect(!observer.isDragOutActive)
-    }
-
     @Test func anObserverThatIsDroppedTakesItsMonitorsWithIt() {
         // `NSEvent` owns the monitors with no reference back to us, so a dropped
         // observer would otherwise leave eight handlers running for the session.

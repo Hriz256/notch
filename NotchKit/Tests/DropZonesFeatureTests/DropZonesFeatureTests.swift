@@ -74,8 +74,9 @@ private final class Harness {
         let model = try #require(harness.feature.model)
         // One settings object, or the status menu and the island's own menu would disagree.
         #expect(model.settings === harness.feature.settings)
-        // The observer is handed to the model so a drag out of the stash can be recognised.
-        #expect(model.dragObserver != nil)
+        // The catcher's state goes into the log when a drop that should have arrived
+        // never does.
+        #expect(model.catcherDiagnostics != nil)
         // Without a provider the catcher would never be ordered in…
         #expect(model.panelFrameProvider != nil)
         // …and without the callback it would never be told to.
@@ -102,7 +103,7 @@ private final class Harness {
 
     // MARK: - The catcher window
 
-    @Test func theCatcherIsOrderedInWithTheZonesAndOutWithThem() throws {
+    @Test func theCatcherTakesDragsOnlyWhileTheZonesAreUp() throws {
         let harness = Harness()
         defer { harness.cleanUp() }
         harness.feature.activate(presenter: FakePresenter())
@@ -114,12 +115,17 @@ private final class Harness {
         let panel = CGRect(x: 700, y: 900, width: 280, height: 140)
         model.panelFrameProvider = { panel }
 
-        #expect(!catcher.isVisible)
+        // Activation orders the window in and leaves it there; between drags it is
+        // simply transparent to the mouse (see `DropCatcherWindow`).
+        #expect(catcher.isVisible)
+        #expect(catcher.ignoresMouseEvents)
 
         model.handle(.enteredHotRect)
 
-        // Ordered in synchronously, in the same turn the zones went up — no yield here,
-        // because that is exactly the guarantee the drop path depends on.
+        // Moved and opened to the mouse synchronously, in the same turn the zones went
+        // up — no yield here, because that is exactly the guarantee the drop path
+        // depends on.
+        #expect(!catcher.ignoresMouseEvents)
         #expect(catcher.isVisible)
         #expect(catcher.catcherView.panelFrame == panel)
         // The window is the panel plus a little slack on the sides and below — never above
@@ -130,6 +136,10 @@ private final class Harness {
 
         model.handle(.ended)
 
+        #expect(catcher.ignoresMouseEvents, "no drag, no drops")
+        #expect(catcher.isVisible, "and it never leaves the window list mid-session")
+
+        harness.feature.deactivate()
         #expect(!catcher.isVisible)
     }
 

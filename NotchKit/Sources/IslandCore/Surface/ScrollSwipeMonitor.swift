@@ -86,12 +86,11 @@ public final class ScrollSwipeMonitor {
             isOverIsland: rectProvider().contains(NSEvent.mouseLocation),
             now: Date()
         )
-        // Diagnostic trail for gestures over the island: sideways scroll events with their
-        // phase, momentum and outcome, so a swipe that "did not take" can be told apart
-        // from one that never reached the recognizer. Debug level: dropped unless streamed.
-        if abs(deltaX) >= 1 || abs(deltaY) >= 1, rectProvider().contains(NSEvent.mouseLocation) {
-            logger.debug("scroll over island dx=\(deltaX, privacy: .public) dy=\(deltaY, privacy: .public) phase=\(phase, privacy: .public) momentum=\(momentum, privacy: .public) → \(direction.map { $0 == .next ? "next" : "previous" } ?? "-", privacy: .public)")
-        }
+        // No per-event diagnostic here. It asked `rectProvider().contains(NSEvent.mouseLocation)`
+        // a second time — a WindowServer round trip for the cursor, on every sideways
+        // scroll event anywhere on the machine, for a line that is dropped unless someone
+        // is streaming the log. The `.info` line below is the trail that is actually
+        // retained, and it says the only thing that cannot be inferred: the gesture fired.
         guard let direction else { return }
         // Info, not debug: this is one half of the swipe trail, and a `log show --info`
         // after the fact is the only way to tell "the gesture never fired" apart from

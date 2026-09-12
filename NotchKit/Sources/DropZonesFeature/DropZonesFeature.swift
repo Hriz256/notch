@@ -18,12 +18,11 @@ import os
 /// - the view model gets a ``panelFrameProvider`` that recomputes the panel's rect from
 ///   the screen every time it is asked, so a screen that was resized or unplugged between
 ///   two drags needs no notification plumbing;
-/// - the `DragObserver` feeds `handle(_:)` and is handed *to* the model as well, because a
-///   drag that started from our own stash must not be offered the stash card again;
-/// - the `DropCatcherWindow` is ordered in and out from the model's
-///   ``DropZonesViewModel/onCatcherFrameChange``, so the only window that can swallow a
-///   drop exists over the notch exactly while the zones are drawn there — and is in place
-///   before the panel they are drawn in is presented.
+/// - the `DragObserver` feeds `handle(_:)`;
+/// - the `DropCatcherWindow` is ordered in once, here, and from then on only moved and
+///   made opaque or transparent to the mouse by the model's
+///   ``DropZonesViewModel/onCatcherFrameChange`` — so the window that receives the drop is
+///   never *entering* the window list while a drag is already in flight.
 @MainActor
 @Observable
 public final class DropZonesFeature: IslandFeature {
@@ -126,7 +125,6 @@ public final class DropZonesFeature: IslandFeature {
         // the panel frame: the screen can change between two drags.
         let observer = DragObserver(hotRect: { DragObserver.hotRect(for: Self.currentScreenFrame()) })
         observer.onEvent = { [weak model] output, _ in model?.handle(output) }
-        model.dragObserver = observer
 
         let catcher = DropCatcherWindow()
         let bridge = CatcherBridge(model: model, stagingRoot: Self.stagingRoot)
@@ -134,6 +132,7 @@ public final class DropZonesFeature: IslandFeature {
         // Direct and synchronous: the model calls this as the zones go up, in the same
         // main-actor turn, before the panel is presented.
         model.onCatcherFrameChange = { [weak self] frame in self?.setCatcherFrame(frame) }
+        model.catcherDiagnostics = { [weak catcher] in catcher?.diagnostics ?? "no catcher window" }
 
         self.model = model
         self.observer = observer
@@ -141,7 +140,15 @@ public final class DropZonesFeature: IslandFeature {
         self.bridge = bridge
 
         observer.start()
+        // Ordered in now, once, at the panel's own frame (or the screen's top strip when
+        // there is no notch to measure). From here the catcher is only moved and toggled
+        // between opaque and transparent to the mouse: AppKit re-resolves a drag's
+        // destination when the pointer *moves*, and a window that joins the list mid-drag
+        // is the one case where a drop over the notch is delivered to whatever is behind
+        // the island instead (see ``DropCatcherWindow/activate(frame:)``).
+        catcher.activate(frame: Self.catcherIdleFrame())
         loadTask = Task { @MainActor [weak model] in await model?.loadStash() }
+        Self.sweepStaging()
         logger.info("Drop Zones feature activated")
     }
 
@@ -156,12 +163,12 @@ public final class DropZonesFeature: IslandFeature {
         observer = nil
         loadTask?.cancel()
         loadTask = nil
-        // `hide` orders it out and makes it transparent to the mouse again; `close`
-        // releases the window's server-side resources rather than leaving them to the
-        // next autorelease (the panel is `isReleasedWhenClosed = false`, so this is safe
-        // with the last reference still in hand).
-        catcher?.hide()
-        catcher?.close()
+        // Orders it out and closes it — the one place that does, because the window stays
+        // in the list for the whole of an activation. `close` releases the window's
+        // server-side resources rather than leaving them to the next autorelease (the
+        // panel is `isReleasedWhenClosed = false`, so this is safe with the last reference
+        // still in hand).
+        catcher?.deactivate()
         catcher = nil
         bridge = nil
         // The copies on disk survive: the stash is the user's, not the session's.
@@ -187,6 +194,12 @@ public final class DropZonesFeature: IslandFeature {
     private func setCatcherFrame(_ frame: CGRect?) {
         guard let catcher else { return }
         guard let frame, !frame.isEmpty else {
+            // `nil` is the ordinary "the zones came down". An *empty* rect is not: it means
+            // the panel frame could not be computed at the moment the zones went up, and
+            // the drop that follows will go straight through to the desktop.
+            if frame != nil {
+                logger.error("the zones went up with an empty panel frame; the catcher stays transparent")
+            }
             catcher.hide()
             return
         }
@@ -213,6 +226,71 @@ public final class DropZonesFeature: IslandFeature {
 
     /// How far the catcher's window extends past the panel on the left, right and bottom.
     static let catcherSlack: CGFloat = 20
+
+    /// Where the catcher sits between drags: over the panel it will be asked for, or — on a
+    /// machine with no notch, where there is no panel to measure — a strip along the top of
+    /// the main screen. It is transparent to the mouse there and invisible, and it exists
+    /// only so the window is already in the list when a drag starts.
+    static func catcherIdleFrame() -> CGRect {
+        let panel = currentPanelFrame()
+        guard panel.isEmpty else { return catcherFrame(around: panel) }
+        guard let screen = NSScreen.main?.frame, !screen.isEmpty else { return .zero }
+        let size = DropZonesViewModel.zonesSize
+        return CGRect(
+            x: screen.midX - size.width / 2,
+            y: screen.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    // MARK: - Staging
+
+    /// How long a staging folder may sit in the temporary directory before the next
+    /// activation sweeps it.
+    static let stagingLifetime: TimeInterval = 3_600
+
+    /// Deletes the leftovers of promised and image-only drops.
+    ///
+    /// `DropPayloadReader` writes those into `<tmp>/app.notch/DragStaging/<UUID>/` and the
+    /// stash then copies them; nothing has ever deleted the staging folder afterwards, so a
+    /// week of dragging screenshots into the notch leaves a week of them in `/tmp`. The
+    /// sweep is deliberately crude — anything older than an hour is finished with, drops
+    /// take seconds — and runs off the main actor at activation, where nothing is waiting
+    /// on it.
+    private static func sweepStaging() {
+        let root = stagingRoot
+        let lifetime = stagingLifetime
+        Task.detached(priority: .utility) {
+            let logger = Logger(subsystem: "app.notch", category: "dropzones.feature")
+            let manager = FileManager.default
+            guard let entries = try? manager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+
+            let cutoff = Date().addingTimeInterval(-lifetime)
+            var swept = 0
+            for entry in entries {
+                let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate
+                guard let modified, modified < cutoff else { continue }
+                do {
+                    try manager.removeItem(at: entry)
+                    swept += 1
+                } catch {
+                    logger.error("""
+                        could not sweep a stale staging folder: \
+                        \(error.localizedDescription, privacy: .public)
+                        """)
+                }
+            }
+            if swept > 0 {
+                logger.info("swept \(swept, privacy: .public) stale drag-staging folder(s)")
+            }
+        }
+    }
 
     // MARK: - Status-menu surface
 
