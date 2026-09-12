@@ -14,6 +14,17 @@ public final class IslandPresenter: IslandPresenting {
     /// The card the user picked, by swiping or from the Cards menu. Cleared as soon as it
     /// leaves `stack`.
     public private(set) var pinnedID: PresentationID?
+    /// Whether a feature has asked for the window to sit in the user's active Space (see
+    /// ``IslandPresenting/setSurfaceInUserSpace(_:)``). The presenter owns no window, so
+    /// it only records the request; `SurfaceController` is what acts on it.
+    public private(set) var surfaceInUserSpace = false
+
+    /// Called whenever ``surfaceInUserSpace`` changes. A direct callback rather than
+    /// observation: the move has to happen in the same main-actor turn as the request —
+    /// `withObservationTracking` fires its `onChange` *before* the new value is even
+    /// stored, so acting on it costs a turn, and a turn here is a visible frame of the
+    /// island drawn over the drag image the move exists to uncover.
+    @ObservationIgnored public var onSurfaceSpaceChange: (@MainActor (Bool) -> Void)?
 
     public enum CycleDirection: Sendable { case next, previous }
 
@@ -126,6 +137,13 @@ public final class IslandPresenter: IslandPresenting {
         ttlTokens.removeValue(forKey: id)?.cancel()
         queue.removeAll { $0.id == id }
         queueDidChange()
+    }
+
+    public func setSurfaceInUserSpace(_ inUserSpace: Bool) {
+        guard surfaceInUserSpace != inUserSpace else { return }
+        surfaceInUserSpace = inUserSpace
+        logger.info("surface requested in \(inUserSpace ? "user" : "private", privacy: .public) space")
+        onSurfaceSpaceChange?(inUserSpace)
     }
 
     // MARK: Card stack

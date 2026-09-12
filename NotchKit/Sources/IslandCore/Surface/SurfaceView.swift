@@ -43,7 +43,7 @@ public struct SurfaceView: View {
                 // gives the cards; landing on feature content gives that feature's menu,
                 // which embeds `CardsMenuSection` to offer the same rows.
                 .contextMenu { CardsMenuSection(presenter: presenter) }
-                .overlay(alignment: .trailing) { stackDots(layout: layout) }
+                .overlay(alignment: .trailing) { stackDots(layout: layout, current: current) }
 
             content(layout: layout, current: current)
                 .islandFrame(size: layout.size, minimum: floor, alignment: .top)
@@ -82,10 +82,14 @@ public struct SurfaceView: View {
     /// While a transient alert borrows the island, *no* dot is lit: the alert is an
     /// interruption, not a page of the stack. Marking the card underneath it said the
     /// island was showing Music while the panel on screen was the Code completion.
+    ///
+    /// A card can opt out entirely (``Presentation/showsStackDots``): the Drop Zones
+    /// panel is up only while a drag is in the air, and dots over it read as "swipe me"
+    /// on a card there is no swiping away from.
     @ViewBuilder
-    private func stackDots(layout: IslandLayout) -> some View {
+    private func stackDots(layout: IslandLayout, current: Presentation?) -> some View {
         let count = presenter.stack.count
-        if count > 1, layout.mode == .expanded {
+        if count > 1, layout.mode == .expanded, current?.showsStackDots != false {
             let index = presenter.isShowingTransientAlert ? nil : presenter.stackIndex
             VStack(spacing: Self.dotSpacing) {
                 ForEach(0..<count, id: \.self) { position in

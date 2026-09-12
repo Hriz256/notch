@@ -802,6 +802,51 @@ struct IslandPresenterTests {
         #expect(p.stack.map(\.id) == [alert.id])
         #expect(p.current?.id == alert.id)
     }
+
+    /// The island window normally lives in a private Space that composites above every
+    /// user Space — including Finder's drag-image window. A feature that needs the drag
+    /// image on top asks for the window to come down into the user Space, and the
+    /// presenter is where that request is recorded and broadcast.
+    @Test func surfaceSpaceRequestTogglesTheFlagAndReportsChangesOnce() {
+        let p = IslandPresenter(clock: ManualClock())
+        var reported: [Bool] = []
+        p.onSurfaceSpaceChange = { reported.append($0) }
+
+        #expect(!p.surfaceInUserSpace)
+
+        p.setSurfaceInUserSpace(true)
+        #expect(p.surfaceInUserSpace)
+        #expect(reported == [true])
+
+        // Idempotent: a second request for the same Space is not a second window move.
+        p.setSurfaceInUserSpace(true)
+        #expect(reported == [true])
+
+        p.setSurfaceInUserSpace(false)
+        #expect(!p.surfaceInUserSpace)
+        #expect(reported == [true, false])
+    }
+
+    /// The dots are on unless a card says otherwise, and the opt-out survives the queue.
+    @Test func aCardCanOptOutOfTheStackDots() {
+        let p = IslandPresenter(clock: ManualClock())
+        #expect(makePresentation().showsStackDots)
+
+        let quiet = Presentation(
+            featureID: FeatureID("dropzones"),
+            priority: .alert,
+            style: .expanded,
+            leading: AnyView(EmptyView()),
+            trailing: AnyView(EmptyView()),
+            expanded: AnyView(EmptyView()),
+            showsStackDots: false
+        )
+        p.present(makePresentation())
+        p.present(quiet)
+
+        #expect(p.current?.id == quiet.id)
+        #expect(p.current?.showsStackDots == false)
+    }
 }
 
 private extension Presentation {

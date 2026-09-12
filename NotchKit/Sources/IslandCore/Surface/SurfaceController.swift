@@ -34,6 +34,12 @@ public final class SurfaceController {
         if privateSpace == nil {
             logger.warning("SkyLight private space unavailable; island will ride Space transitions")
         }
+        // A feature can ask for the window to drop back into the user's Space for a
+        // while (Drop Zones does, so Finder's drag image draws above the cards). The
+        // presenter calls this synchronously, in the turn the request is made.
+        presenter.onSurfaceSpaceChange = { [weak self] inUserSpace in
+            self?.setSurfaceInUserSpace(inUserSpace)
+        }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil, queue: .main
@@ -46,6 +52,7 @@ public final class SurfaceController {
     public func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        presenter.onSurfaceSpaceChange = nil
         privateSpace?.destroy()
         privateSpace = nil
         hoverMonitor?.stop()
@@ -106,7 +113,9 @@ public final class SurfaceController {
         panel.orderFrontRegardless()
         // Only now is `windowNumber` valid, so adoption has to follow the order-front.
         // Re-adopting on every rebuild is required and safe (the call is idempotent).
-        privateSpace?.adopt(panel)
+        // A rebuild during a drag (a screen change mid-drag) must land in whichever Space
+        // the presenter currently wants, not blindly in the private one.
+        applySurfaceSpace(to: panel, inUserSpace: presenter.surfaceInUserSpace)
 
         let monitor = HoverMonitor(
             rectProvider: { [weak self] in self?.islandScreenRect() ?? .zero },
@@ -126,5 +135,23 @@ public final class SurfaceController {
         swipeMonitor = swipe
         isVisible = true
         logger.info("Surface window built for notch \(geometry.notchRect.debugDescription, privacy: .public)")
+    }
+
+    // MARK: Spaces
+
+    /// Moves the live window between the private Space and the user's active one.
+    private func setSurfaceInUserSpace(_ inUserSpace: Bool) {
+        guard let window else { return }
+        applySurfaceSpace(to: window, inUserSpace: inUserSpace)
+    }
+
+    private func applySurfaceSpace(to window: NSWindow, inUserSpace: Bool) {
+        guard let privateSpace else { return }
+        logger.info("Island window → \(inUserSpace ? "user" : "private", privacy: .public) space")
+        if inUserSpace {
+            privateSpace.release(window)
+        } else {
+            privateSpace.adopt(window)
+        }
     }
 }
