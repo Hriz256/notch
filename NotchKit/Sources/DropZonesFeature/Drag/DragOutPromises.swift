@@ -79,7 +79,9 @@ public final class DragOutPromiseTracker: DragOutPromiseTracking {
             do {
                 try await Task.sleep(for: Self.pollInterval)
             } catch {
-                break
+                // Cancelled: the caller is being torn down. Not a timeout — nothing is
+                // given up on, and nothing is logged as if a receiver had gone quiet.
+                return outstandingFileIDs
             }
         }
         let unredeemed = outstandingFileIDs

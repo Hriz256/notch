@@ -208,7 +208,12 @@ final class DragSourceView: NSView, NSDraggingSource {
         // from under a receiver that has not asked for them yet.
         //
         // An empty operation is a cancelled drag — released over nothing, or over something
-        // that refused it — and the stash must survive that untouched.
+        // that refused it — and the stash must survive that untouched. Nobody will ever
+        // redeem those promises, so they are settled here; left standing they would make
+        // the *next* drag-out wait the whole timeout and then keep its files.
+        if operation == [] {
+            for file in files { promises?.settle(fileID: file.id) }
+        }
         onEnded(operation != [])
     }
 }
