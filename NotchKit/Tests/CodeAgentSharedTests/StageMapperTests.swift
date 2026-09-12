@@ -63,10 +63,12 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(event?.tool == "TodoWrite")
     }
 
-    @Test func claudePostToolUseIsThinking() {
+    /// The tool has finished by the time PostToolUse arrives, so the thinking that follows
+    /// must not carry its name — the island would otherwise read "Thinking Edit".
+    @Test func claudePostToolUseIsThinkingWithoutATool() {
         let event = claude(["hook_event_name": "PostToolUse", "tool_name": "Edit", "session_id": "s1"])
         #expect(event?.stage == .thinking)
-        #expect(event?.tool == "Edit")
+        #expect(event?.tool == nil)
     }
 
     @Test func claudePermissionRequestIsWaitingWithCommandDetail() {
@@ -230,8 +232,10 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(event?.tool == "update_plan")
     }
 
-    @Test func codexPostToolUseIsThinking() {
-        #expect(codex(["hook_event_name": "PostToolUse", "tool_name": "shell"])?.stage == .thinking)
+    @Test func codexPostToolUseIsThinkingWithoutATool() {
+        let event = codex(["hook_event_name": "PostToolUse", "tool_name": "shell"])
+        #expect(event?.stage == .thinking)
+        #expect(event?.tool == nil)
     }
 
     @Test func codexStopIsCompletedWithLastAssistantMessage() {
@@ -302,8 +306,10 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(cursor(["hook_event_name": "preToolUse", "tool_name": "Todo"])?.stage == .thinking)
     }
 
-    @Test func cursorPostToolUseIsThinking() {
-        #expect(cursor(["hook_event_name": "postToolUse", "tool_name": "Read"])?.stage == .thinking)
+    @Test func cursorPostToolUseIsThinkingWithoutATool() {
+        let event = cursor(["hook_event_name": "postToolUse", "tool_name": "Read"])
+        #expect(event?.stage == .thinking)
+        #expect(event?.tool == nil)
     }
 
     @Test func cursorStopWithErrorStatusIsFailed() {

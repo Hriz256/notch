@@ -60,7 +60,10 @@ public enum StageMapper {
                 else { .thinking }
             return make(stage, tool: tool)
         case "PostToolUse":
-            return make(.thinking, tool: tool)
+            // Deliberately toolless: the tool has *finished*: what follows is the model
+            // thinking, and a header reading "Thinking Edit" describes neither. The tool
+            // name belongs to the PreToolUse → PostToolUse window and nowhere else.
+            return make(.thinking)
         case "PermissionRequest":
             return make(.waiting, tool: tool, detail: permissionDetail(payload, tool: tool))
         case "Notification":
@@ -137,7 +140,8 @@ public enum StageMapper {
                 else { .thinking }
             return make(stage, tool: tool)
         case "PostToolUse":
-            return make(.thinking, tool: tool)
+            // See `mapClaude`: the tool is over, so the thinking that follows carries none.
+            return make(.thinking)
         case "Stop", "agent-turn-complete":
             let last = string(payload, "last_assistant_message") ?? string(payload, "last-assistant-message")
             return make(.completed, detail: truncate(last))
@@ -184,7 +188,8 @@ public enum StageMapper {
                 else { .thinking }
             return make(stage, tool: tool)
         case "postToolUse":
-            return make(.thinking, tool: tool)
+            // See `mapClaude`: the tool is over, so the thinking that follows carries none.
+            return make(.thinking)
         case "stop":
             // status is completed, aborted or error: only a real error is a
             // failure, an aborted turn is the user stopping the agent.
