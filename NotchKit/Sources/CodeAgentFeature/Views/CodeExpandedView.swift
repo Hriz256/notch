@@ -55,7 +55,13 @@ struct CodeExpandedView: View {
     }
 }
 
-/// Keeps the machine awake while agents work. Filled cup = the assertion is held now.
+/// Keeps the machine awake while agents work.
+///
+/// The cup shows the *setting* first and the live assertion second, because the click
+/// toggles the setting: an empty cup is off, a filled white cup is armed — on, but nothing
+/// is running to keep awake — and a filled salmon cup is the assertion actually held right
+/// now. Following `isCaffeinating` alone left the glyph frozen when the card was idle,
+/// which is exactly when the user is most likely to press it.
 ///
 /// Both expanded panels carry it, in the same place — the header's trailing edge — so it
 /// does not move when a session starts.
@@ -66,15 +72,35 @@ struct CaffeinateButton: View {
     /// text baseline next to it.
     static let height: CGFloat = 16
 
+    /// The three states the cup has, pulled out of `body` so they can be pinned by tests.
+    ///
+    /// - Parameters:
+    ///   - enabled: ``CodeAgentViewModel/caffeinateWhileWorking`` — the setting the click flips.
+    ///   - active: ``CodeAgentViewModel/isCaffeinating`` — whether the assertion is held now.
+    static func appearance(enabled: Bool, active: Bool) -> (symbol: String, tint: Color) {
+        guard enabled else { return ("cup.and.saucer", .white.opacity(0.55)) }
+        // Armed but idle is still a deliberate "yes", so it reads brighter than off and
+        // dimmer than the salmon that means the machine is being held awake this second.
+        return active
+            ? ("cup.and.saucer.fill", CodePalette.salmon)
+            : ("cup.and.saucer.fill", .white.opacity(0.85))
+    }
+
     var body: some View {
+        let look = Self.appearance(enabled: model.caffeinateWhileWorking, active: model.isCaffeinating)
         Button {
             model.toggleCaffeinate()
         } label: {
-            Image(systemName: model.isCaffeinating ? "cup.and.saucer.fill" : "cup.and.saucer")
+            Image(systemName: look.symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(model.isCaffeinating ? CodePalette.salmon : .white.opacity(0.55))
+                .foregroundStyle(look.tint)
                 .frame(height: Self.height)
                 .contentShape(Rectangle())
+                // Keyed on the setting rather than on `look`, so the click always answers
+                // and a session merely starting does not re-play the symbol swap.
+                .contentTransition(GlyphMotion.isReduced ? .identity : .symbolEffect(.replace))
+                .animation(GlyphMotion.isReduced ? nil : .snappy(duration: 0.18),
+                           value: model.caffeinateWhileWorking)
         }
         .buttonStyle(.plain)
         .help(model.caffeinateWhileWorking ? "Stop caffeinating this agent" : "Caffeinate this agent")

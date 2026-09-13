@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import CoreGraphics
+import SwiftUI
 import CodeAgentShared
 @testable import CodeAgentFeature
 
@@ -37,6 +38,32 @@ struct CodeComposedViewsTests {
             CodeContextMenu.hookTitle(.claude, .failed("~/.claude/settings.json is not valid JSON"))
                 == "Claude Code — ~/.claude/settings.json is not valid JSON"
         )
+    }
+
+    /// The click toggles the setting, so the setting has to be what the cup draws — an
+    /// idle card that answered a press with no visible change read as a dead button.
+    @Test("The cup shows the setting first and the live assertion second")
+    func caffeinateAppearance() {
+        let off = CaffeinateButton.appearance(enabled: false, active: false)
+        let armed = CaffeinateButton.appearance(enabled: true, active: false)
+        let active = CaffeinateButton.appearance(enabled: true, active: true)
+
+        #expect(off.symbol == "cup.and.saucer")
+        #expect(off.tint == .white.opacity(0.55))
+        #expect(armed.symbol == "cup.and.saucer.fill")
+        #expect(armed.tint == .white.opacity(0.85))
+        #expect(active.symbol == "cup.and.saucer.fill")
+        #expect(active.tint == CodePalette.salmon)
+
+        // Turning the setting on always changes something, whether or not an agent is
+        // working — that is the bug this pins.
+        #expect(off.symbol != armed.symbol)
+        #expect(off.tint != armed.tint)
+        #expect(armed.tint != active.tint)
+
+        // The assertion cannot be held while the setting is off, but if it ever were, the
+        // setting still wins: the glyph must not contradict what the click will do.
+        #expect(CaffeinateButton.appearance(enabled: false, active: true) == off)
     }
 
     /// The idle panel is laid out to an exact budget; this is the arithmetic that budget
