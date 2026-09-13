@@ -16,6 +16,9 @@ public struct TransitionChoreographer: Sendable {
     /// the new card happens to be taller made a leftward flick bouncy and a rightward one
     /// flat.
     public var pageChange: Animation = Spring.pageChange.animation
+    /// The stack dots' highlight travelling and growing. Its own curve: the dots confirm
+    /// a swipe, so they must move even when the shape does not.
+    public var stackDot: Animation = Spring.stackDot.animation
     /// Content arriving. A spring, never delayed: the shape and its content start in the
     /// same frame, or the island reads as a box that fills up afterwards. Quicker than the
     /// geometry spring (rule 2 of the audit's yardstick) but overlapping it, not sequenced
@@ -48,6 +51,8 @@ public struct TransitionChoreographer: Sendable {
         /// A page turn: between the two, closer to the grow, and the same in both
         /// directions.
         public static let pageChange = Spring(response: 0.34, damping: 0.86)
+        /// The page indicator: quick and barely bouncy, like every one Apple ships.
+        public static let stackDot = Spring(response: 0.3, damping: 0.8)
         public static let contentIn = Spring(response: 0.26, damping: 0.9)
         public static let contentOut = Spring(response: 0.22, damping: 1.0)
     }
@@ -56,6 +61,7 @@ public struct TransitionChoreographer: Sendable {
         geometry: Spring.grow.animation,
         collapseGeometry: Spring.collapse.animation,
         pageChange: Spring.pageChange.animation,
+        stackDot: Spring.stackDot.animation,
         contentIn: Spring.contentIn.animation,
         contentOut: Spring.contentOut.animation,
         isReduced: false
@@ -65,6 +71,7 @@ public struct TransitionChoreographer: Sendable {
         geometry: .easeInOut(duration: 0.2),
         collapseGeometry: .easeInOut(duration: 0.2),
         pageChange: .easeInOut(duration: 0.2),
+        stackDot: .easeInOut(duration: 0.2),
         contentIn: .easeInOut(duration: 0.2),
         contentOut: .easeInOut(duration: 0.15),
         isReduced: true

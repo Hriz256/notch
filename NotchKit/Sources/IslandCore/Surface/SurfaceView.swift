@@ -118,28 +118,47 @@ public struct SurfaceView: View {
     /// A card can opt out entirely (``Presentation/showsStackDots``): the Drop Zones
     /// panel is up only while a drag is in the air, and dots over it read as "swipe me"
     /// on a card there is no swiping away from.
+    ///
+    /// The marker is one bright dot drawn *over* a track of dim ones rather than one dot
+    /// in the row being brightened: a single view can travel between positions and grow,
+    /// which is how every page indicator in the system confirms a swipe. Crossfading two
+    /// opacities made the dots blink, so the swipe had no feedback at all.
     @ViewBuilder
     private func stackDots(layout: IslandLayout, current: Presentation?) -> some View {
         let count = presenter.stack.count
         if count > 1, layout.mode == .expanded, current?.showsStackDots != false {
             let index = presenter.isShowingTransientAlert ? nil : presenter.stackIndex
-            VStack(spacing: Self.dotSpacing) {
-                ForEach(0..<count, id: \.self) { position in
+            let isReduced = choreographer.isReduced
+            ZStack(alignment: .top) {
+                VStack(spacing: StackDotMetrics.spacing) {
+                    ForEach(0..<count, id: \.self) { _ in
+                        Circle()
+                            .fill(Color.white.opacity(StackDotMetrics.dimOpacity))
+                            .frame(width: StackDotMetrics.size, height: StackDotMetrics.size)
+                    }
+                }
+                if let index {
+                    let diameter = StackDotMetrics.activeDiameter(isReduced: isReduced)
                     Circle()
-                        .fill(Color.white.opacity(position == index ? 1 : 0.35))
-                        .frame(width: Self.dotSize, height: Self.dotSize)
+                        .fill(Color.white)
+                        .frame(width: diameter, height: diameter)
+                        .offset(y: StackDotMetrics.activeOffset(index: index, isReduced: isReduced))
                 }
             }
+            // A fixed track width, so the dim dots do not shift by half a point when the
+            // marker is withdrawn for a transient alert.
+            .frame(width: StackDotMetrics.activeSize)
             // The shape's frame includes the flares, so the black body's right edge sits
             // `topRadius` inside it: the dots clear both.
             .padding(.trailing, Self.dotInset + layout.topRadius)
             .allowsHitTesting(false)
-            .animation(choreographer.contentIn, value: index)
+            .animation(choreographer.stackDot, value: index)
+            // The group belongs to the panel: it arrives and leaves with it rather than
+            // snapping in at full strength once the panel is already open.
+            .transition(.opacity)
         }
     }
 
-    private static let dotSize: CGFloat = 3
-    private static let dotSpacing: CGFloat = 5
     private static let dotInset: CGFloat = 6
 
     @ViewBuilder
