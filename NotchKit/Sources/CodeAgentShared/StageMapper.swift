@@ -28,8 +28,12 @@ public enum StageMapper {
         "Read", "Grep", "Glob", "Agent", "Explore", "WebFetch", "WebSearch", "LSP",
     ]
     /// `Notification.notification_type` values that mean "the agent needs you".
+    /// `idle_prompt` is deliberately absent: Claude Code sends it a minute after *any*
+    /// idle, including the one that follows a finished turn, and it would revive a
+    /// completed session as "waiting for you". Real questions arrive as PermissionRequest,
+    /// `permission_prompt`, `agent_needs_input` or `elicitation_dialog`.
     private static let claudeWaitingNotifications: Set<String> = [
-        "permission_prompt", "idle_prompt", "agent_needs_input", "elicitation_dialog",
+        "permission_prompt", "agent_needs_input", "elicitation_dialog",
     ]
 
     private static func mapClaude(_ payload: [String: Any], now: Date) -> AgentEvent? {

@@ -129,12 +129,12 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(event?.detail == "Claude needs your permission to use Bash")
     }
 
-    @Test func claudeNotificationIdlePromptIsWaiting() {
+    @Test func claudeNotificationIdlePromptIsIgnored() {
+        // Sent a minute after any idle, including the idle that follows a finished turn.
         #expect(claude([
-            "hook_event_name": "Notification",
-            "notification_type": "idle_prompt",
-            "message": "Waiting for your input",
-        ])?.stage == .waiting)
+            "hook_event_name": "Notification", "session_id": "s1",
+            "notification_type": "idle_prompt", "message": "Claude is waiting for your input",
+        ]) == nil)
     }
 
     @Test func claudeNotificationAgentNeedsInputIsWaiting() {
