@@ -168,6 +168,23 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(claude(["hook_event_name": "Stop", "session_id": "s1", "stop_hook_active": true]) == nil)
     }
 
+    @Test func claudeStopWithBackgroundTasksIsStillThinking() {
+        let event = claude([
+            "hook_event_name": "Stop", "session_id": "s1", "stop_hook_active": false,
+            "background_tasks": [["id": "t1", "type": "subagent", "status": "running", "description": "review"]],
+        ])
+        #expect(event?.stage == .thinking)
+        #expect(event?.tool == nil)
+    }
+
+    @Test func claudeStopWithEmptyBackgroundTasksIsCompleted() {
+        let event = claude([
+            "hook_event_name": "Stop", "session_id": "s1", "stop_hook_active": false,
+            "background_tasks": [],
+        ])
+        #expect(event?.stage == .completed)
+    }
+
     @Test func claudeSessionEndIsCompleted() {
         #expect(claude(["hook_event_name": "SessionEnd", "session_id": "s1", "reason": "clear"])?.stage == .completed)
     }

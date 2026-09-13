@@ -78,12 +78,24 @@ public enum StageMapper {
             return nil
         case "Stop":
             if bool(payload, "stop_hook_active") { return nil }
+            // A turn that ends with background work in flight (a subagent, a shell
+            // command, a monitor) is a pause, not a completion: Claude Code wakes the
+            // session again when that work finishes, and reports the real stop then.
+            if hasBackgroundTasks(payload) { return make(.thinking) }
             return make(.completed)
         case "SessionEnd":
             return make(.completed)
         default:
             return nil
         }
+    }
+
+    /// Claude's Stop payload lists in-flight background work under `background_tasks`
+    /// ("empty array when nothing is in flight"). Absent on older CLIs, which never
+    /// paused a session for background work in the first place.
+    private static func hasBackgroundTasks(_ payload: [String: Any]) -> Bool {
+        guard let tasks = payload["background_tasks"] as? [Any] else { return false }
+        return !tasks.isEmpty
     }
 
     /// "<tool>: <command | file_path | first string value>", truncated.
