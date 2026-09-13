@@ -8,11 +8,14 @@ import os
 /// stage.
 @MainActor
 public protocol DragOutPromiseTracking: AnyObject {
-    /// Waits until every promise handed to a receiver has been written — or has failed —
-    /// and answers with the ids of the files whose bytes were *never* asked for.
+    /// Waits until the promises for `fileIDs` have been written — or have failed — and
+    /// answers with the ids among them whose bytes were *never* asked for.
     ///
-    /// Returns at once, with an empty set, when nothing is outstanding.
-    func waitUntilSettled(timeout: Duration) async -> Set<UUID>
+    /// Scoped to one drag-out's files on purpose: two sessions can be in flight at once,
+    /// and neither one's timeout may say anything about the other's promises.
+    ///
+    /// Returns at once, with an empty set, when none of them is outstanding.
+    func waitUntilSettled(fileIDs: Set<UUID>, timeout: Duration) async -> Set<UUID>
 }
 
 /// The promises a drag out of the stash has handed to receiving applications, and whether
@@ -26,8 +29,9 @@ public protocol DragOutPromiseTracking: AnyObject {
 /// the user had just dragged somewhere — quite possibly their only copy — was gone.
 ///
 /// So every promise is registered as the session starts and settled when its write finishes,
-/// success or failure, and the view model waits for the count to reach zero before deleting
-/// anything.
+/// success or failure, and the view model waits for a session's own promises to be in before
+/// it deletes that session's bytes — the entries leave the shelf without waiting, and a file
+/// whose promise never comes simply keeps its bytes until the orphan sweep.
 ///
 /// `@MainActor` rather than an actor on purpose: registration happens on the main actor,
 /// where the drag starts, so it is *synchronous* and can never be a turn late. Settling
@@ -36,7 +40,7 @@ public protocol DragOutPromiseTracking: AnyObject {
 @MainActor
 public final class DragOutPromiseTracker: DragOutPromiseTracking {
 
-    /// How often ``waitUntilSettled(timeout:)`` looks again.
+    /// How often ``waitUntilSettled(fileIDs:timeout:)`` looks again.
     ///
     /// Polling rather than continuations: the wait happens once per drag-out and almost
     /// always finds nothing outstanding at all (one comparison, no sleep), and a parked
@@ -72,19 +76,19 @@ public final class DragOutPromiseTracker: DragOutPromiseTracking {
         }
     }
 
-    public func waitUntilSettled(timeout: Duration) async -> Set<UUID> {
-        guard !outstanding.isEmpty else { return [] }
+    public func waitUntilSettled(fileIDs: Set<UUID>, timeout: Duration) async -> Set<UUID> {
+        guard !outstandingFileIDs(among: fileIDs).isEmpty else { return [] }
         let deadline = ContinuousClock.now.advanced(by: timeout)
-        while !outstanding.isEmpty, ContinuousClock.now < deadline {
+        while !outstandingFileIDs(among: fileIDs).isEmpty, ContinuousClock.now < deadline {
             do {
                 try await Task.sleep(for: Self.pollInterval)
             } catch {
                 // Cancelled: the caller is being torn down. Not a timeout — nothing is
                 // given up on, and nothing is logged as if a receiver had gone quiet.
-                return outstandingFileIDs
+                return outstandingFileIDs(among: fileIDs)
             }
         }
-        let unredeemed = outstandingFileIDs
+        let unredeemed = outstandingFileIDs(among: fileIDs)
         guard !unredeemed.isEmpty else { return [] }
         // Not waited on any longer: the receiver almost always took the file *URL* the
         // pasteboard also carries and never had a promise to redeem, and in the rare other
@@ -95,7 +99,15 @@ public final class DragOutPromiseTracker: DragOutPromiseTracking {
             \(unredeemed.count, privacy: .public) file promise(s) were not redeemed within the \
             timeout; the receiver took the URL, the bytes stay until the orphan sweep
             """)
-        outstanding.removeAll()
+        // Only this session's: another drag-out may be in flight, and forgetting *its*
+        // promises here would let its files' bytes be deleted from under a receiver that
+        // has not asked for them yet.
+        for id in unredeemed { outstanding.removeValue(forKey: id) }
         return unredeemed
+    }
+
+    /// The subset of `fileIDs` that is still owed to somebody.
+    private func outstandingFileIDs(among fileIDs: Set<UUID>) -> Set<UUID> {
+        fileIDs.filter { outstanding[$0] != nil }
     }
 }

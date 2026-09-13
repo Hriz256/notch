@@ -130,40 +130,26 @@ public actor StashStore {
         return index
     }
 
-    /// Takes one file out of the stash: its folder and its index entry.
-    ///
-    /// This is the drag-out-one-file path (and the "Remove <name>" menu row): the rest
-    /// of the pile is left exactly as it was, `stashedAt` included, so taking a file out
-    /// never restarts — or shortens — the 24-hour clock on the ones still there. Removing
-    /// the last file empties the index outright, which is what stops a TTL timer being
-    /// armed for a stash with nothing in it.
-    ///
-    /// An id that is not in the stash is not an error: the file has already gone (a
-    /// second drag-out of the same tile, a menu row clicked twice), and the index the
-    /// caller gets back is simply the current one.
-    @discardableResult
-    public func remove(fileID: UUID) -> StashIndex {
-        var index = load()
-        guard let file = index.files.first(where: { $0.id == fileID }) else { return index }
-
-        index.files.removeAll { $0.id == fileID }
-        if index.files.isEmpty { index.removeAll() }
-        // Index first, folder second — the same order as `stash`, and for the same
-        // reason: an entry whose folder is gone is pruned by `load`, whereas a folder
-        // deleted under an index that still promises it loses the file for good.
-        if writeIndex(index) { deleteFolders(of: [file]) }
-        return index
-    }
-
     /// Takes files out of the index and leaves their bytes on disk.
     ///
-    /// The drag-out path for a receiver that took the *file URL* instead of redeeming the
-    /// promise (see ``orphanLifetime``): the files have left the shelf as surely as
-    /// redeemed ones — the user watched them go — but the receiver may not have read them
-    /// yet, and ``remove(fileID:)`` would pull the bytes out from under it. The folders
-    /// nothing points at any more are swept by a later ``load()``.
+    /// How every file leaves the shelf: a completed drag-out (the whole pile or one tile)
+    /// and the "Remove `<name>`" menu row all come through here, because at this moment
+    /// nobody knows yet whether the receiver has its own copy. Deleting the bytes with the
+    /// entry would pull them out from under an application that took the file's *URL* and
+    /// has not read it yet.
     ///
-    /// Ids that are not in the stash are ignored, exactly as in ``remove(fileID:)``.
+    /// What follows decides their fate: a promise redeemed within
+    /// ``DropZonesViewModel/promiseSettleTimeout`` means the receiver has its copy and the
+    /// folder is deleted (``deleteDetached(fileID:)``); everything else waits for the sweep
+    /// that collects it ``orphanLifetime`` after this call, which is what dates the folder.
+    ///
+    /// The files left keep `stashedAt`, so taking one out never restarts — or shortens —
+    /// the 24-hour clock on the rest, and detaching the last one empties the index outright
+    /// so no TTL timer is armed for a stash with nothing in it.
+    ///
+    /// Ids that are not in the stash are ignored: the file has already gone (a second
+    /// drag-out of the same tile, a menu row clicked twice), and the index the caller gets
+    /// back is simply the current one.
     @discardableResult
     public func detach(fileIDs: Set<UUID>) -> StashIndex {
         var index = load()

@@ -277,60 +277,6 @@ private func touch(_ url: URL, at date: Date) throws {
         #expect(!exists(fixture.indexURL))
     }
 
-    // MARK: - remove(fileID:)
-
-    @Test func removeDeletesOneFileAndLeavesTheRest() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanUp() }
-        let a = try fixture.makeFile("a.txt")
-        let b = try fixture.makeFile("b.txt")
-
-        let store = StashStore(baseDirectory: fixture.base, now: { start })
-        let stashed = await store.stash([a, b], action: .replace)
-        let goneFolder = URL(fileURLWithPath: stashed.files[0].storedPath).deletingLastPathComponent()
-
-        let index = await store.remove(fileID: stashed.files[0].id)
-
-        #expect(index.files.map(\.name) == ["b.txt"])
-        #expect(!exists(goneFolder), "the removed file's folder is still there")
-        #expect(exists(stashed.files[1].storedPath))
-        #expect(index.stashedAt == start, "the files left keep their 24-hour clock")
-        // And it survives a round trip through the index on disk.
-        let reloaded = await store.load()
-        #expect(reloaded == index)
-        // The original is never touched.
-        #expect(exists(a))
-    }
-
-    @Test func removingTheLastFileEmptiesTheIndex() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanUp() }
-        let a = try fixture.makeFile("a.txt")
-
-        let store = StashStore(baseDirectory: fixture.base, now: { start })
-        let stashed = await store.stash([a], action: .replace)
-
-        let index = await store.remove(fileID: stashed.files[0].id)
-
-        #expect(index == StashIndex(), "an empty stash must not keep a stashedAt to expire")
-        let reloaded = await store.load()
-        #expect(reloaded == StashIndex())
-    }
-
-    @Test func removingAnUnknownIDChangesNothing() async throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanUp() }
-        let a = try fixture.makeFile("a.txt")
-
-        let store = StashStore(baseDirectory: fixture.base, now: { start })
-        let stashed = await store.stash([a], action: .replace)
-
-        let index = await store.remove(fileID: UUID())
-
-        #expect(index == stashed)
-        #expect(exists(stashed.files[0].storedPath))
-    }
-
     // MARK: - detach(fileIDs:)
 
     @Test func detachTakesTheEntryOutOfTheIndexAndLeavesTheBytes() async throws {

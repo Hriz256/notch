@@ -804,7 +804,10 @@ public final class DropZonesViewModel {
     /// Runs behind the poof and touches nothing on screen; a model that was stopped while
     /// it waited simply leaves every folder to the next activation's sweep.
     private func settleBytes(of files: [StashedFile]) async {
-        let unredeemed = await settlingPromises.waitUntilSettled(timeout: Self.promiseSettleTimeout)
+        let unredeemed = await settlingPromises.waitUntilSettled(
+            fileIDs: Set(files.map(\.id)),
+            timeout: Self.promiseSettleTimeout
+        )
         guard !Task.isCancelled, !isStopped else { return }
         for file in files where !unredeemed.contains(file.id) {
             await store.deleteDetached(fileID: file.id)

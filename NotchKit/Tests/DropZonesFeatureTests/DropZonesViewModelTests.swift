@@ -1446,14 +1446,17 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
     /// has accepted the drop and not yet copied the file leaves open.
     var holds = false
     private(set) var waits = 0
+    /// What each wait was asked about: one drag-out's own files, never the whole table.
+    private(set) var waitedFor: [Set<UUID>] = []
     private var gate: CheckedContinuation<Void, Never>?
 
-    func waitUntilSettled(timeout: Duration) async -> Set<UUID> {
+    func waitUntilSettled(fileIDs: Set<UUID>, timeout: Duration) async -> Set<UUID> {
         waits += 1
+        waitedFor.append(fileIDs)
         if holds {
             await withCheckedContinuation { gate = $0 }
         }
-        return unredeemed
+        return unredeemed.intersection(fileIDs)
     }
 
     func release() {
