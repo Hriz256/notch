@@ -1,12 +1,17 @@
 import CodeAgentShared
 import Foundation
-import Security
 
 /// Reads (never writes) Claude Code's OAuth token.
 ///
 /// Claude Code owns the `Claude Code-credentials` Keychain item and rewrites it on every
 /// refresh; a second writer racing it is how a user gets logged out. Notch therefore only
 /// reads, and reports `.notSignedIn` rather than attempting a refresh.
+///
+/// The read goes through `/usr/bin/security`, not `SecItemCopyMatching`. The item is
+/// created by that tool, so its ACL trusts the tool outright, whereas an app of our own is
+/// admitted by cdhash — "Always Allow" survives exactly until the next build, and then macOS
+/// asks for the login password again. Spawning the tool is what Claude Code itself does, and
+/// it never prompts.
 ///
 /// Nothing here ever logs the token or any substring of it.
 public enum ClaudeCredentials {
@@ -52,16 +57,37 @@ public enum ClaudeCredentials {
 
     // MARK: - Sources
 
+    /// `security find-generic-password -w` prints the secret followed by a newline.
+    /// Blocking, so callers keep it off the main actor. A hung tool (a prompt after all)
+    /// is killed after ``securityTimeout`` rather than wedging the poll for good.
     private static func keychainPayload() -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-        return item as? Data
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", keychainService, "-w"]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + securityTimeout, execute: watchdog)
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        watchdog.cancel()
+
+        guard process.terminationStatus == 0 else { return nil }
+        return trimmingTrailingNewlines(output)
+    }
+
+    private static let securityTimeout: TimeInterval = 10
+
+    static func trimmingTrailingNewlines(_ data: Data) -> Data {
+        var end = data.endIndex
+        while end > data.startIndex, data[end - 1] == UInt8(ascii: "\n") || data[end - 1] == UInt8(ascii: "\r") {
+            end -= 1
+        }
+        return data[data.startIndex..<end]
     }
 
     private static func filePayload(home: URL) -> Data? {

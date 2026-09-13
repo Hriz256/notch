@@ -67,7 +67,10 @@ public final class ClaudeUsageProvider: UsageProvider {
     public func fetch() async throws(UsageError) -> AgentUsage {
         let now = Date()
         let token: ClaudeCredentials.Token
-        switch credentials(home, now) {
+        // The default lookup spawns `security` and waits for it: cheap, but not something
+        // to do on whichever executor called `fetch`.
+        let credentials = self.credentials, home = self.home
+        switch await Task.detached(priority: .utility) { credentials(home, now) }.value {
         case .success(let value): token = value
         case .failure(let error): throw error
         }

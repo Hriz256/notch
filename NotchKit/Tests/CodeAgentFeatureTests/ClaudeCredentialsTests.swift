@@ -30,6 +30,13 @@ final class ClaudeCredentialsTests {
 
     private static let epochMilliseconds: Double = 1_700_000_000_000
 
+    @Test func securityOutputLosesOnlyItsTrailingNewline() {
+        let trimmed = ClaudeCredentials.trimmingTrailingNewlines(Data("{\"a\": 1}\n".utf8))
+        #expect(String(decoding: trimmed, as: UTF8.self) == "{\"a\": 1}")
+        #expect(ClaudeCredentials.trimmingTrailingNewlines(Data("x\r\n\n".utf8)) == Data("x".utf8))
+        #expect(ClaudeCredentials.trimmingTrailingNewlines(Data()) == Data())
+    }
+
     @Test func parsesAccessTokenAndMillisecondExpiry() throws {
         try write(#"{"claudeAiOauth": {"accessToken": "sk-ant-oat-x", "expiresAt": 1700000000000}}"#)
 
