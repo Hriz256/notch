@@ -408,6 +408,27 @@ private func touch(_ url: URL, at date: Date) throws {
         #expect(exists(stashed.files[2].storedPath), "and a file still in the index is never touched")
     }
 
+    @Test func sweepOrphansCollectsTheSameFoldersWithoutReadingTheStashBack() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let gone = try fixture.makeFile("gone.txt")
+        let kept = try fixture.makeFile("kept.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([gone, kept], action: .replace)
+        let folder = URL(fileURLWithPath: stashed.files[0].storedPath).deletingLastPathComponent()
+        await store.detach(fileIDs: [stashed.files[0].id])
+        try touch(folder, at: start.addingTimeInterval(-StashStore.orphanLifetime))
+
+        await store.sweepOrphans()
+
+        #expect(!exists(folder), "the hour is up and nobody points at it any more")
+        #expect(exists(stashed.files[1].storedPath))
+        // The index is only read, never rewritten: the sweep is about bytes.
+        let onDisk = try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: fixture.indexURL))
+        #expect(onDisk.files.map(\.name) == ["kept.txt"])
+    }
+
     // MARK: - clear
 
     @Test func clearRemovesTheFilesAndTheIndex() async throws {

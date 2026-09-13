@@ -177,6 +177,18 @@ public actor StashStore {
         return index
     }
 
+    /// The orphan sweep on its own, for a caller that knows bytes are owed a collection
+    /// and does not want to wait for the next ``load()`` — the view model arms one an hour
+    /// after every ``detach(fileIDs:)``.
+    ///
+    /// It reads the index and writes nothing: no pruning, no expiry, no repair. An index
+    /// that cannot be read or decoded sweeps nothing, because everything in `Stash/` would
+    /// look like an orphan.
+    public func sweepOrphans() {
+        guard case let .index(index) = readIndex() else { return }
+        sweepOrphanFolders(keeping: index)
+    }
+
     /// Empties the stash: both the copies and the index.
     ///
     /// Everything under `Stash/` goes, detached folders included: "Clear stash" and the
