@@ -26,7 +26,9 @@ struct MusicExpandedView: View {
                     VisualizerBars(isPlaying: model.isPlaying, color: .white.opacity(0.8))
                 }
             }
-            TimeProgressBar(elapsed: model.displayedElapsed, duration: model.duration) { model.perform(.seek($0)) }
+            TimeProgressBar(elapsed: model.displayedElapsed,
+                            duration: model.duration,
+                            trackID: model.trackKey) { model.perform(.seek($0)) }
                 .frame(height: 12)
             TransportControls(isPlaying: model.isPlaying) { model.perform($0) }
         }

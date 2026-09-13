@@ -38,6 +38,20 @@ public final class MusicViewModel {
     public static let pauseDismissDelay: Duration = .seconds(600)
     public static let trackChangePeekDuration: Duration = .seconds(2.5)
     public static let expandedSize = CGSize(width: 380, height: 160)
+    /// The built-in display's notch width on the hardware this app targets. Nothing is laid
+    /// out against it — `NotchGeometry` measures the real one — but ``trackChangePeekSlotWidth``
+    /// is *chosen* against it, so it is written down rather than left in a comment.
+    public static let targetNotchWidth: CGFloat = 200
+
+    /// How wide the peek slots grow to while the track-change banner is up, so the leading
+    /// slot can hold the new title and artist beside the 18 pt thumbnail.
+    ///
+    /// 90, not the HUD's 96, because `IslandLayout.resolve` floors the *expanded* width at
+    /// `notch + 2 × slot` as well: at 96 a skip while the user was hovering would have pushed
+    /// the panel from 380 pt to 392 and back. 90 makes the widened peek exactly the expanded
+    /// card's 380 pt on this hardware, so the panel provably never moves — asserted in
+    /// `MusicViewModelTests`.
+    public static let trackChangePeekSlotWidth: CGFloat = 90
     /// UserDefaults key backing the "Track change peek" setting (absent means on).
     public nonisolated static let trackChangePeekDefaultsKey = "music.trackChangePeek"
     /// UserDefaults key backing the "Keep paused track" setting (absent means on).
@@ -51,12 +65,27 @@ public final class MusicViewModel {
     public private(set) var snapshot: NowPlayingSnapshot?
     public private(set) var artwork: Data?
     public private(set) var displayedElapsed: TimeInterval = 0
-    /// True for `trackChangePeekDuration` after a track changes while playing. Views read this
-    /// to surface the new track; the island itself is never re-presented, so nothing flickers.
+    /// True for `trackChangePeekDuration` after a track changes while playing. The compact
+    /// leading slot reads this to show the new title and artist beside the artwork, and the
+    /// presentation reads it for its peek slot width; the island itself is never re-presented,
+    /// so nothing flickers.
     public private(set) var isShowingTrackChange = false
 
     public var isPlaying: Bool { snapshot?.isPlaying ?? false }
     public var duration: TimeInterval { snapshot?.duration ?? 0 }
+
+    /// What ``displayedElapsed`` belongs to, for views that must cut rather than animate when
+    /// the track changes — the progress bar resets to zero on a skip and must not run
+    /// backwards to get there.
+    ///
+    /// Derived from the same ``TrackIdentity`` the banner is triggered by, so the two cannot
+    /// disagree: a live album where consecutive tracks share a title and a cover still changes
+    /// artist, and keying on title + artwork alone would have called that a *seek* and swept
+    /// the fill backwards across the whole bar.
+    var trackKey: String? {
+        guard let snapshot, snapshot.hasTrack else { return nil }
+        return TrackIdentity(snapshot).key
+    }
 
     /// The island this feature presents on. Exposed read-only so the feature's context
     /// menu can embed `CardsMenuSection`, which needs the presenter to list the cards.
@@ -92,6 +121,11 @@ public final class MusicViewModel {
             artist = s.artist
             artworkID = s.artworkID
         }
+
+        /// The same identity as one value, for views that key on the track. Joined on a unit
+        /// separator, which cannot appear in a title or an artist, so two different tracks
+        /// cannot collide by punctuation.
+        var key: String { [title, artist, artworkID].map { $0 ?? "" }.joined(separator: "\u{1F}") }
     }
 
     public init(presenter: any IslandPresenting,
@@ -145,6 +179,19 @@ public final class MusicViewModel {
         let identity = TrackIdentity(new)
         let trackChanged = old.map { TrackIdentity($0) != identity } ?? false
 
+        // The banner is raised *before* the presentation is rebuilt, so the single update below
+        // already carries the widened `peekSlotWidth`. Arming it afterwards would push a second
+        // update in the same turn and make the island grow in two steps.
+        if trackChanged {
+            let isBurstEcho = previousTrack == identity
+                && lastTrackChangeAt.map { now().timeIntervalSince($0) <= Self.trackChangeBurstWindow } ?? false
+            previousTrack = old.map(TrackIdentity.init)
+            lastTrackChangeAt = now()
+            if !isBurstEcho, new.isPlaying, isTrackChangePeekEnabled() {
+                showTrackChange()
+            }
+        }
+
         // A track change keeps the *same* presentation and only refreshes its content. Presenting
         // a second presentation would give the panel a new view identity and blink it away and
         // back — twice, once when the peek appears and once when it expires.
@@ -154,16 +201,6 @@ public final class MusicViewModel {
             let id = PresentationID()
             backgroundID = id
             islandPresenter.present(makeBackgroundPresentation(id: id))
-        }
-
-        if trackChanged {
-            let isBurstEcho = previousTrack == identity
-                && lastTrackChangeAt.map { now().timeIntervalSince($0) <= Self.trackChangeBurstWindow } ?? false
-            previousTrack = old.map(TrackIdentity.init)
-            lastTrackChangeAt = now()
-            if !isBurstEcho, new.isPlaying, isTrackChangePeekEnabled() {
-                showTrackChange()
-            }
         }
 
         // A paused track keeps its card by default: dropping it takes Music out of the card stack,
@@ -205,15 +242,18 @@ public final class MusicViewModel {
     }
 
     /// Tears the feature down to idle: no presentation, no pause timer, no 1 Hz tick.
+    ///
+    /// The banner is lowered *after* the dismissal so ``hideTrackChange()`` finds no
+    /// background id and skips its refresh: there is nothing left to re-present.
     private func dismissBackground() {
         stopTicking()
-        hideTrackChange()
         pauseToken?.cancel()
         pauseToken = nil
         if let backgroundID {
             islandPresenter.dismiss(backgroundID)
             self.backgroundID = nil
         }
+        hideTrackChange()
     }
 
     // MARK: Presentations
@@ -228,8 +268,17 @@ public final class MusicViewModel {
             leading: viewFactory.leading(self),
             trailing: viewFactory.trailing(self),
             expanded: viewFactory.expanded(self),
-            expandedSize: Self.expandedSize
+            expandedSize: Self.expandedSize,
+            peekSlotWidth: peekSlotWidth
         )
+    }
+
+    /// The island's own width is the track-change peek's entrance: while the banner is up the
+    /// slots ask for ``trackChangePeekSlotWidth`` and the shape springs out to make room, the
+    /// way the HUD's wider slots already do. Nothing new is drawn outside the island, so there
+    /// is no second shape to go out of sync.
+    private var peekSlotWidth: CGFloat {
+        isShowingTrackChange ? Self.trackChangePeekSlotWidth : IslandLayout.peekSlotWidth
     }
 
     // MARK: Track-change banner
@@ -243,10 +292,16 @@ public final class MusicViewModel {
         }
     }
 
+    /// Lowers the banner and, if the island is still showing music, hands it the narrow slots
+    /// again so the shape settles back to the plain peek.
     private func hideTrackChange() {
         trackChangeToken?.cancel()
         trackChangeToken = nil
+        guard isShowingTrackChange else { return }
         isShowingTrackChange = false
+        if let backgroundID {
+            islandPresenter.update(makeBackgroundPresentation(id: backgroundID))
+        }
     }
 
     // MARK: Commands
