@@ -16,13 +16,21 @@ public enum HUDBarLayout {
 /// Leading slot: the symbol and the label, hugging the island's left edge.
 struct HUDLeadingView: View {
     let model: HUDViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 6) {
             if let reading = model.reading {
-                Image(systemName: HUDGlyph.symbol(for: reading))
+                // The glyph morphs rather than swaps as the level crosses the thirds
+                // (audit B3). The 14 pt box stays fixed either way: `speaker.wave.3.fill`
+                // is wider than `speaker.slash.fill`, and letting the frame follow the
+                // symbol would shove the label sideways on every third crossing.
+                let symbol = HUDGlyph.symbol(for: reading)
+                Image(systemName: symbol)
                     .font(.system(size: 12, weight: .semibold))
+                    .contentTransition(HUDMotion.symbolTransition(reduceMotion: reduceMotion))
                     .frame(width: 14)
+                    .animation(HUDMotion.symbol(reduceMotion: reduceMotion), value: symbol)
                 Text(HUDGlyph.label(for: reading.kind))
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
