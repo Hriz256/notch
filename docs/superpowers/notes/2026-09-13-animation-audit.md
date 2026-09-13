@@ -500,3 +500,63 @@ that costs CPU, and that needs a real session to judge; **matched-geometry peek 
 — the most Apple thing in this document and the most likely to reproduce the rejected
 "separate shape"; **the HUD bar overshoot (B8)** — juicier than macOS, which may be the wrong
 kind of juicy.
+
+---
+
+## Implemented (HUD, Drop Zones)
+
+Landed on `motion/hud-dropzones`, 2026-09-13, one commit per item. Everything below is a
+final value as it stands in the code; the owner approved the audit in full, including the
+two items it had argued *against* adopting silently (B8) or *for* only with a spec edit (A8).
+
+### Shortlist 6, HUD half — B3, the speaker glyph morphs
+`HUDLeadingView` (`HUDFeature/Views/HUDSlotViews.swift`). The `Image(systemName:)` takes
+`.contentTransition(.symbolEffect(.replace.downUp))`, driven by
+`.animation(.spring(response: 0.2, dampingFraction: 1.0), value: symbol)` — a replace effect
+needs an animated transaction or the glyph cuts. The 14 pt box is unchanged and sits
+*outside* the transition, so `speaker.wave.3.fill` cannot shove the label sideways.
+Reduce Motion takes `.identity` + a nil animation: a plain swap, not the cross-fade
+`.replace` degrades to on its own. Curves live in the new `HUDMotion`, with tests.
+
+### B8 — the HUD bar overshoots (owner's call)
+`HUDBarView`. Fill animates `.spring(response: 0.24, dampingFraction: 0.72)` instead of
+`.easeOut(duration: 0.12)`; Reduce Motion still `nil`. The audit's caution stands and is
+recorded rather than dropped — macOS's own bar does not overshoot — so the spec's "The bar"
+row now carries the change and the reason ("owner's call: juicier than macOS"), edited in
+the same commit. One addition the audit did not name: the track **clips**, because a sprung
+`.frame(width:)` overshoots past 60 pt at full volume and would otherwise leave a white nub
+outside the capsule's right end.
+
+### Shortlist 10 — A8 + B9, the tiles settle on staggered springs
+`ThumbnailStack` (settle card) and `StashThumbnailRow` (hover-expanded row), through a new
+`SettleMotion` + `SettleEntrance` modifier in `DropZonesFeature/Views/SettleMotion.swift`.
+
+- Curve: `.spring(response: 0.4, dampingFraction: 0.75)` per tile, replacing the whole
+  stack's single `.easeOut(duration: 0.3)`. The settle card's tiles still arrive from
+  `scale 1.12`; the row's arrive from `scale 0.92, opacity 0`.
+- The entrance is now **per tile**, applied innermost — a transform on the container cannot
+  stagger, and innermost is what leaves the fan's rotations (−10/0/10), depth scales
+  (1/0.94/0.88) and 2 pt depth offsets untouched. Newest first: depth 0 never waits.
+- **Stagger, and where it was shortened.** Nominal 40 ms, clamped to a span budget:
+  - *Settle card* — span = `settleWindow (0.4) − visualRise (0.3) = 0.1 s`. `visualRise` is
+    when a ζ = 0.75 spring at this response is within 3 % of target (3 % of a 0.12
+    displacement is a tenth of a point). Three tiles need 2 × 40 = 80 ms of that 100 ms, so
+    **the nominal 40 ms survives here** and the whole settle stays inside the 400 ms the
+    island waits before collapsing — a constant this work did not get to move. A test
+    asserts that, and asserts the window is `DropZonesViewModel.settleDelay` rather than a
+    second copy of 400 ms.
+  - *Expanded row* — B9's own 0.2 s cap. Seven boxes at 40 ms would be 240 ms, so the step
+    **shortens to 33.3 ms** there. Short rows keep 40 ms.
+- Reduce Motion: `.easeOut(duration: 0.18)` opacity only — no scale, no stagger, tiles at
+  rest, all together.
+- Spec: the "Settle" row and the animations line of `2026-09-12-drop-zones-design.md` were
+  edited in the same commit. The 400 ms settle, 300 ms leave debounce, 250 ms poof and the
+  `spring(0.25, 0.7)` hover lift are all untouched.
+
+### Not done here, and why
+- Everything else in this audit: it belongs to `IslandCore` and `MusicFeature`, which are
+  being worked in parallel worktrees. Nothing outside `HUDFeature/`, `DropZonesFeature/`,
+  `DropZonesShared/` and their tests was edited.
+- `HUDShared`'s `HUDGlyph.symbol(for:)` was **not** touched: B3 is a view-layer change and
+  the thresholds it morphs across are already correct and already tested there.
+- B3's other half — `TransportControls`' play/pause — is `MusicFeature`'s.

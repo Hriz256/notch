@@ -113,10 +113,6 @@ struct ThumbnailStack: View {
     /// Whether the tiles should play their entrance. Only the settle card asks for it.
     var isEntering = false
 
-    /// Flipped once, on the first layout pass, so the entrance plays exactly once per
-    /// appearance of the stack rather than on every model change that redraws it.
-    @State private var hasSettled = false
-
     /// How many cards the fan ever shows.
     static let maximumCards = 3
 
@@ -130,14 +126,32 @@ struct ThumbnailStack: View {
         tokens.thumbSize + 2 * ThumbnailStackTokens.depthOffset + 4
     }
 
+    /// The scale a dropped tile lands from.
+    static let entranceScale: CGFloat = 1.12
+
     var body: some View {
+        let tiles = visible
         ZStack {
             // Painted back to front so the newest file ends up on top.
-            ForEach(Array(visible.enumerated()).reversed(), id: \.element.id) { depth, file in
+            ForEach(Array(tiles.enumerated()).reversed(), id: \.element.id) { depth, file in
                 ThumbnailCard(
                     thumbnail: thumbnails[file.id],
                     size: tokens.thumbSize,
                     cornerRadius: tokens.cornerRadius
+                )
+                // The dropped files land at 1.12 and settle to 1 — the only motion in the
+                // stack, and the first thing the user sees after letting go. Each tile
+                // settles on its own spring, ~40 ms behind the one in front of it, newest
+                // first (audit A8 + B9): the pile lands as a pile, not as one object.
+                // Innermost, so each tile scales about its own centre and the fan's
+                // rotations, depth scales and offsets below are untouched.
+                .settleEntrance(
+                    index: depth,
+                    count: tiles.count,
+                    span: SettleMotion.settleSpan,
+                    fromScale: Self.entranceScale,
+                    fades: false,
+                    isEnabled: isEntering
                 )
                 .scaleEffect(tokens.scale(depth: depth))
                 .rotationEffect(.degrees(tokens.rotation(depth: depth)))
@@ -149,16 +163,6 @@ struct ThumbnailStack: View {
             }
         }
         .frame(width: side, height: side)
-        // The dropped files land at 1.12 and settle to 1 — the only motion in the stack,
-        // and the first thing the user sees after letting go. Reduce Motion draws them
-        // at rest instead; the rotations above are static in both cases.
-        .scaleEffect(playsEntrance && !hasSettled ? 1.12 : 1)
-        .animation(playsEntrance ? .easeOut(duration: 0.3) : nil, value: hasSettled)
-        .onAppear { hasSettled = true }
-    }
-
-    private var playsEntrance: Bool {
-        isEntering && !MotionPreference.isReduced
     }
 }
 

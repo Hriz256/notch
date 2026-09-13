@@ -36,6 +36,10 @@ enum StashRowLayout {
     static let hoverScale: CGFloat = 1.06
     static let hoverResponse: Double = 0.25
     static let hoverDamping: Double = 0.7
+
+    /// The scale a tile in the row grows in from. Below 1, unlike the settle card's 1.12:
+    /// these boxes are not landing from a drop, they are unfolding with the card.
+    static let entranceScale: CGFloat = 0.92
     /// Reduce Motion gets the same information without the movement: the hovered tile is
     /// the one that is *not* dimmed.
     static let restingOpacity: Double = 0.85
@@ -132,12 +136,29 @@ struct StashThumbnailRow: View {
 
     var body: some View {
         let plan = StashRowLayout.plan(files: model.index.files)
+        // The chip is one of the boxes that fans in, so it shares the count the stagger is
+        // budgeted against rather than arriving on its own beat.
+        let boxes = plan.tiles.count + (plan.overflow > 0 ? 1 : 0)
         HStack(spacing: StashRowLayout.spacing) {
-            ForEach(plan.tiles) { file in
+            ForEach(Array(plan.tiles.enumerated()), id: \.element.id) { index, file in
                 StashThumbnailTile(model: model, file: file)
+                    .settleEntrance(
+                        index: index,
+                        count: boxes,
+                        span: SettleMotion.rowSpan,
+                        fromScale: StashRowLayout.entranceScale,
+                        fades: true
+                    )
             }
             if plan.overflow > 0 {
                 StashOverflowChip(count: plan.overflow)
+                    .settleEntrance(
+                        index: plan.tiles.count,
+                        count: boxes,
+                        span: SettleMotion.rowSpan,
+                        fromScale: StashRowLayout.entranceScale,
+                        fades: true
+                    )
             }
         }
         .frame(height: StashRowLayout.tileSize)
