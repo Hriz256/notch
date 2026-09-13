@@ -686,3 +686,94 @@ squashed the capsule's rounded ends into ellipses.
 - `HUDShared`'s `HUDGlyph.symbol(for:)` was **not** touched: B3 is a view-layer change and
   the thresholds it morphs across are already correct and already tested there.
 - B3's other half — `TransportControls`' play/pause — is `MusicFeature`'s.
+
+---
+
+## Implemented (Code glyphs) — branch `perf/code-glyphs-ca`, 2026-09-13
+
+A11's second half. The four `TimelineView(.animation)` glyphs in
+`CodeAgentFeature/Views/ActivityKind.swift` are now `CALayer`s with repeating animations,
+in a new `CodeAgentFeature/Views/GlyphLayers.swift`. `ThinkingDots` is unchanged — it was
+already this shape and is now explicitly the model the other four follow.
+
+| Glyph | Was | Is |
+|---|---|---|
+| **Editing** | pencil `offset(x: wave(0.9) × 3)`, underline width `= 1.2 × size × phase(1.4)` with a fade over the last quarter | pencil layer, `position.x` `CABasicAnimation` ±3 pt, `easeInEaseOut`, `autoreverses`, 0.45 s; underline layer anchored `(0, 0.5)`, `bounds.size.width` 0 → 15.6 pt linear 1.4 s, plus an opacity `CAKeyframeAnimation` `[1, 1, 0]` at `[0, 0.75, 1]` on the same 1.4 s |
+| **Reading** | magnifier `offset(x: wave(1.2) × 4)` | `position.x` ±4 pt, `easeInEaseOut`, `autoreverses`, 0.6 s; the faint rule is a static layer |
+| **Running** | rounded-rect stroke, `Text(">")`, line width `= 0.3 × frameWidth × phase(1.2)`, cursor `opacity(blink(0.5))`, all inside an `HStack` | a bordered layer (`cornerCurve = .continuous`), the prompt drawn once to an image, the line's `bounds.size.width` 0 → 4.2 pt linear 1.2 s **and** the cursor's `position.x` on the identical ramp — the `HStack` used to push the cursor along, so the two now share one clock — plus a `.discrete` opacity keyframe `[1, 0]` / `[0, 0.5, 1]` on 0.5 s |
+| **Waiting** | hand `rotationEffect(wave(0.8) × 12°, anchor: .bottom)` | `transform.rotation.z` ±12°, `anchorPoint (0.5, 0)`, `easeInEaseOut`, `autoreverses`, 0.4 s |
+
+Every period, amplitude and dimension is the one it was; the numbers moved out of four
+`private static let` blocks nobody could reach into a `GlyphSpec` table, and
+`CodeAgentFeatureTests/GlyphLayerTests.swift` pins all of them, checks the Core Animation
+parameters against the `GlyphMotion` functions that define what each loop *is* (a ramp, a
+wave, a blink), and checks the fade keyframe interpolates to the formula it replaced.
+`GlyphMotion.phase/wave/blink` are kept for exactly that: they are now the definition, not
+the per-frame driver.
+
+### Expected CPU effect
+
+The measurement that started this: **5–6 % while an agent works, ~1 % at rest**. Four
+timeline bodies re-committed the island's SwiftUI graph at display rate (120 Hz) for the
+whole of a session, in the peek slot *and* again in the expanded header. Nothing is
+re-committed now — the loops are handed to the render server once — so the working figure
+should fall towards the idle one, with the residue being the 1 Hz tick and whatever the
+window server charges to composite four small layers. **Not measured here: this branch never
+ran the app.** Worth confirming with a real session before the item is closed.
+
+### Reduce Motion, and the two rules that go with it
+
+- `GlyphMotion.isReduced` now reads `IslandCore.MotionSettings.shared.isReduced` instead of
+  `NSWorkspace` directly. One line, because `CodeAgentFeature` already depends on
+  `IslandCore`. It is `@Observable`, so the setting is **live**: a view that reads it while
+  building its body is re-drawn when the user turns Reduce Motion on. That matters more than
+  it used to — the old direct read was only ever current because every glyph happened to be
+  re-drawing every frame anyway. `AgentIcon`'s thinking pulse inherits the fix. This is
+  A13's "standardise on one mechanism repo-wide", minus `DropZonesFeature`'s
+  `MotionPreference`, which was left alone.
+- Nothing loops under Reduce Motion: the choice is a pure function now,
+  `ActivityGlyph.drawing(for:reduced:)`, tested over all eight kinds. The looping glyphs are
+  never instantiated, *and* `GlyphLayerView` refuses to attach its animations — the same
+  belt-and-braces rule `ThinkingDots.animates` already followed. Turning the setting on while
+  a glyph is on screen strips the running animations without rebuilding a layer.
+- **Off screen.** `GlyphLayerView.viewDidMoveToWindow` attaches the loops on the way in and
+  removes them on the way out. A layer in a window-less view still costs CPU with an
+  animation attached, so this is not left to the window server. Tested both ways.
+
+### The restart trade-off, and what to watch for
+
+A repeating animation restarts when its host view is re-created, where a function of
+wall-clock time did not. `LoopingGlyph` carries `.id(layerKind)` — all four looping kinds
+share one `@ViewBuilder` branch and would otherwise share one `GlyphLayerView`, whose layer
+tree is built once in `init`. So a glyph is stable through the island's re-renders, but a
+**stage change restarts the new glyph's cycle from the beginning**. The owner accepted this.
+Each wave is also given `timeOffset = duration / 2` so it starts at rest and moving, where
+`sin(0)` started, rather than at one extreme.
+
+### What to compare by eye
+
+Rendered old-vs-new at matched phases during the work; the ink bounding boxes agree to
+within 0.1–0.3 pt and the salmon underline's are identical. Three approximations, all
+deliberate:
+
+1. **The waves are `easeInEaseOut` autoreverses, not sines.** The audit proposed this and
+   `ThinkingDots` has always done it; at 3 pt, 4 pt and 12° of travel the two curves differ
+   by a fraction of a point at their widest.
+2. **The symbols sit up to ~0.3 pt left of where SwiftUI put them.** A layer is centred on
+   the symbol image's own bounds; SwiftUI centres the *layout* frame, and SF Symbols'
+   horizontal bearings are not symmetric. Sub-pixel at 1×, about half a device pixel at 2×,
+   and every glyph is alone in a 56 pt slot.
+3. **The terminal's corners.** A layer border draws inside its bounds where SwiftUI's
+   `.stroke` straddles the edge, so the layer is 1 pt larger in each direction with a radius
+   half a point larger — the rectangle on screen is the same one, and `cornerCurve` is
+   `.continuous`, which is what `RoundedRectangle(style: .continuous)` asked for.
+
+Worth a look on a real session: the pencil's sway and the hand's wave at their extremes (the
+easing substitution), and a stage change from reading to editing (the restart).
+
+### Not done here
+
+`CodePalette` gained an `Ink` type so each colour is stated once and handed out as both a
+`Color` and a `CGColor`; `salmon`/`amber`/`green`/`red` are unchanged in name, value and
+space (sRGB). Nothing outside `CodeAgentFeature/Views/` and its tests was edited — A12's
+session ring and usage bars, and everything in Part B, are still open.

@@ -1,5 +1,6 @@
 import AppKit
 import CodeAgentShared
+import IslandCore
 import SwiftUI
 
 /// What the agent is *doing*, as one word — the thing the compact island's 56 pt
@@ -237,42 +238,84 @@ struct ActivityGlyph: View {
 
     @ViewBuilder
     private var content: some View {
-        if GlyphMotion.isReduced {
+        switch Self.drawing(for: kind, reduced: GlyphMotion.isReduced) {
+        case .looping(let layerKind):
+            // All four looping kinds share this branch, so they would otherwise share one
+            // view identity — and one `GlyphLayerView`, whose layer tree is built once. The
+            // id both separates them and, within a kind, holds the loop steady through the
+            // island's re-renders, which is what the timelines used to buy for free.
+            LoopingGlyph(kind: layerKind, size: size)
+                .id(layerKind)
+        case .dots(let animated):
+            ThinkingDots(isAnimating: animated)
+        case .still(let symbol):
+            Image(systemName: symbol)
+                .font(.system(size: size * GlyphSpec.symbolScale, weight: .semibold))
+                .foregroundStyle(kind.color)
+        case .completed:
+            CompletedGlyph(size: size)
+        case .failed:
+            FailedGlyph(size: size)
+        case .nothing:
+            EmptyView()
+        }
+    }
+
+    /// What ``content`` draws, as a value.
+    ///
+    /// Split out so the one decision Reduce Motion makes here is testable without a renderer:
+    /// under the setting nothing loops, every glyph that has an SF symbol falls back to it
+    /// still, and the dots — which have no symbol — draw themselves at rest.
+    enum Drawing: Hashable, Sendable {
+        /// One of the four working marks, looping on Core Animation.
+        case looping(GlyphLayerKind)
+        /// The thinking dots, moving or at rest.
+        case dots(animated: Bool)
+        /// A still SF symbol: what every looping glyph degrades to under Reduce Motion.
+        case still(symbol: String)
+        /// The two that play once and stop. Reduce Motion replaces them with their symbols.
+        case completed
+        case failed
+        case nothing
+    }
+
+    static func drawing(for kind: ActivityKind, reduced: Bool) -> Drawing {
+        if reduced {
             // The dots have no SF symbol to fall back to, so they draw themselves still.
-            if kind == .thinking {
-                ThinkingDots(isAnimating: false)
-            } else if let symbol = kind.symbol {
-                Image(systemName: symbol)
-                    .font(.system(size: size * 0.85, weight: .semibold))
-                    .foregroundStyle(kind.color)
-            }
-        } else {
-            switch kind {
-            case .editing: EditingGlyph(size: size)
-            case .reading: ReadingGlyph(size: size)
-            case .running: RunningGlyph(size: size)
-            case .waiting: WaitingGlyph(size: size)
-            case .completed: CompletedGlyph(size: size)
-            case .failed: FailedGlyph(size: size)
-            case .thinking: ThinkingDots()
-            case .idle: EmptyView()
-            }
+            if kind == .thinking { return .dots(animated: false) }
+            guard let symbol = kind.symbol else { return .nothing }
+            return .still(symbol: symbol)
+        }
+        switch kind {
+        case .editing: return .looping(.editing)
+        case .reading: return .looping(.reading)
+        case .running: return .looping(.running)
+        case .waiting: return .looping(.waiting)
+        case .completed: return .completed
+        case .failed: return .failed
+        case .thinking: return .dots(animated: true)
+        case .idle: return .nothing
         }
     }
 }
 
 // MARK: - Motion helpers
 
-/// The shared clock math behind the looping glyphs, and the one place Reduce Motion is
-/// consulted.
+/// The one place this feature consults Reduce Motion, and the definitions the glyph loops are
+/// shaped from.
 ///
-/// The loops are driven by the date `TimelineView(.animation)` hands out rather than by
-/// `repeatForever` animations: a repeating animation attached to a view that SwiftUI
-/// re-creates on every model change restarts mid-cycle, whereas a function of wall-clock
-/// time is continuous no matter how often the island re-renders.
+/// The four working glyphs no longer *call* the three functions below — they are
+/// ``GlyphLoop``s handed to Core Animation once, in `GlyphLayers.swift`, rather than bodies
+/// re-run at display rate. The functions stay because they are the statement of what each loop
+/// is: a ramp, a wave, a blink, on a named period. The tests hold the Core Animation
+/// parameters against them, which is the only way the two halves can be kept honest.
 @MainActor
 enum GlyphMotion {
-    static var isReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Live, not sampled: ``MotionSettings`` is `@Observable` and refreshes from one workspace
+    /// notification, so a view that reads this while building its body is re-drawn the moment
+    /// the user turns Reduce Motion on — which the old direct `NSWorkspace` read only managed
+    /// because every glyph happened to be re-drawing every frame anyway.
+    static var isReduced: Bool { MotionSettings.shared.isReduced }
 
     /// `0 → 1`, restarting every `period` seconds. The "grows then resets" ramp.
     static func phase(_ date: Date, period: Double) -> Double {
@@ -302,14 +345,13 @@ enum GlyphMotion {
 /// minutes at a time. Fixed points rather than multiples of `size`: at 3 pt a dot is already
 /// at the floor of what renders as a circle, so the header and the compact slot draw the
 /// same one.
-/// Unlike the other glyphs these dots are driven by Core Animation — one `repeatForever`
-/// offset per dot, started once on appear — rather than by `TimelineView(.animation)`.
-/// Thinking is the state a session spends most of its life in, and a timeline redraws the
-/// whole island's SwiftUI body every frame for as long as it is on screen: minutes of
-/// display-rate re-renders for three 3 pt circles. A repeating animation is handed to the
-/// render server once and costs nothing per frame. The other glyphs keep their timelines:
-/// each is on screen for a tool call or two, and their shapes are functions of time that
-/// no animatable property could express.
+/// These dots are driven by Core Animation — one `repeatForever` offset per dot, started once
+/// on appear. Thinking is the state a session spends most of its life in, and a
+/// `TimelineView(.animation)` redraws the whole island's SwiftUI body every frame for as long
+/// as it is on screen: minutes of display-rate re-renders for three 3 pt circles. A repeating
+/// animation is handed to the render server once and costs nothing per frame. The dots were
+/// the first glyph to work this way and are the model the other four now follow (see
+/// `GlyphLayers.swift`), which is the same argument applied to the rest of a session.
 struct ThinkingDots: View {
     var isAnimating: Bool = true
 
@@ -368,131 +410,11 @@ struct ThinkingDots: View {
     }
 }
 
-/// A tilted pencil sliding back and forth over a salmon underline that writes itself.
-private struct EditingGlyph: View {
-    let size: CGFloat
-
-    private static let swayPeriod: Double = 0.9
-    private static let sway: CGFloat = 3
-    private static let writePeriod: Double = 1.4
-    /// The last quarter of the write loop is the fade, so the line never snaps away.
-    private static let fadeStart: Double = 0.75
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let written = GlyphMotion.phase(context.date, period: Self.writePeriod)
-            VStack(spacing: 1.5) {
-                Image(systemName: "pencil")
-                    .font(.system(size: size * 0.85, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .rotationEffect(.degrees(-25))
-                    .offset(x: GlyphMotion.wave(context.date, period: Self.swayPeriod) * Self.sway)
-                    .frame(height: size)
-                underline(written: written)
-            }
-        }
-    }
-
-    private func underline(written: Double) -> some View {
-        let full = size * 1.2
-        let opacity = written < Self.fadeStart
-            ? 1
-            : 1 - (written - Self.fadeStart) / (1 - Self.fadeStart)
-        return HStack(spacing: 0) {
-            Capsule()
-                .fill(CodePalette.salmon)
-                .frame(width: full * written, height: 1.5)
-                .opacity(opacity)
-            Spacer(minLength: 0)
-        }
-        .frame(width: full)
-    }
-}
-
-/// A magnifier scanning left and right along a faint line.
-private struct ReadingGlyph: View {
-    let size: CGFloat
-
-    private static let period: Double = 1.2
-    private static let travel: CGFloat = 4
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            VStack(spacing: 1.5) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: size * 0.85, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .offset(x: GlyphMotion.wave(context.date, period: Self.period) * Self.travel)
-                    .frame(height: size)
-                Capsule()
-                    .fill(.white.opacity(0.25))
-                    .frame(width: size * 1.2, height: 1)
-            }
-        }
-    }
-}
-
-/// A terminal window typing a line, with a blinking cursor after it.
-private struct RunningGlyph: View {
-    let size: CGFloat
-
-    private static let typePeriod: Double = 1.2
-    private static let blinkPeriod: Double = 0.5
-
-    /// The 14 × 10 frame of the spec, expressed against the type size so the glyph still
-    /// fits when the header renders it a point smaller than the compact slot does.
-    private var frameWidth: CGFloat { size * 1.08 }
-    private var frameHeight: CGFloat { size * 0.77 }
-    private var cursorHeight: CGFloat { frameHeight * 0.6 }
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let typed = GlyphMotion.phase(context.date, period: Self.typePeriod)
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .stroke(.white, lineWidth: 1)
-                .frame(width: frameWidth, height: frameHeight)
-                .overlay(alignment: .leading) {
-                    HStack(spacing: 1) {
-                        Text(">")
-                            .font(.system(size: frameHeight * 0.62, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white)
-                        Capsule()
-                            .fill(.white)
-                            // Sized so prompt, line and cursor still clear the right-hand
-                            // stroke when the line is fully typed.
-                            .frame(width: (frameWidth * 0.3) * typed, height: 1)
-                        Rectangle()
-                            .fill(.white)
-                            .frame(width: 1, height: cursorHeight)
-                            .opacity(GlyphMotion.blink(context.date, period: Self.blinkPeriod) ? 1 : 0)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.leading, 1.5)
-                    .frame(width: frameWidth, height: frameHeight)
-                }
-        }
-    }
-}
-
-/// A raised hand waving from the wrist.
-private struct WaitingGlyph: View {
-    let size: CGFloat
-
-    private static let period: Double = 0.8
-    private static let tilt: Double = 12
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: size * 0.85, weight: .semibold))
-                .foregroundStyle(CodePalette.amber)
-                // From the wrist, not the middle of the palm: rotating around the centre
-                // reads as a spin rather than a wave.
-                .rotationEffect(.degrees(GlyphMotion.wave(context.date, period: Self.period) * Self.tilt),
-                                anchor: .bottom)
-        }
-    }
-}
+// The four working glyphs — the pencil, the magnifier, the terminal and the raised hand —
+// live in `GlyphLayers.swift`. They used to be four `TimelineView(.animation)` bodies here,
+// which is to say four SwiftUI graphs re-evaluated at display rate for as long as an agent
+// worked; they are now `CALayer`s with repeating animations, reached through ``LoopingGlyph``.
+// Their shapes, sizes, colours, periods and easing are unchanged and now pinned by tests.
 
 /// A checkmark that draws itself once, when the session finishes.
 private struct CompletedGlyph: View {
