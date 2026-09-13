@@ -15,6 +15,9 @@ public struct SurfaceView: View {
     /// after `body`, so the value read while building `body` is genuinely the previous one.
     /// It feeds nothing but the choice of curve, so the extra update it schedules is inert.
     @State private var previousLayout: IslandLayout?
+    /// The card `body` last drew, tracked the same way and for the same reason: a page
+    /// turn is told from a grow by *identity*, not by size.
+    @State private var previousPresentationID: PresentationID?
 
     public init(presenter: IslandPresenter, geometry: NotchGeometry, choreographer: TransitionChoreographer) {
         self.presenter = presenter
@@ -27,7 +30,19 @@ public struct SurfaceView: View {
         let layout = IslandLayout.resolve(state: presenter.state, current: current, geometry: geometry)
         // The notch itself is the floor: the black shape may cover it, never sit inside it.
         let floor = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
-        let animation = choreographer.geometryAnimation(from: previousLayout, to: layout)
+        let presentationChanged = previousPresentationID != current?.id
+        let kind = TransitionChoreographer.kind(
+            from: previousLayout,
+            to: layout,
+            presentationChanged: presentationChanged
+        )
+        let animation = choreographer.geometryAnimation(
+            from: previousLayout,
+            to: layout,
+            presentationChanged: presentationChanged
+        )
+        // A swipe, and only a swipe, gives content an axis to travel along.
+        let pageDirection = kind == .pageChange ? presenter.cycleDirection(arrivingAt: current?.id) : nil
 
         ZStack(alignment: .top) {
             NotchShape(topRadius: layout.topRadius, bottomRadius: layout.bottomRadius)
@@ -45,7 +60,7 @@ public struct SurfaceView: View {
                 .contextMenu { CardsMenuSection(presenter: presenter) }
                 .overlay(alignment: .trailing) { stackDots(layout: layout, current: current) }
 
-            content(layout: layout, current: current)
+            content(layout: layout, current: current, pageDirection: pageDirection)
                 .islandFrame(size: layout.size, minimum: floor, alignment: .top)
                 .clipShape(NotchShape(topRadius: 0, bottomRadius: layout.bottomRadius))
                 // Features whose expanded view reproduces the peek's geometry need the
@@ -56,6 +71,7 @@ public struct SurfaceView: View {
         .animation(animation, value: layout)
         .animation(animation, value: presenter.state)
         .onChange(of: layout, initial: true) { _, new in previousLayout = new }
+        .onChange(of: current?.id, initial: true) { _, new in previousPresentationID = new }
     }
 
     /// Content enters and leaves on its own curves, not on the geometry spring: the
@@ -66,8 +82,21 @@ public struct SurfaceView: View {
     /// Both curves start in the same frame as the shape and overlap it — no delay on the
     /// way in, no early exit on the way out. Content that waits for the shape, or leaves
     /// before it, is what makes the island read as two objects instead of one.
-    private var contentTransition: AnyTransition {
-        let motion = IslandContentMotion.unfold(isReduced: choreographer.isReduced)
+    /// A page turn is the exception: both sides ride one curve — the same one in both
+    /// directions, because a page turn is one gesture — and slide along the swipe's axis
+    /// *inside the island's own clip*, so content passes under the island's edge instead
+    /// of a panel arriving from outside it.
+    private func contentTransition(pageDirection: IslandPresenter.CycleDirection?) -> AnyTransition {
+        let isReduced = choreographer.isReduced
+        if let pageDirection {
+            return .asymmetric(
+                insertion: .islandContent(.page(pageDirection, inserting: true, isReduced: isReduced))
+                    .animation(choreographer.pageChange),
+                removal: .islandContent(.page(pageDirection, inserting: false, isReduced: isReduced))
+                    .animation(choreographer.pageChange)
+            )
+        }
+        let motion = IslandContentMotion.unfold(isReduced: isReduced)
         return .asymmetric(
             insertion: .islandContent(motion).animation(choreographer.contentIn),
             removal: .islandContent(motion).animation(choreographer.contentOut)
@@ -114,7 +143,12 @@ public struct SurfaceView: View {
     private static let dotInset: CGFloat = 6
 
     @ViewBuilder
-    private func content(layout: IslandLayout, current: Presentation?) -> some View {
+    private func content(
+        layout: IslandLayout,
+        current: Presentation?,
+        pageDirection: IslandPresenter.CycleDirection?
+    ) -> some View {
+        let contentTransition = contentTransition(pageDirection: pageDirection)
         switch layout.mode {
         case .collapsed:
             Color.clear

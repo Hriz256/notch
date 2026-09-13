@@ -11,6 +11,11 @@ public struct TransitionChoreographer: Sendable {
     /// that buys is harmless, because `IslandFrame.clamped` floors every interpolated
     /// frame at the notch, so the island can never be drawn inside the hardware.
     public var collapseGeometry: Animation = Spring.collapse.animation
+    /// Turning a page of the card stack. Neither a grow nor a collapse: the two
+    /// directions of one gesture have to feel the same, and judging a swipe by whether
+    /// the new card happens to be taller made a leftward flick bouncy and a rightward one
+    /// flat.
+    public var pageChange: Animation = Spring.pageChange.animation
     /// Content arriving. A spring, never delayed: the shape and its content start in the
     /// same frame, or the island reads as a box that fills up afterwards. Quicker than the
     /// geometry spring (rule 2 of the audit's yardstick) but overlapping it, not sequenced
@@ -40,6 +45,9 @@ public struct TransitionChoreographer: Sendable {
         /// Shrinking: the same gesture, ~0.8× the response, flat enough not to bounce but
         /// fast enough to arrive. `IslandFrame.clamped` keeps the undershoot honest.
         public static let collapse = Spring(response: 0.30, damping: 0.92)
+        /// A page turn: between the two, closer to the grow, and the same in both
+        /// directions.
+        public static let pageChange = Spring(response: 0.34, damping: 0.86)
         public static let contentIn = Spring(response: 0.26, damping: 0.9)
         public static let contentOut = Spring(response: 0.22, damping: 1.0)
     }
@@ -47,6 +55,7 @@ public struct TransitionChoreographer: Sendable {
     public static let standard = TransitionChoreographer(
         geometry: Spring.grow.animation,
         collapseGeometry: Spring.collapse.animation,
+        pageChange: Spring.pageChange.animation,
         contentIn: Spring.contentIn.animation,
         contentOut: Spring.contentOut.animation,
         isReduced: false
@@ -55,15 +64,47 @@ public struct TransitionChoreographer: Sendable {
     public static let reducedMotion = TransitionChoreographer(
         geometry: .easeInOut(duration: 0.2),
         collapseGeometry: .easeInOut(duration: 0.2),
+        pageChange: .easeInOut(duration: 0.2),
         contentIn: .easeInOut(duration: 0.2),
         contentOut: .easeInOut(duration: 0.15),
         isReduced: true
     )
 
-    /// The curve for `previous -> next`: collapse when the island never grows on either axis.
-    func geometryAnimation(from previous: IslandLayout?, to next: IslandLayout) -> Animation {
-        guard let previous, previous.shrinks(to: next) else { return geometry }
-        return collapseGeometry
+    /// What kind of move the island is making, which is what picks its curve.
+    public enum Kind: Sendable, Equatable {
+        case grow
+        case collapse
+        /// A different card taking the island without the island changing mode — a swipe
+        /// through the stack, or an alert replacing another alert.
+        case pageChange
+    }
+
+    /// Pure classification of `previous -> next`.
+    ///
+    /// A page turn is judged first and by identity, not by size: two cards of the same
+    /// width and different heights made one direction of a swipe a grow and the other a
+    /// collapse, which is the same gesture behaving two ways.
+    public static func kind(
+        from previous: IslandLayout?,
+        to next: IslandLayout,
+        presentationChanged: Bool
+    ) -> Kind {
+        guard let previous else { return .grow }
+        if presentationChanged, previous.mode == next.mode, next.mode != .collapsed { return .pageChange }
+        return previous.shrinks(to: next) ? .collapse : .grow
+    }
+
+    /// The curve for `previous -> next`.
+    func geometryAnimation(
+        from previous: IslandLayout?,
+        to next: IslandLayout,
+        presentationChanged: Bool = false
+    ) -> Animation {
+        switch Self.kind(from: previous, to: next, presentationChanged: presentationChanged) {
+        case .grow: geometry
+        case .collapse: collapseGeometry
+        case .pageChange: pageChange
+        }
     }
 
     @MainActor
@@ -97,6 +138,13 @@ public struct IslandContentMotion: Equatable, Sendable {
     public static let unfoldRise: CGFloat = 4
     public static let unfoldBlur: CGFloat = 2.5
 
+    /// How far content travels sideways on a page turn, in points.
+    ///
+    /// Deliberately small, and drawn inside the island's own `clipShape`: content slides
+    /// under the island's edge rather than a panel sliding in from outside, which is the
+    /// "separate shape" look. 14 pt is far below where that appears.
+    public static let pageSlide: CGFloat = 14
+
     /// Content unfolding out of the notch with the shape.
     public static func unfold(isReduced: Bool) -> IslandContentMotion {
         guard !isReduced else { return .still }
@@ -105,6 +153,21 @@ public struct IslandContentMotion: Equatable, Sendable {
             offset: CGSize(width: 0, height: -unfoldRise),
             blur: unfoldBlur
         )
+    }
+
+    /// Content moving along the axis of a swipe: the next card comes from the right and
+    /// the outgoing one leaves to the left, and the other way round for a backward swipe.
+    ///
+    /// Offset only — a page turn is not a grow, so nothing scales and nothing blurs.
+    public static func page(
+        _ direction: IslandPresenter.CycleDirection,
+        inserting: Bool,
+        isReduced: Bool
+    ) -> IslandContentMotion {
+        guard !isReduced else { return .still }
+        let forward = direction == .next
+        let sign: CGFloat = (forward == inserting) ? 1 : -1
+        return IslandContentMotion(scale: 1, offset: CGSize(width: sign * pageSlide, height: 0), blur: 0)
     }
 }
 

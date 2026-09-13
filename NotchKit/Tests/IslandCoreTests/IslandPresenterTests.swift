@@ -364,6 +364,48 @@ struct IslandPresenterTests {
         #expect(p.state == .peek(a.id))
     }
 
+    @Test func cycleRecordsWhichWayTheUserSwiped() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        #expect(p.cycleDirection(arrivingAt: a.id) == nil)
+        p.cycle(.next)
+        // A two-card stack cycles to the same card either way, so the direction — not the
+        // index delta — is the only thing that can tell a left flick from a right one.
+        #expect(p.cycleDirection(arrivingAt: a.id) == .next)
+        p.cycle(.previous)
+        #expect(p.cycleDirection(arrivingAt: b.id) == .previous)
+    }
+
+    @Test func onlyTheCardTheSwipeAskedForInheritsItsDirection() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.cycle(.next)
+        #expect(p.cycleDirection(arrivingAt: a.id) == .next)
+        // An alert borrowing the island does not arrive on the swipe's axis.
+        #expect(p.cycleDirection(arrivingAt: b.id) == nil)
+        #expect(p.cycleDirection(arrivingAt: nil) == nil)
+    }
+
+    @Test func pickingACardByNameHasNoDirection() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.cycle(.next)
+        p.pin(b.id)
+        #expect(p.cycleDirection(arrivingAt: b.id) == nil)
+        p.cycle(.next)
+        p.unpin()
+        #expect(p.lastCycle == nil)
+    }
+
     @Test func transientAlertStillWinsOverPin() {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a")

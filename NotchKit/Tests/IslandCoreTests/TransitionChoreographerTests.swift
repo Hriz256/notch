@@ -84,6 +84,85 @@ struct GeometrySpringTests {
     }
 }
 
+/// A page turn is neither a grow nor a collapse, and it has a direction.
+struct PageChangeTests {
+    typealias Spring = TransitionChoreographer.Spring
+
+    private func layout(_ size: CGSize, mode: IslandLayout.Mode) -> IslandLayout {
+        IslandLayout(mode: mode, size: size, topRadius: 12, bottomRadius: 24)
+    }
+
+    private var tall: IslandLayout { layout(CGSize(width: 380, height: 170), mode: .expanded) }
+    private var short: IslandLayout { layout(CGSize(width: 380, height: 124), mode: .expanded) }
+    private var peek: IslandLayout { layout(CGSize(width: 312, height: 38), mode: .peek) }
+    private var collapsed: IslandLayout { layout(CGSize(width: 200, height: 38), mode: .collapsed) }
+
+    @Test func bothDirectionsOfASwipeGetTheSameCurve() {
+        // Code 380x170 -> stash 380x124 used to be judged a collapse, and the same swipe
+        // back a grow: one gesture, two feels.
+        let c = TransitionChoreographer.standard
+        #expect(TransitionChoreographer.kind(from: tall, to: short, presentationChanged: true) == .pageChange)
+        #expect(TransitionChoreographer.kind(from: short, to: tall, presentationChanged: true) == .pageChange)
+        #expect(c.geometryAnimation(from: tall, to: short, presentationChanged: true) == c.pageChange)
+        #expect(c.geometryAnimation(from: short, to: tall, presentationChanged: true) == c.pageChange)
+        #expect(c.pageChange == Spring.pageChange.animation)
+    }
+
+    @Test func changingModeIsStillAGrowOrACollapse() {
+        // Hovering a different card at the same moment is an expansion, not a page turn.
+        #expect(TransitionChoreographer.kind(from: peek, to: tall, presentationChanged: true) == .grow)
+        #expect(TransitionChoreographer.kind(from: tall, to: peek, presentationChanged: true) == .collapse)
+        // And an island going away is a collapse however its card changed.
+        #expect(TransitionChoreographer.kind(from: peek, to: collapsed, presentationChanged: true) == .collapse)
+    }
+
+    @Test func theSameCardResizingIsNotAPageTurn() {
+        #expect(TransitionChoreographer.kind(from: tall, to: short, presentationChanged: false) == .collapse)
+        #expect(TransitionChoreographer.kind(from: short, to: tall, presentationChanged: false) == .grow)
+        #expect(TransitionChoreographer.kind(from: nil, to: tall, presentationChanged: true) == .grow)
+    }
+
+    @Test func thePageCurveSitsBetweenTheGrowAndTheCollapse() {
+        #expect(Spring.pageChange.response < Spring.grow.response)
+        #expect(Spring.pageChange.response > Spring.collapse.response)
+    }
+
+    @Test func contentSlidesAlongTheAxisOfTheGesture() {
+        let inNext = IslandContentMotion.page(.next, inserting: true, isReduced: false)
+        let outNext = IslandContentMotion.page(.next, inserting: false, isReduced: false)
+        // Forward: the new card comes from the right, the old one leaves to the left.
+        #expect(inNext.offset.width == 14)
+        #expect(outNext.offset.width == -14)
+        // Backward is the mirror image, exactly.
+        #expect(IslandContentMotion.page(.previous, inserting: true, isReduced: false).offset.width == -14)
+        #expect(IslandContentMotion.page(.previous, inserting: false, isReduced: false).offset.width == 14)
+    }
+
+    @Test func aPageTurnOnlyTranslates() {
+        // No scale, no blur, no vertical move: content is not growing out of the notch,
+        // it is sliding past the one already there.
+        for direction in [IslandPresenter.CycleDirection.next, .previous] {
+            for inserting in [true, false] {
+                let motion = IslandContentMotion.page(direction, inserting: inserting, isReduced: false)
+                #expect(motion.scale == 1)
+                #expect(motion.blur == 0)
+                #expect(motion.offset.height == 0)
+            }
+        }
+    }
+
+    @Test func theSlideStaysUnderTheIslandsEdge() {
+        // Small enough to read as content moving inside the island rather than a panel
+        // sliding in from outside it — the "separate shape" the owner rejected.
+        #expect(IslandContentMotion.pageSlide <= 16)
+    }
+
+    @Test func reduceMotionSwipesWithoutMoving() {
+        #expect(IslandContentMotion.page(.next, inserting: true, isReduced: true) == .still)
+        #expect(IslandContentMotion.page(.previous, inserting: false, isReduced: true) == .still)
+    }
+}
+
 /// Content has to arrive the way the shape does: out of the notch, at the top.
 struct ContentMotionTests {
     @Test func contentUnfoldsFromUnderTheNotch() {

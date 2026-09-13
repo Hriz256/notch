@@ -19,7 +19,27 @@ public final class IslandPresenter: IslandPresenting {
     /// leaves `stack`.
     public private(set) var pinnedID: PresentationID?
 
-    public enum CycleDirection: Sendable { case next, previous }
+    public enum CycleDirection: Sendable, Equatable { case next, previous }
+
+    /// The card a swipe asked for, and which way the user swiped to get it.
+    ///
+    /// Kept as a pair rather than a bare direction so it cannot go stale: the surface uses
+    /// it only while the card it names is the one arriving, so an alert borrowing the
+    /// island, or a feature re-presenting its card a second later, never inherits the
+    /// direction of an older swipe.
+    public struct CycleIntent: Sendable, Equatable {
+        public let id: PresentationID
+        public let direction: CycleDirection
+    }
+
+    public private(set) var lastCycle: CycleIntent?
+
+    /// Which way content should travel for the card now taking the island, or `nil` when it
+    /// did not arrive by a swipe (a menu pick, an alert, a feature presenting itself).
+    public func cycleDirection(arrivingAt id: PresentationID?) -> CycleDirection? {
+        guard let id, let lastCycle, lastCycle.id == id else { return nil }
+        return lastCycle.direction
+    }
 
     /// Carries the whole card-selection trail — cycle, pin, unpin — under one category, so
     /// `log stream --predicate 'category == "surface.cards"'` shows what the island is
@@ -210,6 +230,11 @@ public final class IslandPresenter: IslandPresenting {
         let offset = direction == .next ? 1 : stack.count - 1
         let id = stack[(index + offset) % stack.count].id
         pinnedID = id
+        // The surface reads this to slide the content along the axis of the gesture. It
+        // has to be the *direction*, not the index delta: a two-card stack cycles to the
+        // same card either way, and a left flick that looks like a right one is the
+        // feedback the swipe has never had.
+        lastCycle = CycleIntent(id: id, direction: direction)
         logger.info("cycle \(direction == .next ? "next" : "previous", privacy: .public) → pinned \(id.description, privacy: .public)")
         queueDidChange()
     }
@@ -222,6 +247,8 @@ public final class IslandPresenter: IslandPresenting {
     public func pin(_ id: PresentationID) {
         guard pinnedID != id, stack.contains(where: { $0.id == id }) else { return }
         pinnedID = id
+        // Picked by name, not by gesture: there is no axis to slide along.
+        if lastCycle != nil { lastCycle = nil }
         logger.info("pin → pinned \(id.description, privacy: .public)")
         queueDidChange()
     }
@@ -230,6 +257,7 @@ public final class IslandPresenter: IslandPresenting {
     public func unpin() {
         guard pinnedID != nil else { return }
         pinnedID = nil
+        if lastCycle != nil { lastCycle = nil }
         logger.info("unpin")
         queueDidChange()
     }
