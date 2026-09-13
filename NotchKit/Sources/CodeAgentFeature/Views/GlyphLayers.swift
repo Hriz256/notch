@@ -189,10 +189,15 @@ struct GlyphLayerRepresentable: NSViewRepresentable {
         GlyphLayerView(kind: kind, size: size, animates: animates)
     }
 
-    /// The artwork never changes — only whether it is allowed to move. A live Reduce Motion
-    /// toggle therefore stops the loops without rebuilding a layer.
+    /// All three inputs are handed over, not just `animates`.
+    ///
+    /// SwiftUI reuses an `NSView` whenever the representable keeps its identity, so nothing
+    /// but this call tells the view that the kind or the type size changed — and a layer tree
+    /// is built against both. `.id(layerKind)` on ``LoopingGlyph`` still gives each kind a
+    /// clean restart, but it cannot cover `size`, and a view that trusted it would draw the
+    /// compact slot's 13 pt glyph in the header's 12 pt box.
     func updateNSView(_ nsView: GlyphLayerView, context: Context) {
-        nsView.animates = animates
+        nsView.update(kind: kind, size: size, animates: animates)
     }
 }
 
@@ -205,9 +210,14 @@ struct GlyphLayerRepresentable: NSViewRepresentable {
 /// has left its window still burns CPU with an animation attached, so leaving a window strips
 /// them outright rather than trusting anything downstream to stop drawing.
 final class GlyphLayerView: NSView {
-    /// Every loop this glyph owns, and where it goes. Built once, in `init`.
-    private let bindings: [GlyphLoopBinding]
-    private let boxSize: CGSize
+    /// What is drawn. A change to either is different artwork — the layers are laid out
+    /// against the box the type size implies — so both are held and compared in ``update``.
+    private(set) var kind: GlyphLayerKind
+    private(set) var size: CGFloat
+    /// The box every glyph shares at this type size.
+    private(set) var boxSize: CGSize
+    /// Every loop this glyph owns, and where it goes. Replaced whenever the tree is rebuilt.
+    private var bindings: [GlyphLoopBinding] = []
 
     /// Whether the loops may run at all. Written by `updateNSView`.
     var animates: Bool {
@@ -218,22 +228,18 @@ final class GlyphLayerView: NSView {
     }
 
     init(kind: GlyphLayerKind, size: CGFloat, animates: Bool) {
+        self.kind = kind
+        self.size = size
         self.animates = animates
-        boxSize = CGSize(
-            width: ActivityGlyph.boxWidth(for: size),
-            height: ActivityGlyph.boxHeight(for: size)
-        )
-        let built = GlyphLayerBuilder.build(kind: kind, size: size, box: boxSize)
-        bindings = built.bindings
+        boxSize = Self.box(for: size)
         super.init(frame: CGRect(origin: .zero, size: boxSize))
 
         wantsLayer = true
         layer?.masksToBounds = false
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for sublayer in built.layers { layer?.addSublayer(sublayer) }
-        CATransaction.commit()
-        applyContentsScale()
+        // ``ActivityGlyph`` already labels the glyph on the SwiftUI side; a second element
+        // here would put an unlabelled child inside it.
+        setAccessibilityElement(false)
+        rebuild()
     }
 
     @available(*, unavailable)
@@ -241,7 +247,52 @@ final class GlyphLayerView: NSView {
         fatalError("GlyphLayerView is built in code, never from a nib")
     }
 
+    static func box(for size: CGFloat) -> CGSize {
+        CGSize(
+            width: ActivityGlyph.boxWidth(for: size),
+            height: ActivityGlyph.boxHeight(for: size)
+        )
+    }
+
     override var intrinsicContentSize: NSSize { boxSize }
+
+    /// Decoration, and nothing else: clicks belong to the island underneath.
+    ///
+    /// The SwiftUI shapes this replaced were not in the responder chain at all. An `NSView`
+    /// is, over the whole of its frame — which here is the glyph's box, most of it empty —
+    /// so without this the trailing peek slot would swallow the tap that promotes the island
+    /// and the right-click that opens the Code menu.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// The whole of `updateNSView`.
+    ///
+    /// Reduce Motion only stops the loops. A different kind or a different type size is
+    /// different artwork, and SwiftUI hands the same view over for both.
+    func update(kind: GlyphLayerKind, size: CGFloat, animates: Bool) {
+        self.animates = animates
+        guard kind != self.kind || size != self.size else { return }
+        self.kind = kind
+        self.size = size
+        boxSize = Self.box(for: size)
+        rebuild()
+    }
+
+    /// Throws the tree away and builds it again, loops and all.
+    private func rebuild() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for binding in bindings { binding.layer.removeAnimation(forKey: binding.key) }
+        layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+        let built = GlyphLayerBuilder.build(kind: kind, size: size, box: boxSize)
+        bindings = built.bindings
+        for sublayer in built.layers { layer?.addSublayer(sublayer) }
+        CATransaction.commit()
+
+        setFrameSize(boxSize)
+        invalidateIntrinsicContentSize()
+        applyContentsScale()
+        refreshLoops()
+    }
 
     /// The whole off-screen rule. Called when the view joins a window *and* when it leaves
     /// one, which is the only signal that matters here: SwiftUI tears the glyph out of the
@@ -302,6 +353,7 @@ struct GlyphLoopBinding {
 ///
 /// Every position below is the arithmetic the `VStack`/`HStack` it replaces was doing: stated
 /// here rather than inferred, because a layer has no layout system to ask.
+@MainActor
 enum GlyphLayerBuilder {
     static func build(
         kind: GlyphLayerKind,
@@ -581,13 +633,16 @@ enum GlyphLayerBuilder {
         hand.anchorPoint = CGPoint(x: 0.5, y: 0)
         hand.position = CGPoint(x: box.width / 2, y: (box.height - image.size.height) / 2)
 
+        // Both ends are converted from SwiftUI's degrees rather than one being derived from
+        // the other, so the clockwise/counter-clockwise flip is stated once and applies to
+        // the whole sweep — `abs()` here would have thrown the conversion away.
         let bind = GlyphLoopBinding(
             layer: hand,
             key: "wave",
             animation: waveAnimation(
                 keyPath: "transform.rotation.z",
-                centre: 0,
-                amplitude: abs(layerRadians(degrees: GlyphSpec.Waiting.tilt)),
+                from: layerRadians(degrees: GlyphSpec.Waiting.tilt),
+                to: layerRadians(degrees: -GlyphSpec.Waiting.tilt),
                 loop: GlyphSpec.Waiting.wave
             )
         )
@@ -598,7 +653,7 @@ enum GlyphLayerBuilder {
 // MARK: - The animations
 
 extension GlyphLayerBuilder {
-    /// A there-and-back on one property: `centre ± amplitude`, reversed rather than restarted.
+    /// A there-and-back on one property, reversed rather than restarted.
     ///
     /// `GlyphMotion.wave` is a sine. An autoreversing `easeInEaseOut` is the cubic that stands
     /// in for it — the same substitution ``ThinkingDots`` has always made, and at 3 and 4 pt of
@@ -609,9 +664,20 @@ extension GlyphLayerBuilder {
         amplitude: CGFloat,
         loop: GlyphLoop
     ) -> CABasicAnimation {
+        waveAnimation(
+            keyPath: keyPath, from: centre - amplitude, to: centre + amplitude, loop: loop
+        )
+    }
+
+    static func waveAnimation(
+        keyPath: String,
+        from: CGFloat,
+        to: CGFloat,
+        loop: GlyphLoop
+    ) -> CABasicAnimation {
         let animation = CABasicAnimation(keyPath: keyPath)
-        animation.fromValue = centre - amplitude
-        animation.toValue = centre + amplitude
+        animation.fromValue = from
+        animation.toValue = to
         animation.duration = loop.duration
         animation.timeOffset = loop.timeOffset
         animation.autoreverses = true
@@ -670,18 +736,28 @@ extension GlyphLayerBuilder {
 
     /// An SF symbol at the size and weight `.font(.system(size:weight:))` would have given it,
     /// tinted, since a layer has no foreground style to inherit.
+    ///
+    /// Cached: there are five of these in the whole feature, and they are rebuilt every time a
+    /// glyph's kind or type size changes, which is once per stage of every session.
     static func symbolImage(
         _ name: String,
         pointSize: CGFloat,
         weight: NSFont.Weight,
         color: NSColor
     ) -> NSImage? {
+        let key = SymbolKey(
+            name: name, pointSize: pointSize, weight: weight.rawValue, tint: InkKey(color)
+        )
+        if let cached = symbolImages[key] { return cached }
+
         let configuration = NSImage.SymbolConfiguration(
             pointSize: pointSize, weight: weight, scale: .medium
         )
         guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration) else { return nil }
         let size = symbol.size
+        // A drawing-handler image stays resolution independent, so one cached copy still draws
+        // sharp at whatever `contentsScale` the display asks for.
         let tinted = NSImage(size: size, flipped: false) { rect in
             symbol.draw(in: rect)
             color.set()
@@ -689,18 +765,67 @@ extension GlyphLayerBuilder {
             return true
         }
         tinted.isTemplate = false
+        symbolImages[key] = tinted
         return tinted
     }
 
     static func textImage(_ string: String, font: NSFont, color: NSColor) -> NSImage {
+        let key = TextKey(
+            string: string, font: font.fontName, pointSize: font.pointSize, tint: InkKey(color)
+        )
+        if let cached = textImages[key] { return cached }
+
         let text = NSAttributedString(
             string: string, attributes: [.font: font, .foregroundColor: color]
         )
         let measured = text.size()
         let size = NSSize(width: ceil(measured.width), height: ceil(measured.height))
-        return NSImage(size: size, flipped: true) { rect in
+        let image = NSImage(size: size, flipped: true) { rect in
             text.draw(in: rect)
             return true
+        }
+        textImages[key] = image
+        return image
+    }
+
+    // MARK: The caches
+
+    private static var symbolImages: [SymbolKey: NSImage] = [:]
+    private static var textImages: [TextKey: NSImage] = [:]
+
+    private struct SymbolKey: Hashable {
+        let name: String
+        let pointSize: CGFloat
+        let weight: CGFloat
+        let tint: InkKey
+    }
+
+    private struct TextKey: Hashable {
+        let string: String
+        let font: String
+        let pointSize: CGFloat
+        let tint: InkKey
+    }
+
+    /// A colour as something hashable. Every colour these glyphs use is a plain sRGB one; a
+    /// pattern colour, which has no components, would collapse to a single shared key, so it
+    /// is spelled out here rather than left to crash on `redComponent`.
+    private struct InkKey: Hashable {
+        let red: CGFloat
+        let green: CGFloat
+        let blue: CGFloat
+        let alpha: CGFloat
+
+        init(_ color: NSColor) {
+            guard let srgb = color.usingColorSpace(.sRGB) else {
+                // Out of the legal 0...1 range, so it can never collide with a real colour.
+                (red, green, blue, alpha) = (-1, -1, -1, -1)
+                return
+            }
+            red = srgb.redComponent
+            green = srgb.greenComponent
+            blue = srgb.blueComponent
+            alpha = srgb.alphaComponent
         }
     }
 

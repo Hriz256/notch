@@ -721,16 +721,30 @@ should fall towards the idle one, with the residue being the 1 Hz tick and whate
 window server charges to composite four small layers. **Not measured here: this branch never
 ran the app.** Worth confirming with a real session before the item is closed.
 
-### Reduce Motion, and the two rules that go with it
+### Reduce Motion, and the rules that go with it
 
 - `GlyphMotion.isReduced` now reads `IslandCore.MotionSettings.shared.isReduced` instead of
   `NSWorkspace` directly. One line, because `CodeAgentFeature` already depends on
   `IslandCore`. It is `@Observable`, so the setting is **live**: a view that reads it while
   building its body is re-drawn when the user turns Reduce Motion on. That matters more than
   it used to — the old direct read was only ever current because every glyph happened to be
-  re-drawing every frame anyway. `AgentIcon`'s thinking pulse inherits the fix. This is
-  A13's "standardise on one mechanism repo-wide", minus `DropZonesFeature`'s
-  `MotionPreference`, which was left alone.
+  re-drawing every frame anyway. This is A13's "standardise on one mechanism repo-wide",
+  minus `DropZonesFeature`'s `MotionPreference`, which was left alone.
+
+  **How far "live" actually reaches, since an earlier draft of this note overclaimed it.**
+  A live toggle reaches anything decided *while a body is being evaluated*, because that is
+  what `@Observable` tracks. So the glyph swap itself is live — `ActivityGlyph` picks the
+  still symbol on the next draw. It does **not** reach an animation that was started
+  imperatively from `onAppear` and has nothing tearing it down, which is exactly
+  `ThinkingDots`: each dot's `repeatForever` on `lifted` was committed once, the parent
+  re-renders with `animates: false`, and the dot keeps bobbing until something re-creates it.
+  Pre-existing, unchanged here, and worth a line in the backlog.
+
+  `AgentIcon` is the in-between case and reads as live to me: `pulses` is evaluated in its
+  body and is half of the `AnimationKey` its `.animation(_:value:)` is keyed on, so the
+  toggle changes the key, replaces the `repeatForever` with the `.easeOut(0.2)` branch, and
+  `onChange(of: pulses)` clears `dimmed`. I have not put that in front of a running app, so
+  it is reasoning about the code and not an observation.
 - Nothing loops under Reduce Motion: the choice is a pure function now,
   `ActivityGlyph.drawing(for:reduced:)`, tested over all eight kinds. The looping glyphs are
   never instantiated, *and* `GlyphLayerView` refuses to attach its animations — the same
@@ -739,6 +753,17 @@ ran the app.** Worth confirming with a real session before the item is closed.
 - **Off screen.** `GlyphLayerView.viewDidMoveToWindow` attaches the loops on the way in and
   removes them on the way out. A layer in a window-less view still costs CPU with an
   animation attached, so this is not left to the window server. Tested both ways.
+- **Clicks.** The glyph is decoration and `hitTest` returns `nil`. The SwiftUI shapes it
+  replaced were not in the responder chain at all; an `NSView` is, over the whole of its
+  frame — which here is the glyph's box, most of it empty — so without this the trailing peek
+  slot would have swallowed the tap that promotes the island and the right-click that opens
+  the Code menu. `setAccessibilityElement(false)` for the same reason on the other axis:
+  `ActivityGlyph` already labels the glyph, and a second element would sit unlabelled inside
+  it.
+- **Updating in place.** `updateNSView` hands over the kind *and* the type size, not just
+  Reduce Motion, and the tree is rebuilt when either changes. `.id(layerKind)` covers a stage
+  change and nothing else; the compact slot draws at 13 pt and the expanded header at 12, so
+  a view that trusted the id alone would have drawn one inside the other's box.
 
 ### The restart trade-off, and what to watch for
 
@@ -770,6 +795,19 @@ deliberate:
 
 Worth a look on a real session: the pencil's sway and the hand's wave at their extremes (the
 easing substitution), and a stage change from reading to editing (the restart).
+
+### Backlog this leaves behind
+
+- **An occluded or hidden window still animates four layers.** `viewDidMoveToWindow` is the
+  only gate, so a Code card that is presented but covered — or on a Space the user has left —
+  keeps its loops attached and the render server keeps compositing them. `NSWindow`'s
+  `occlusionState` (and its `didChangeOcclusionStateNotification`) would close that, and the
+  same gate would serve every other feature's loops. Cheap, but it belongs to the island
+  surface rather than to this glyph, so it is not done here.
+- **`ThinkingDots` does not react to a live Reduce Motion toggle** — see above. Pre-existing.
+  The fix is to stop driving it from `onAppear` alone: key the dots' animation on `animates`
+  the way `AgentIcon` keys its pulse, or move them to the same `CALayer` treatment the other
+  four now have.
 
 ### Not done here
 

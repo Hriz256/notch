@@ -204,26 +204,70 @@ struct GlyphLayerTests {
             // The whole point: handed over once, and never stopping on its own.
             #expect(binding.animation.repeatCount == .infinity)
             #expect(binding.animation.duration > 0)
+            // A wave begins half its forward leg in, so it starts at rest and moving rather
+            // than pinned at one extreme; a ramp begins where `GlyphMotion.phase` did.
+            let expected = binding.animation.autoreverses ? binding.animation.duration / 2 : 0
+            #expect(abs(binding.animation.timeOffset - expected) < 1e-12,
+                    "\(kind).\(binding.key) starts at the wrong point in its cycle")
+        }
+    }
+
+    @Test("The pencil sways ±3 pt on its position, on the ease an autoreversing SwiftUI loop uses")
+    func editingSwayAnimation() throws {
+        let box = Self.box(13)
+        let built = GlyphLayerBuilder.build(kind: .editing, size: 13, box: box)
+        let sway = try #require(
+            built.bindings.first { $0.key == "sway" }?.animation as? CABasicAnimation
+        )
+        // On `position`, not on the transform, so it composes with the −25° tilt the way
+        // SwiftUI's `.offset` after `.rotationEffect` did.
+        #expect(sway.keyPath == "position.x")
+        let from = try #require(sway.fromValue as? CGFloat)
+        let to = try #require(sway.toValue as? CGFloat)
+        #expect(abs((from + to) / 2 - box.width / 2) < 1e-9, "the sway is not centred in the box")
+        #expect(abs((to - from) / 2 - GlyphSpec.Editing.swayDistance) < 1e-9)
+
+        #expect(sway.autoreverses)
+        #expect(sway.duration == GlyphSpec.Editing.sway.duration)
+        #expect(Self.isEaseInEaseOut(sway.timingFunction))
+    }
+
+    @Test("Every wave eases in and out; every ramp is linear")
+    func timingFunctions() {
+        for kind in GlyphLayerKind.allCases {
+            let built = GlyphLayerBuilder.build(kind: kind, size: 13, box: Self.box(13))
+            for binding in built.bindings {
+                guard let basic = binding.animation as? CABasicAnimation else { continue }
+                if basic.autoreverses {
+                    #expect(Self.isEaseInEaseOut(basic.timingFunction),
+                            "\(kind).\(binding.key) is not eased")
+                } else {
+                    #expect(Self.isLinear(basic.timingFunction),
+                            "\(kind).\(binding.key) is not linear")
+                }
+            }
         }
     }
 
     @Test("The writing underline grows from nothing to the full rule, leftwards-anchored")
-    func editingWriteAnimation() {
-        let box = CGSize(width: ActivityGlyph.boxWidth(for: 13), height: ActivityGlyph.boxHeight(for: 13))
-        let built = GlyphLayerBuilder.build(kind: .editing, size: 13, box: box)
-        let write = try? #require(built.bindings.first { $0.key == "write" }?.animation as? CABasicAnimation)
-        #expect(write?.fromValue as? CGFloat == 0)
-        #expect(write?.toValue as? CGFloat == GlyphSpec.Editing.underlineWidth(size: 13))
-        #expect(write?.duration == GlyphSpec.Editing.write.duration)
+    func editingWriteAnimation() throws {
+        let built = GlyphLayerBuilder.build(kind: .editing, size: 13, box: Self.box(13))
+        let write = try #require(
+            built.bindings.first { $0.key == "write" }?.animation as? CABasicAnimation
+        )
+        #expect(write.fromValue as? CGFloat == 0)
+        #expect(write.toValue as? CGFloat == GlyphSpec.Editing.underlineWidth(size: 13))
+        #expect(write.duration == GlyphSpec.Editing.write.duration)
 
-        let underline = built.layers.first { $0.backgroundColor == CodePalette.salmonInk.cgColor }
-        #expect(underline?.anchorPoint == CGPoint(x: 0, y: 0.5))
+        let underline = try #require(
+            built.layers.first { $0.backgroundColor == CodePalette.salmonInk.cgColor }
+        )
+        #expect(underline.anchorPoint == CGPoint(x: 0, y: 0.5))
     }
 
     @Test("The terminal's cursor rides the same ramp as the line it follows")
     func runningCursorTracksTheLine() {
-        let box = CGSize(width: ActivityGlyph.boxWidth(for: 13), height: ActivityGlyph.boxHeight(for: 13))
-        let built = GlyphLayerBuilder.build(kind: .running, size: 13, box: box)
+        let built = GlyphLayerBuilder.build(kind: .running, size: 13, box: Self.box(13))
         let ramps = built.bindings.filter { $0.key == "type" }.compactMap { $0.animation as? CABasicAnimation }
         #expect(ramps.count == 2)
         // Same clock: the cursor was pushed along by the line's width inside an `HStack`, and
@@ -233,18 +277,22 @@ struct GlyphLayerTests {
         #expect(travelled.allSatisfy { abs($0 - GlyphSpec.Running.lineWidth(size: 13)) < 1e-9 })
     }
 
-    @Test("The hand turns about its wrist, not its middle")
-    func waitingAnchor() {
-        let box = CGSize(width: ActivityGlyph.boxWidth(for: 13), height: ActivityGlyph.boxHeight(for: 13))
-        let built = GlyphLayerBuilder.build(kind: .waiting, size: 13, box: box)
+    @Test("The hand turns about its wrist, not its middle, and both ends of the sweep are converted")
+    func waitingAnchor() throws {
+        let built = GlyphLayerBuilder.build(kind: .waiting, size: 13, box: Self.box(13))
         // `.bottom` in SwiftUI is `(0.5, 0)` in a y-up layer.
         #expect(built.layers.first?.anchorPoint == CGPoint(x: 0.5, y: 0))
 
-        let wave = built.bindings.first?.animation as? CABasicAnimation
-        #expect(wave?.keyPath == "transform.rotation.z")
-        let amplitude = GlyphSpec.Waiting.tilt * .pi / 180
-        #expect(abs((wave?.toValue as? CGFloat ?? 0) - CGFloat(amplitude)) < 1e-9)
-        #expect(abs((wave?.fromValue as? CGFloat ?? 0) + CGFloat(amplitude)) < 1e-9)
+        let wave = try #require(built.bindings.first?.animation as? CABasicAnimation)
+        #expect(wave.keyPath == "transform.rotation.z")
+        // SwiftUI's +12° is clockwise; a layer's is the other way, so `from` is the *negative*
+        // radian for the positive tilt. Both ends go through the same conversion — taking the
+        // magnitude of one and negating it would have dropped the flip silently.
+        #expect(wave.fromValue as? CGFloat == GlyphLayerBuilder.layerRadians(degrees: GlyphSpec.Waiting.tilt))
+        #expect(wave.toValue as? CGFloat == GlyphLayerBuilder.layerRadians(degrees: -GlyphSpec.Waiting.tilt))
+        let amplitude = CGFloat(GlyphSpec.Waiting.tilt * .pi / 180)
+        #expect(abs((wave.toValue as? CGFloat ?? 0) - amplitude) < 1e-9)
+        #expect(abs((wave.fromValue as? CGFloat ?? 0) + amplitude) < 1e-9)
     }
 
     // MARK: Off screen
@@ -261,12 +309,8 @@ struct GlyphLayerTests {
 
     @Test("Loops start when the glyph joins a window and stop the moment it leaves one")
     func loopsFollowTheWindow() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 64, height: 64),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: true
-        )
+        let window = Self.window()
+        defer { window.close() }
         let view = GlyphLayerView(kind: .running, size: 13, animates: true)
         window.contentView?.addSubview(view)
         #expect(view.attachedLoopCount == 3)
@@ -282,7 +326,93 @@ struct GlyphLayerTests {
         #expect(view.attachedLoopCount == 0)
     }
 
+    // MARK: Updating in place
+
+    /// SwiftUI hands the same view back for a different kind or a different type size, and
+    /// `.id(layerKind)` — which lives in another file and says nothing about `size` — is not
+    /// enough on its own. A glyph that ignored this would draw the compact slot's 13 pt
+    /// artwork inside the header's 12 pt box.
+    @Test("A different type size rebuilds the layer tree")
+    func updateRebuildsOnSize() throws {
+        let view = GlyphLayerView(kind: .editing, size: 13, animates: true)
+        #expect(view.intrinsicContentSize == GlyphLayerView.box(for: 13))
+        let before = try #require(view.layer?.sublayers?.last)
+        #expect(before.bounds.width == GlyphSpec.Editing.underlineWidth(size: 13))
+
+        view.update(kind: .editing, size: 12, animates: true)
+        #expect(view.size == 12)
+        #expect(view.intrinsicContentSize == GlyphLayerView.box(for: 12))
+        #expect(view.frame.size == GlyphLayerView.box(for: 12))
+        let after = try #require(view.layer?.sublayers?.last)
+        #expect(after.bounds.width == GlyphSpec.Editing.underlineWidth(size: 12))
+        #expect(after.bounds.width != before.bounds.width)
+    }
+
+    @Test("A different kind rebuilds the layer tree, and the old loops go with it")
+    func updateRebuildsOnKind() throws {
+        let window = Self.window()
+        defer { window.close() }
+        let view = GlyphLayerView(kind: .editing, size: 13, animates: true)
+        window.contentView?.addSubview(view)
+        #expect(view.attachedLoopCount == 3)
+        let stale = try #require(view.layer?.sublayers?.last)
+
+        view.update(kind: .waiting, size: 13, animates: true)
+        #expect(view.kind == .waiting)
+        // The hand is one layer, and the pencil's three loops are not still attached to
+        // layers nobody can see.
+        #expect(view.layer?.sublayers?.count == 1)
+        #expect(view.attachedLoopCount == 1)
+        #expect(stale.superlayer == nil)
+        #expect(stale.animationKeys()?.isEmpty ?? true)
+    }
+
+    @Test("An update that changes nothing but Reduce Motion keeps the artwork it has")
+    func updateKeepsTheTreeWhenOnlyMotionChanges() throws {
+        let view = GlyphLayerView(kind: .reading, size: 13, animates: true)
+        let before = try #require(view.layer?.sublayers?.first)
+        view.update(kind: .reading, size: 13, animates: false)
+        #expect(view.layer?.sublayers?.first === before)
+    }
+
     // MARK: Helpers
+
+    static func box(_ size: CGFloat) -> CGSize { GlyphLayerView.box(for: size) }
+
+    static func window() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 64, height: 64),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        // A window made in code is released when it is closed, which ARC then releases
+        // again: `close()` in a `defer` crashes the whole test process without this.
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    /// `CAMediaTimingFunction` has no equality, so its control points stand in for it.
+    static func matches(_ function: CAMediaTimingFunction?, _ name: CAMediaTimingFunctionName) -> Bool {
+        guard let function else { return false }
+        let expected = CAMediaTimingFunction(name: name)
+        for index in 0...3 {
+            var lhs = [Float](repeating: 0, count: 2)
+            var rhs = [Float](repeating: 0, count: 2)
+            function.getControlPoint(at: index, values: &lhs)
+            expected.getControlPoint(at: index, values: &rhs)
+            guard lhs == rhs else { return false }
+        }
+        return true
+    }
+
+    static func isEaseInEaseOut(_ function: CAMediaTimingFunction?) -> Bool {
+        matches(function, .easeInEaseOut)
+    }
+
+    static func isLinear(_ function: CAMediaTimingFunction?) -> Bool {
+        matches(function, .linear)
+    }
 
     /// Linear interpolation across a keyframe's stops — what Core Animation does with
     /// `calculationMode = .linear`.
