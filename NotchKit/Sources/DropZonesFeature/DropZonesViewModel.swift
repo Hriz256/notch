@@ -176,6 +176,14 @@ public final class DropZonesViewModel {
     /// the files nobody asked for leave the shelf and their bytes are only detached (see
     /// ``StashStore/detach(fileIDs:)``).
     public static let promiseSettleTimeout: Duration = .seconds(5)
+    /// How long after a drag-out detached a file the island sweeps the bytes it left on
+    /// disk: ``StashStore/orphanLifetime`` and a second, so the folder is just past the
+    /// store's own cut-off when the sweep looks at it.
+    ///
+    /// Without it the bytes would sit there until something else called
+    /// ``StashStore/load()`` — the next drop, the next launch — which on a machine the user
+    /// stashes nothing more on is never.
+    public static let orphanSweepDelay: Duration = .seconds(StashStore.orphanLifetime + 1)
     /// How long after the panel comes down the island keeps drawing itself from the
     /// mirror window (`IslandPresenting.setSurfaceMirrored(_:)`).
     ///
@@ -302,6 +310,11 @@ public final class DropZonesViewModel {
     /// the first one's fade.
     @ObservationIgnored private var filePoofTokens: [UUID: ScheduledToken] = [:]
     @ObservationIgnored private var fileRemovalTasks: [UUID: Task<Void, Never>] = [:]
+    /// The one pending sweep of the bytes a detached drag-out left on disk, re-armed by
+    /// every detach: several detaches within the hour are all collected by the last one's
+    /// sweep, which walks the whole `Stash/` directory anyway.
+    @ObservationIgnored private var orphanSweepToken: ScheduledToken?
+    @ObservationIgnored private var orphanSweepTask: Task<Void, Never>?
     @ObservationIgnored private var mirrorToken: ScheduledToken?
     /// Whether the island is currently drawing from the mirror window *at this feature's
     /// request*. Kept here rather than read back off the presenter because the protocol
@@ -778,6 +791,7 @@ public final class DropZonesViewModel {
             index = await store.detach(fileIDs: Set(byURL.map(\.id)))
             guard !isStopped else { return }
             for file in byURL { thumbnails[file.id] = nil }
+            scheduleOrphanSweep()
         }
         // Every file was in one list or the other, so the shelf is empty — unless the index
         // on disk has grown an entry this model never saw, in which case the card stays for
@@ -788,6 +802,24 @@ public final class DropZonesViewModel {
         }
         poofingFileIDs.removeAll()
         refreshStash()
+    }
+
+    /// Arms the one sweep that collects the bytes a detach left behind.
+    ///
+    /// On the island's clock rather than a `Task.sleep` so ``stop()`` takes it down with
+    /// everything else, and re-armed rather than stacked: one walk of `Stash/` collects
+    /// every folder whose hour is up.
+    private func scheduleOrphanSweep() {
+        orphanSweepToken?.cancel()
+        orphanSweepToken = clock.schedule(after: Self.orphanSweepDelay) { [weak self] in
+            guard let self else { return }
+            orphanSweepToken = nil
+            orphanSweepTask?.cancel()
+            orphanSweepTask = Task { @MainActor [weak self] in
+                await self?.store.sweepOrphans()
+                self?.orphanSweepTask = nil
+            }
+        }
     }
 
     // MARK: - One file at a time
@@ -836,18 +868,21 @@ public final class DropZonesViewModel {
         // when nothing is outstanding, which is every menu-driven removal.
         let unredeemed = await settlingPromises.waitUntilSettled(timeout: Self.promiseSettleTimeout)
         guard !isStopped else { return }
-        guard !unredeemed.contains(id) else {
-            logger.error("keeping a stashed file: the receiver never asked for its bytes")
-            // The tile faded out on the way here; it comes back with the card.
-            poofingFileIDs.remove(id)
-            refreshStash()
-            return
+        if unredeemed.contains(id) {
+            // The receiver took the tile's file *URL* and had no promise to redeem — the
+            // user's main case, one tile into an Electron app. The tile stays gone, as it
+            // would for a redeemed promise; only its bytes wait for the sweep.
+            index = await store.detach(fileIDs: [id])
+            guard !isStopped else { return }
+            logger.info("one stashed file left the shelf by URL; its bytes are swept after an hour")
+            scheduleOrphanSweep()
+        } else {
+            index = await store.remove(fileID: id)
+            guard !isStopped else { return }
+            logger.info("removed one file from the stash; \(self.index.files.count, privacy: .public) left")
         }
-        index = await store.remove(fileID: id)
-        guard !isStopped else { return }
         poofingFileIDs.remove(id)
         thumbnails[id] = nil
-        logger.info("removed one file from the stash; \(self.index.files.count, privacy: .public) left")
         guard index.files.isEmpty else {
             refreshStash()
             return
@@ -954,6 +989,12 @@ public final class DropZonesViewModel {
         filePoofTokens.removeAll()
         for task in fileRemovalTasks.values { task.cancel() }
         fileRemovalTasks.removeAll()
+        // The bytes a detach left behind outlive this model either way: the next
+        // activation's `load()` sweeps them.
+        orphanSweepToken?.cancel()
+        orphanSweepToken = nil
+        orphanSweepTask?.cancel()
+        orphanSweepTask = nil
         poofingFileIDs.removeAll()
         cancelExpiry()
         // The tokens only cancel the *timers*; the work a fired timer handed to an actor

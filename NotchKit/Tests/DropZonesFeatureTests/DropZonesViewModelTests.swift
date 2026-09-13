@@ -1548,7 +1548,9 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         #expect(stored.files.isEmpty)
     }
 
-    @Test func oneTileWhosePromiseWasNeverRedeemedComesBack() async throws {
+    /// Dragging *one tile* into an app that takes the file URL is the user's main case: the
+    /// tile has to stay gone, exactly as a whole-stash drag-out's files do.
+    @Test func oneTileWhosePromiseWasNeverRedeemedIsDetached() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
         let tracker = FakePromiseTracker()
@@ -1561,12 +1563,62 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.model.dragOutEnded(completed: true, files: .single(taken.id))
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
 
-        let restored = await waitUntil { harness.model.poofingFileIDs.isEmpty }
-        #expect(restored, "the tile faded out on the way and has to come back with its file")
-        #expect(harness.model.index.files.count == 2)
-        #expect(FileManager.default.fileExists(atPath: taken.storedPath))
+        let left = await waitUntil { harness.model.index.files.map(\.name) == ["b.txt"] }
+        #expect(left, "the tile must not come back from a drop that worked")
+        #expect(harness.model.poofingFileIDs.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: taken.storedPath), "detached, not deleted")
         let stored = await harness.store.load()
-        #expect(stored.files.count == 2)
+        #expect(stored.files.map(\.name) == ["b.txt"])
+    }
+
+    /// And the last tile leaving by URL takes the card with it, like any other last file.
+    @Test func theLastTileTakenByURLDismissesTheStash() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt"], in: harness)
+        let peekID = try #require(harness.presenter.liveCard(.background)?.id)
+        let taken = harness.model.index.files[0]
+        tracker.unredeemed = [taken.id]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true, files: .single(taken.id))
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+
+        #expect(await waitUntil { harness.model.index.files.isEmpty })
+        #expect(await waitUntil { harness.presenter.live[peekID] == nil })
+        #expect(harness.model.phase == .idle)
+        #expect(FileManager.default.fileExists(atPath: taken.storedPath))
+    }
+
+    /// The bytes a detach leaves behind are swept an hour later without waiting for the
+    /// next launch: the drag-out arms one sweep on the island's clock.
+    @Test func aDetachedFilesBytesAreSweptAnHourLater() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+        let folder = URL(fileURLWithPath: taken.storedPath).deletingLastPathComponent()
+        tracker.unredeemed = [taken.id]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true)
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+        #expect(await waitUntil { harness.model.index.files.isEmpty })
+        #expect(FileManager.default.fileExists(atPath: folder.path), "still there for the receiver")
+        // The store's clock is the harness's fixed `start`, so the folder has to *look* an
+        // hour old by the time the sweep runs; only the delay is the island clock's.
+        try FileManager.default.setAttributes(
+            [.modificationDate: start.addingTimeInterval(-StashStore.orphanLifetime - 1)],
+            ofItemAtPath: folder.path
+        )
+
+        harness.clock.advance(by: DropZonesViewModel.orphanSweepDelay)
+
+        #expect(await waitUntil { !FileManager.default.fileExists(atPath: folder.path) })
     }
 
     @Test func stoppingWhileWaitingForAPromisePresentsNothingAfterwards() async throws {
