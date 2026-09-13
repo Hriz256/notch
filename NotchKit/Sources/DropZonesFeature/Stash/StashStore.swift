@@ -20,6 +20,16 @@ import os
 /// Originals are never moved or deleted: every file is copied, and `originalPath`
 /// is kept only so "Reveal in Finder" can prefer the place the user knows.
 public actor StashStore {
+    /// How long a `Stash/<UUID>` folder with no index entry is left alone before ``load()``
+    /// sweeps it: one hour.
+    ///
+    /// A drag-out that the receiver took by *file URL* rather than by redeeming the promise
+    /// leaves exactly that — an entry detached from a folder still on disk (see
+    /// ``detach(fileIDs:)``) — and the receiver may read those bytes long after the drop: a
+    /// browser file input reads on submit, an uploader after the drag. An hour is far more
+    /// than any of that, and short enough that `Stash/` does not grow for ever.
+    public static let orphanLifetime: TimeInterval = 3_600
+
     private let baseDirectory: URL
     private let now: @Sendable () -> Date
     private let logger = Logger(subsystem: "app.notch", category: "dropzones.store")
@@ -53,6 +63,10 @@ public actor StashStore {
     ///
     /// A file that could not be *read* is the one case where nothing is written: see
     /// ``readIndex()``.
+    ///
+    /// It is also where folders nothing in the index points at are swept, once they are
+    /// ``orphanLifetime`` old — the bytes a URL drag-out detached, and anything a failed
+    /// write or a repaired index left behind.
     public func load() -> StashIndex {
         var index: StashIndex
         switch readIndex() {
@@ -61,8 +75,11 @@ public actor StashStore {
         case .corrupt:
             let empty = StashIndex()
             writeIndex(empty)
+            sweepOrphanFolders(keeping: empty)
             return empty
         case .unreadable:
+            // Not swept either: with no index to compare against, every folder in the
+            // stash would look like an orphan.
             return StashIndex()
         }
 
@@ -72,15 +89,16 @@ public actor StashStore {
         }
 
         let missing = index.files.filter { !fileManager.fileExists(atPath: $0.storedPath) }
-        guard !missing.isEmpty else { return index }
-
-        logger.info("pruning \(missing.count, privacy: .public) stashed file(s) that are no longer on disk")
-        index.files.removeAll { file in missing.contains { $0.id == file.id } }
-        // A folder can outlive its file (the file deleted, the folder left behind);
-        // removing it keeps `Stash/` from filling up with empty UUIDs.
-        deleteFolders(of: missing)
-        if index.files.isEmpty { index.removeAll() }
-        writeIndex(index)
+        if !missing.isEmpty {
+            logger.info("pruning \(missing.count, privacy: .public) stashed file(s) that are no longer on disk")
+            index.files.removeAll { file in missing.contains { $0.id == file.id } }
+            // A folder can outlive its file (the file deleted, the folder left behind);
+            // removing it keeps `Stash/` from filling up with empty UUIDs.
+            deleteFolders(of: missing)
+            if index.files.isEmpty { index.removeAll() }
+            writeIndex(index)
+        }
+        sweepOrphanFolders(keeping: index)
         return index
     }
 
@@ -137,7 +155,32 @@ public actor StashStore {
         return index
     }
 
+    /// Takes files out of the index and leaves their bytes on disk.
+    ///
+    /// The drag-out path for a receiver that took the *file URL* instead of redeeming the
+    /// promise (see ``orphanLifetime``): the files have left the shelf as surely as
+    /// redeemed ones — the user watched them go — but the receiver may not have read them
+    /// yet, and ``remove(fileID:)`` would pull the bytes out from under it. The folders
+    /// nothing points at any more are swept by a later ``load()``.
+    ///
+    /// Ids that are not in the stash are ignored, exactly as in ``remove(fileID:)``.
+    @discardableResult
+    public func detach(fileIDs: Set<UUID>) -> StashIndex {
+        var index = load()
+        guard index.files.contains(where: { fileIDs.contains($0.id) }) else { return index }
+
+        index.files.removeAll { fileIDs.contains($0.id) }
+        // Emptying the index outright, like `remove`, so no TTL timer is armed for a stash
+        // with nothing left in it.
+        if index.files.isEmpty { index.removeAll() }
+        writeIndex(index)
+        return index
+    }
+
     /// Empties the stash: both the copies and the index.
+    ///
+    /// Everything under `Stash/` goes, detached folders included: "Clear stash" and the
+    /// TTL mean the bytes are gone now, not in an hour.
     public func clear() {
         remove(stashDirectory)
         remove(indexURL)
@@ -230,6 +273,36 @@ public actor StashStore {
             guard folder.deletingLastPathComponent().standardizedFileURL
                 == stashDirectory.standardizedFileURL else { continue }
             remove(folder)
+        }
+    }
+
+    /// Deletes every folder in `Stash/` that `index` does not point at and that has not
+    /// been touched for ``orphanLifetime``.
+    ///
+    /// The age is the whole point: a folder detached a moment ago is very probably being
+    /// read by the application the user just dropped it on, whereas one an hour old is
+    /// nobody's — a drag-out long finished, a failed index write, or the repair of a
+    /// corrupt index.
+    private func sweepOrphanFolders(keeping index: StashIndex) {
+        guard let folders = try? fileManager.contentsOfDirectory(
+            at: stashDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let kept = Set(index.files.map {
+            URL(fileURLWithPath: $0.storedPath).deletingLastPathComponent().standardizedFileURL
+        })
+        var swept = 0
+        for folder in folders where !kept.contains(folder.standardizedFileURL) {
+            guard let modified = try? folder.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate,
+                now().timeIntervalSince(modified) >= Self.orphanLifetime else { continue }
+            remove(folder)
+            swept += 1
+        }
+        if swept > 0 {
+            logger.info("swept \(swept, privacy: .public) stash folder(s) nothing points at any more")
         }
     }
 

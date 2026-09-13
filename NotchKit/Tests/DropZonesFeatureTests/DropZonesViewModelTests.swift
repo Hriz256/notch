@@ -1493,30 +1493,59 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         #expect(stored.files.isEmpty)
     }
 
-    @Test func promisesNobodyEverRedeemedKeepTheirFiles() async throws {
+    /// The normal path now that the pasteboard also carries a file URL: a receiver that
+    /// took the URL never redeems the promise, so the files leave the shelf exactly as
+    /// redeemed ones do — and their bytes stay on disk for whoever is still reading them.
+    @Test func promisesNobodyEverRedeemedDetachTheirFiles() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
         let tracker = FakePromiseTracker()
         harness.model.promiseTracker = tracker
         try await stash(["a.txt", "b.txt"], in: harness)
         let peekID = try #require(harness.presenter.liveCard(.background)?.id)
-        let kept = harness.model.index.files[1]
-        // The receiver took "a.txt" and never asked for "b.txt": after the timeout the
-        // one it took goes and the one it did not stays.
-        tracker.unredeemed = [kept.id]
+        let files = harness.model.index.files
+        // The receiver took both by URL and asked for neither.
+        tracker.unredeemed = Set(files.map(\.id))
 
         harness.model.dragOutBegan()
         harness.model.dragOutEnded(completed: true)
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
 
-        let settled = await waitUntil { harness.model.index.files.map(\.name) == ["b.txt"] }
-        #expect(settled)
-        #expect(FileManager.default.fileExists(atPath: kept.storedPath))
-        #expect(harness.presenter.live[peekID] != nil, "the card stays for the file that never left")
+        let settled = await waitUntil { harness.model.index.files.isEmpty }
+        #expect(settled, "the shelf empties on the timeout rather than keeping the files")
+        #expect(await waitUntil { harness.presenter.live[peekID] == nil }, "and the card goes with it")
         #expect(harness.model.dragOutPhase == .idle)
         #expect(harness.model.poofingFileIDs.isEmpty)
         let stored = await harness.store.load()
-        #expect(stored.files.map(\.name) == ["b.txt"])
+        #expect(stored.files.isEmpty)
+        // Detached, not deleted: `remove` would have taken the folders and `clear` the
+        // whole stash directory, and the receiver may still be reading the bytes.
+        for file in files {
+            #expect(FileManager.default.fileExists(atPath: file.storedPath))
+        }
+    }
+
+    /// A mixed session: one promise redeemed, one file taken by URL. The redeemed one's
+    /// bytes go, the detached one's stay — and the shelf is empty either way.
+    @Test func aRedeemedFileIsDeletedWhileAnUnredeemedOneIsOnlyDetached() async throws {
+        let harness = try Harness()
+        defer { harness.cleanUp() }
+        let tracker = FakePromiseTracker()
+        harness.model.promiseTracker = tracker
+        try await stash(["a.txt", "b.txt"], in: harness)
+        let taken = harness.model.index.files[0]
+        let byURL = harness.model.index.files[1]
+        tracker.unredeemed = [byURL.id]
+
+        harness.model.dragOutBegan()
+        harness.model.dragOutEnded(completed: true)
+        harness.clock.advance(by: DropZonesViewModel.poofDuration)
+
+        #expect(await waitUntil { harness.model.index.files.isEmpty })
+        #expect(!FileManager.default.fileExists(atPath: taken.storedPath), "the receiver has those bytes")
+        #expect(FileManager.default.fileExists(atPath: byURL.storedPath))
+        let stored = await harness.store.load()
+        #expect(stored.files.isEmpty)
     }
 
     @Test func oneTileWhosePromiseWasNeverRedeemedComesBack() async throws {

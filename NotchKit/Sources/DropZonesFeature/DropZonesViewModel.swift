@@ -165,15 +165,17 @@ public final class DropZonesViewModel {
     /// The poof after a completed drag-out, before the stash is emptied.
     public static let poofDuration: Duration = .milliseconds(250)
     /// How long the stash waits for a receiver to redeem the promises a drag-out handed it
-    /// before deleting the files anyway.
+    /// before taking the files off the shelf anyway.
     ///
     /// The poof still plays at ``poofDuration`` — the tile fades on time — but the copies
     /// on disk are the user's only ones until the receiver has actually asked for the
-    /// bytes, and a lazy receiver (Mail's compose window, anything Electron) asks seconds
-    /// after accepting the drop. 15 s is long enough for a big file over a slow volume and
-    /// short enough that a receiver which crashed does not hold the stash for ever; when it
-    /// runs out the files nobody asked for are *kept* rather than deleted.
-    public static let promiseSettleTimeout: Duration = .seconds(15)
+    /// bytes, and a lazy receiver (Mail's compose window) asks a moment after accepting the
+    /// drop. Finder redeems within a second; five is plenty, and the shelf must not sit
+    /// half-poofed for a quarter of a minute — which is what 15 s did to every drop into an
+    /// app that takes the file *URL* and never redeems the promise at all. When it runs out
+    /// the files nobody asked for leave the shelf and their bytes are only detached (see
+    /// ``StashStore/detach(fileIDs:)``).
+    public static let promiseSettleTimeout: Duration = .seconds(5)
     /// How long after the panel comes down the island keeps drawing itself from the
     /// mirror window (`IslandPresenting.setSurfaceMirrored(_:)`).
     ///
@@ -732,13 +734,18 @@ public final class DropZonesViewModel {
         }
     }
 
-    /// Empties the stash once the receiver actually has the bytes.
+    /// Empties the stash once the receiver has the files, however it took them.
     ///
     /// The session reported `.completed` as soon as the receiving application *accepted*
     /// the drop, which for a lazy receiver is long before it asks for the files. Deleting
     /// here without waiting is how the user's only copy disappears (see
     /// ``DragOutPromiseTracker``), so anything still outstanding holds the deletion up to
-    /// ``promiseSettleTimeout`` — and the files nobody ever asked for are kept.
+    /// ``promiseSettleTimeout``.
+    ///
+    /// Promises still outstanding when it runs out are not an error: the pasteboard also
+    /// carries the file's URL, and a receiver that took *that* has no promise to redeem.
+    /// Those files leave the shelf like any other — they were dragged out — and only their
+    /// bytes stay, until the sweep an hour later.
     private func finishPoof() async {
         let unredeemed = await settlingPromises.waitUntilSettled(timeout: Self.promiseSettleTimeout)
         guard !Task.isCancelled, !isStopped else { return }
@@ -746,27 +753,35 @@ public final class DropZonesViewModel {
         if unredeemed.isEmpty {
             await clearStash()
         } else {
-            logger.error("""
-                keeping \(unredeemed.count, privacy: .public) of \
-                \(self.index.files.count, privacy: .public) stashed file(s): \
-                their promises were never redeemed
+            logger.info("""
+                \(unredeemed.count, privacy: .public) stashed file(s) left the shelf by URL; \
+                their bytes are swept after an hour
                 """)
-            await deleteRedeemed(keeping: unredeemed)
+            await emptyStash(detaching: unredeemed)
         }
         guard !Task.isCancelled, !isStopped else { return }
         dragOutPhase = .idle
         poofTask = nil
     }
 
-    /// Takes out everything the receiver really took and leaves the rest of the pile where
-    /// it is, card and all.
-    private func deleteRedeemed(keeping unredeemed: Set<UUID>) async {
+    /// Takes the whole pile off the shelf, deleting the bytes of the files the receiver
+    /// redeemed and keeping — for an hour — the bytes of the ones it took by URL.
+    private func emptyStash(detaching unredeemed: Set<UUID>) async {
         let taken = index.files.filter { !unredeemed.contains($0.id) }
+        let byURL = index.files.filter { unredeemed.contains($0.id) }
         for file in taken {
             index = await store.remove(fileID: file.id)
             guard !isStopped else { return }
             thumbnails[file.id] = nil
         }
+        if !byURL.isEmpty {
+            index = await store.detach(fileIDs: Set(byURL.map(\.id)))
+            guard !isStopped else { return }
+            for file in byURL { thumbnails[file.id] = nil }
+        }
+        // Every file was in one list or the other, so the shelf is empty — unless the index
+        // on disk has grown an entry this model never saw, in which case the card stays for
+        // whatever is left.
         guard !index.files.isEmpty else {
             await stashBecameEmpty()
             return

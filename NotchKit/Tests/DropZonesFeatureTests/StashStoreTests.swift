@@ -48,6 +48,11 @@ private func exists(_ path: String) -> Bool {
     FileManager.default.fileExists(atPath: path)
 }
 
+/// Backdates a folder, which is what the orphan sweep reads to decide its age.
+private func touch(_ url: URL, at date: Date) throws {
+    try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+}
+
 @Suite struct StashStoreTests {
 
     // MARK: - stash
@@ -323,6 +328,84 @@ private func exists(_ path: String) -> Bool {
 
         #expect(index == stashed)
         #expect(exists(stashed.files[0].storedPath))
+    }
+
+    // MARK: - detach(fileIDs:)
+
+    @Test func detachTakesTheEntryOutOfTheIndexAndLeavesTheBytes() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let a = try fixture.makeFile("a.txt")
+        let b = try fixture.makeFile("b.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([a, b], action: .replace)
+
+        let index = await store.detach(fileIDs: [stashed.files[0].id])
+
+        #expect(index.files.map(\.name) == ["b.txt"])
+        #expect(index.stashedAt == start, "the files left keep their 24-hour clock")
+        #expect(exists(stashed.files[0].storedPath), "a receiver may still be reading the bytes")
+        // And the shorter index is on disk, so the shelf does not come back at the next load.
+        let reloaded = await store.load()
+        #expect(reloaded == index)
+    }
+
+    @Test func detachingTheLastFileEmptiesTheIndex() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let a = try fixture.makeFile("a.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([a], action: .replace)
+
+        let index = await store.detach(fileIDs: [stashed.files[0].id])
+
+        #expect(index == StashIndex(), "an empty stash must not keep a stashedAt to expire")
+        #expect(exists(stashed.files[0].storedPath))
+        #expect(await store.load() == StashIndex())
+    }
+
+    @Test func detachingAnUnknownIDChangesNothing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let a = try fixture.makeFile("a.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([a], action: .replace)
+
+        let index = await store.detach(fileIDs: [UUID()])
+
+        #expect(index == stashed)
+        #expect(exists(stashed.files[0].storedPath))
+    }
+
+    // MARK: - Sweeping detached folders
+
+    @Test func loadSweepsDetachedFoldersOnlyOnceTheyAreAnHourOld() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let old = try fixture.makeFile("old.txt")
+        let young = try fixture.makeFile("young.txt")
+        let kept = try fixture.makeFile("kept.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([old, young, kept], action: .replace)
+        let folders = stashed.files.map {
+            URL(fileURLWithPath: $0.storedPath).deletingLastPathComponent()
+        }
+        await store.detach(fileIDs: [stashed.files[0].id, stashed.files[1].id])
+        // The receiver of the first file has had its hour; the second was dragged out a
+        // minute ago and may still be being read.
+        try touch(folders[0], at: start.addingTimeInterval(-StashStore.orphanLifetime - 1))
+        try touch(folders[1], at: start.addingTimeInterval(-60))
+
+        let loaded = await store.load()
+
+        #expect(loaded.files.map(\.name) == ["kept.txt"], "the sweep is about bytes, not entries")
+        #expect(!exists(folders[0]), "an hour-old detached folder is swept")
+        #expect(exists(folders[1]), "a fresh one is left for whoever is still reading it")
+        #expect(exists(stashed.files[2].storedPath), "and a file still in the index is never touched")
     }
 
     // MARK: - clear
