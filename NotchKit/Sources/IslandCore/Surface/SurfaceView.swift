@@ -18,6 +18,9 @@ public struct SurfaceView: View {
     /// The card `body` last drew, tracked the same way and for the same reason: a page
     /// turn is told from a grow by *identity*, not by size.
     @State private var previousPresentationID: PresentationID?
+    /// Whether the island is holding its arrival beat (see ``IslandArrival``). One
+    /// `Bool`, set twice per arrival and never at rest.
+    @State private var isBeating = false
 
     public init(presenter: IslandPresenter, geometry: NotchGeometry, choreographer: TransitionChoreographer) {
         self.presenter = presenter
@@ -43,11 +46,20 @@ public struct SurfaceView: View {
         )
         // A swipe, and only a swipe, gives content an axis to travel along.
         let pageDirection = kind == .pageChange ? presenter.cycleDirection(arrivingAt: current?.id) : nil
+        // Decided here, where the *previous* layout is still readable, and consumed by the
+        // `onChange` below, which runs after this body with the same captured value.
+        let announcesArrival = IslandArrival.shouldBeat(
+            from: previousLayout,
+            to: layout,
+            presentationChanged: presentationChanged,
+            isReduced: choreographer.isReduced
+        )
+        let shapeSize = isBeating ? IslandArrival.beat(layout.size) : layout.size
 
         ZStack(alignment: .top) {
             NotchShape(topRadius: layout.topRadius, bottomRadius: layout.bottomRadius)
                 .fill(Color.black)
-                .islandFrame(size: layout.size, flare: layout.topRadius, minimum: floor)
+                .islandFrame(size: shapeSize, flare: layout.topRadius, minimum: floor)
                 .contentShape(Rectangle())
                 .onTapGesture { presenter.toggleHoverPromotion() }
                 // The island's own menu rides the black shape, under the content rather
@@ -71,7 +83,23 @@ public struct SurfaceView: View {
         .animation(animation, value: layout)
         .animation(animation, value: presenter.state)
         .onChange(of: layout, initial: true) { _, new in previousLayout = new }
-        .onChange(of: current?.id, initial: true) { _, new in previousPresentationID = new }
+        .onChange(of: current?.id, initial: true) { _, new in
+            previousPresentationID = new
+            if announcesArrival { playArrivalBeat() }
+        }
+    }
+
+    /// Swells the island by a few points and lets it settle, so a card taking over an
+    /// island that is not otherwise moving is still *announced* by the shape.
+    ///
+    /// Two state writes and one sleep — no timer, nothing repeating, nothing running once
+    /// the island has settled.
+    private func playArrivalBeat() {
+        withAnimation(choreographer.arrival) { isBeating = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: IslandArrival.hold)
+            withAnimation(choreographer.arrival) { isBeating = false }
+        }
     }
 
     /// Content enters and leaves on its own curves, not on the geometry spring: the

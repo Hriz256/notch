@@ -16,6 +16,9 @@ public struct TransitionChoreographer: Sendable {
     /// the new card happens to be taller made a leftward flick bouncy and a rightward one
     /// flat.
     public var pageChange: Animation = Spring.pageChange.animation
+    /// The one-shot beat the island plays when a card takes it over without changing its
+    /// size (see ``IslandArrival``). Skipped entirely under Reduce Motion.
+    public var arrival: Animation = Spring.arrival.animation
     /// The stack dots' highlight travelling and growing. Its own curve: the dots confirm
     /// a swipe, so they must move even when the shape does not.
     public var stackDot: Animation = Spring.stackDot.animation
@@ -53,6 +56,8 @@ public struct TransitionChoreographer: Sendable {
         public static let pageChange = Spring(response: 0.34, damping: 0.86)
         /// The page indicator: quick and barely bouncy, like every one Apple ships.
         public static let stackDot = Spring(response: 0.3, damping: 0.8)
+        /// The arrival beat: loose enough to overshoot, which is the whole point of it.
+        public static let arrival = Spring(response: 0.32, damping: 0.62)
         public static let contentIn = Spring(response: 0.26, damping: 0.9)
         public static let contentOut = Spring(response: 0.22, damping: 1.0)
     }
@@ -61,6 +66,7 @@ public struct TransitionChoreographer: Sendable {
         geometry: Spring.grow.animation,
         collapseGeometry: Spring.collapse.animation,
         pageChange: Spring.pageChange.animation,
+        arrival: Spring.arrival.animation,
         stackDot: Spring.stackDot.animation,
         contentIn: Spring.contentIn.animation,
         contentOut: Spring.contentOut.animation,
@@ -71,6 +77,8 @@ public struct TransitionChoreographer: Sendable {
         geometry: .easeInOut(duration: 0.2),
         collapseGeometry: .easeInOut(duration: 0.2),
         pageChange: .easeInOut(duration: 0.2),
+        // Never played under Reduce Motion; kept non-nil so the field is total.
+        arrival: .easeInOut(duration: 0.2),
         stackDot: .easeInOut(duration: 0.2),
         contentIn: .easeInOut(duration: 0.2),
         contentOut: .easeInOut(duration: 0.15),
