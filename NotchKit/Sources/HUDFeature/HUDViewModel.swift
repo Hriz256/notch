@@ -36,7 +36,8 @@ public final class HUDViewModel {
     /// The label and the bar do not fit the island's 56 pt slots; the HUD asks for these.
     public static let peekSlotWidth: CGFloat = 96
 
-    /// What the views draw, or `nil` between HUDs.
+    /// What the views draw. The last reading survives the hold — the presentation is still
+    /// animating out and the bar must not drain to 0 on the way — and only ``stop()`` clears it.
     public private(set) var reading: HUDReading?
 
     @ObservationIgnored private let presenter: any IslandPresenting
@@ -66,12 +67,14 @@ public final class HUDViewModel {
         case .none:
             return
         case .present(let shown):
+            log("present", shown)
             self.reading = shown
             present(fresh: true)
         case .update(let shown):
             self.reading = shown
             present(fresh: false)
         case .replace(let shown):
+            log("replace", shown)
             if let presentationID { presenter.dismiss(presentationID) }
             self.reading = shown
             present(fresh: true)
@@ -102,12 +105,19 @@ public final class HUDViewModel {
 
     /// The presenter's TTL takes the HUD down at the same moment; dismissing here as well
     /// costs nothing and keeps this side deterministic.
+    ///
+    /// `reading` is left alone: the presentation fades out over the next frames and a nil
+    /// here would drain the bar to 0 while it is still on screen.
     private func expire() {
         holdToken = nil
         _ = session.expire()
         if let presentationID { presenter.dismiss(presentationID) }
         presentationID = nil
-        reading = nil
+        logger.debug("expire")
+    }
+
+    private func log(_ verb: String, _ reading: HUDReading) {
+        logger.info("\(verb, privacy: .public) \(reading.kind.rawValue, privacy: .public) \(reading.level, privacy: .public)")
     }
 
     private func makePresentation(id: PresentationID) -> Presentation {

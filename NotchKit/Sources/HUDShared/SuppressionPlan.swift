@@ -1,5 +1,3 @@
-import Foundation
-
 /// One thing the suppressor does to the system (spec §2 "Suppressing the system HUD").
 /// Data rather than calls, so the plan can be tested without touching the system and the
 /// executor is the only impure part.
@@ -17,7 +15,10 @@ public enum SuppressionStep: Equatable, Sendable {
     case stopOSDUIHelper
 }
 
+/// The step lists for suppressing the system HUD, restoring it and repairing it.
 public enum SuppressionPlan {
+    /// The steps that put the system HUD away.
+    ///
     /// - Parameter preferenceAlreadyFalse: the key is already `false` (we set it on an
     ///   earlier run, or the user did): Control Center already runs the wanted way and a
     ///   restart would only blink the menu bar.
@@ -30,6 +31,8 @@ public enum SuppressionPlan {
         return steps
     }
 
+    /// The steps that give the system HUD back.
+    ///
     /// - Parameter weSetPreference: whether the key is ours to remove. A user who had it
     ///   `false` before Notch keeps it.
     public static func lift(weSetPreference: Bool) -> [SuppressionStep] {

@@ -2,6 +2,7 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 import IslandCore
+import os
 
 /// The real `VolumeDeviceSource`: HAL property listeners on the main queue.
 ///
@@ -11,6 +12,8 @@ import IslandCore
 @MainActor
 public final class CoreAudioVolumeSource: VolumeDeviceSource {
     public init() {}
+
+    private static let logger = Logger(subsystem: "app.notch", category: "hud.volume")
 
     private static let defaultDeviceAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -80,7 +83,10 @@ public final class CoreAudioVolumeSource: VolumeDeviceSource {
         let block: AudioObjectPropertyListenerBlock = { _, _ in
             MainActor.assumeIsolated { handler() }
         }
-        AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block)
+        let status = AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block)
+        if status != noErr {
+            Self.logger.error("AudioObjectAddPropertyListenerBlock failed with \(status)")
+        }
         return ScheduledToken {
             var address = address
             AudioObjectRemovePropertyListenerBlock(object, &address, DispatchQueue.main, block)

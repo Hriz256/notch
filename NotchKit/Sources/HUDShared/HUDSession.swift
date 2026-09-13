@@ -1,5 +1,3 @@
-import Foundation
-
 /// The one-HUD-at-a-time state machine (spec §3.1). Pure: the caller owns the clock and
 /// calls ``expire()`` when the hold runs out.
 ///

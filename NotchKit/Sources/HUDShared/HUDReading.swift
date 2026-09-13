@@ -1,5 +1,3 @@
-import Foundation
-
 /// Which system level a HUD is about.
 public enum HUDKind: String, Sendable, CaseIterable, Codable {
     case volume
@@ -8,11 +6,11 @@ public enum HUDKind: String, Sendable, CaseIterable, Codable {
 
 /// One level as the monitors report it, normalised for the views.
 public struct HUDReading: Equatable, Sendable {
-    public var kind: HUDKind
+    public let kind: HUDKind
     /// Always within 0...1; a non-finite input reads as 0.
-    public var level: Double
+    public let level: Double
     /// Volume only — the system mute switch. Always `false` for brightness.
-    public var isMuted: Bool
+    public let isMuted: Bool
 
     public init(kind: HUDKind, level: Double, isMuted: Bool = false) {
         self.kind = kind

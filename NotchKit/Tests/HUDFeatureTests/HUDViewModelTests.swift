@@ -81,7 +81,8 @@ struct HUDViewModelTests {
         clock.advance(by: .milliseconds(500))
         let id = try #require(presenter.presented.first?.id)
         #expect(presenter.dismissed == [id])
-        #expect(model.reading == nil)
+        // The reading stays put while the presentation fades out, so the bar keeps its level.
+        #expect(model.reading == loud)
 
         // After the hold, the next change is a fresh HUD.
         model.receive(half)
