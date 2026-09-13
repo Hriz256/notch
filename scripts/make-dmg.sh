@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds a Release Notch.app (ad-hoc signed, universal) and packs it into ~/Desktop/Notch.dmg
+# Builds a Release Notch.app (signed with the "Notch Dev" identity, universal) and packs it into ~/Desktop/Notch.dmg
 # with an Applications shortcut and the install note. Run from the repo root.
 set -eu
 xcodegen generate >/dev/null
