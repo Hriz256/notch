@@ -40,13 +40,20 @@ public final class LiveSystemShell: SystemShell {
     /// `SIGTERM` to the running Control Center; launchd brings it straight back, and it
     /// re-reads `EnableSystemBanners` on the way up. No `launchctl` here at all: SIP refuses
     /// `kickstart -k` for this agent.
-    public func restartControlCenter() {
+    ///
+    /// - Returns: `false` when there was no process to signal or the signal was refused —
+    ///   Control Center is then *not* known to be running the wanted way.
+    public func restartControlCenter() -> Bool {
         guard let pid = Self.pid(ofExecutable: Self.controlCenterPath) else {
-            Self.logger.info("no ControlCenter process to restart")
-            return
+            Self.logger.error("no ControlCenter process to restart")
+            return false
         }
-        kill(pid, SIGTERM)
+        guard kill(pid, SIGTERM) == 0 else {
+            Self.logger.error("SIGTERM to ControlCenter failed: errno \(errno, privacy: .public)")
+            return false
+        }
         Self.waitForExit(of: pid)
+        return true
     }
 
     /// A fresh, running helper: `SIGKILL` the old one (a `SIGSTOP`ped process never handles

@@ -9,7 +9,9 @@ public protocol SystemShell: AnyObject, Sendable {
     /// `EnableSystemBanners` in `com.apple.controlcenter`, or `nil` when unset.
     func bannersPreference() -> Bool?
     func setBannersPreference(_ value: Bool?)
-    func restartControlCenter()
+    /// Restarts Control Center so it re-reads the preference. `false` if that could not be
+    /// done (no process, or the signal was refused), which leaves it running the old way.
+    @discardableResult func restartControlCenter() -> Bool
     func kickstartOSDUIHelper()
     /// `SIGSTOP` to the helper. `false` if no helper process could be found.
     func stopOSDUIHelper() -> Bool
@@ -65,9 +67,10 @@ public final class SystemHUDSuppressor {
             defaults.set(true, forKey: Self.appliedKey)
             defaults.set(weSet, forKey: Self.weSetPreferenceKey)
             isApplied = true
-            await execute(SuppressionPlan.apply(controlCenterConfigured: configured))
-            if !configured { defaults.set(true, forKey: Self.controlCenterConfiguredKey) }
+            let restarted = await execute(SuppressionPlan.apply(controlCenterConfigured: configured))
             guard !isTerminating else { return }
+            // Only a restart that actually happened proves Control Center re-read the key.
+            if !configured, restarted { defaults.set(true, forKey: Self.controlCenterConfiguredKey) }
             logger.info("system HUD suppressed")
             armWatchdog()
         }
@@ -77,14 +80,15 @@ public final class SystemHUDSuppressor {
         await enqueue { [self] in
             guard !isTerminating, isApplied else { return }
             cancelWatchdog()
-            await execute(SuppressionPlan.lift(weSetPreference: defaults.bool(forKey: Self.weSetPreferenceKey)))
-            clearFlags()
+            let weSet = defaults.bool(forKey: Self.weSetPreferenceKey)
+            await execute(SuppressionPlan.lift(weSetPreference: weSet))
+            clearFlags(controlCenterRestarted: weSet)
             logger.info("system HUD restored")
         }
     }
 
     /// For `applicationWillTerminate`, where nothing can be awaited: runs the lift on the
-    /// calling thread (well under a second) so the system HUD is back before the process ends.
+    /// calling thread (a few seconds at most) so the system HUD is back before the process ends.
     ///
     /// An `apply()` that is already in flight cannot be interrupted — its steps run detached —
     /// so ``isTerminating`` is set first and the apply abandons itself at its next checkpoint.
@@ -96,10 +100,11 @@ public final class SystemHUDSuppressor {
         chain?.cancel()
         chain = nil
         guard isApplied || defaults.bool(forKey: Self.appliedKey) else { return }
-        for step in SuppressionPlan.lift(weSetPreference: defaults.bool(forKey: Self.weSetPreferenceKey)) {
+        let weSet = defaults.bool(forKey: Self.weSetPreferenceKey)
+        for step in SuppressionPlan.lift(weSetPreference: weSet) {
             Self.perform(step, on: shell)
         }
-        clearFlags()
+        clearFlags(controlCenterRestarted: weSet)
         logger.info("system HUD restored at termination")
     }
 
@@ -143,23 +148,35 @@ public final class SystemHUDSuppressor {
         await task.value
     }
 
-    private func execute(_ steps: [SuppressionStep]) async {
+    /// - Returns: whether every `.restartControlCenter` step in `steps` succeeded — vacuously
+    ///   `true` when there was none. A failing step never stops the ones after it.
+    @discardableResult
+    private func execute(_ steps: [SuppressionStep]) async -> Bool {
         let shell = shell
-        await offMain { for step in steps { Self.perform(step, on: shell) } }
+        return await offMain {
+            var restarted = true
+            for step in steps where !Self.perform(step, on: shell) { restarted = false }
+            return restarted
+        }
     }
 
     /// `nonisolated` because it runs both on the main thread (``liftSynchronously()``) and
     /// off it (``execute(_:)``).
-    private nonisolated static func perform(_ step: SuppressionStep, on shell: any SystemShell) {
+    ///
+    /// - Returns: `false` only for a `.restartControlCenter` that did not happen; every other
+    ///   step reports `true` (a missing helper is logged where it is noticed instead).
+    @discardableResult
+    private nonisolated static func perform(_ step: SuppressionStep, on shell: any SystemShell) -> Bool {
         switch step {
         case .setBannersPreference(let value): shell.setBannersPreference(value)
-        case .restartControlCenter: shell.restartControlCenter()
+        case .restartControlCenter: return shell.restartControlCenter()
         case .kickstartOSDUIHelper: shell.kickstartOSDUIHelper()
         case .stopOSDUIHelper:
             if !shell.stopOSDUIHelper() {
                 Logger(subsystem: "app.notch", category: "hud.suppressor").error("OSDUIHelper not found after kickstart")
             }
         }
+        return true
     }
 
     private func offMain<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
@@ -200,10 +217,14 @@ public final class SystemHUDSuppressor {
         }
     }
 
-    private func clearFlags() {
+    /// - Parameter controlCenterRestarted: the lift removed the preference and restarted
+    ///   Control Center, so what we knew about its configuration no longer holds. A
+    ///   kickstart-only lift (the user's own preference, not ours) leaves that knowledge
+    ///   intact — Control Center still runs the way it was last restarted.
+    private func clearFlags(controlCenterRestarted: Bool) {
         isApplied = false
         defaults.set(false, forKey: Self.appliedKey)
         defaults.set(false, forKey: Self.weSetPreferenceKey)
-        defaults.set(false, forKey: Self.controlCenterConfiguredKey)
+        if controlCenterRestarted { defaults.set(false, forKey: Self.controlCenterConfiguredKey) }
     }
 }

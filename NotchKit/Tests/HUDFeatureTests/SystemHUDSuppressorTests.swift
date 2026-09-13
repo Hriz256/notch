@@ -10,6 +10,7 @@ final class FakeSystemShell: SystemShell, @unchecked Sendable {
     private var _steps: [SuppressionStep] = []
     private var _preference: Bool?
     private var _helperStopped = false
+    private var _restartSucceeds = true
 
     var steps: [SuppressionStep] { lock.withLock { _steps } }
     var preference: Bool? {
@@ -20,12 +21,18 @@ final class FakeSystemShell: SystemShell, @unchecked Sendable {
         get { lock.withLock { _helperStopped } }
         set { lock.withLock { _helperStopped = newValue } }
     }
+    /// The restart step still records itself when this is `false`; it just reports failure,
+    /// as it does on a machine with no Control Center process or a refused signal.
+    var restartSucceeds: Bool {
+        get { lock.withLock { _restartSucceeds } }
+        set { lock.withLock { _restartSucceeds = newValue } }
+    }
 
     func bannersPreference() -> Bool? { preference }
     func setBannersPreference(_ value: Bool?) {
         lock.withLock { _preference = value; _steps.append(.setBannersPreference(value)) }
     }
-    func restartControlCenter() { lock.withLock { _steps.append(.restartControlCenter) } }
+    func restartControlCenter() -> Bool { lock.withLock { _steps.append(.restartControlCenter); return _restartSucceeds } }
     func kickstartOSDUIHelper() { lock.withLock { _helperStopped = false; _steps.append(.kickstartOSDUIHelper) } }
     func stopOSDUIHelper() -> Bool { lock.withLock { _helperStopped = true; _steps.append(.stopOSDUIHelper) }; return true }
     func isOSDUIHelperStopped() -> Bool { helperStopped }
@@ -85,6 +92,33 @@ final class SystemHUDSuppressorTests {
         ])
         #expect(defaults.bool(forKey: "hud.controlCenterConfigured"))
         #expect(!defaults.bool(forKey: "hud.weSetBannersPreference"))
+    }
+
+    /// A restart that could not happen leaves Control Center running the old way, so the next
+    /// apply has to try again rather than trust the flag.
+    @Test func aFailedRestartDoesNotMarkControlCenterConfigured() async {
+        let (suppressor, shell, _) = make()
+        shell.restartSucceeds = false
+        await suppressor.apply()
+
+        #expect(shell.steps == [
+            .setBannersPreference(false), .restartControlCenter, .kickstartOSDUIHelper, .stopOSDUIHelper,
+        ])
+        #expect(!defaults.bool(forKey: "hud.controlCenterConfigured"))
+    }
+
+    /// The user's own `false` preference is left alone by the lift, so Control Center keeps
+    /// running the way our earlier restart left it — that knowledge must survive.
+    @Test func liftingWithoutRestartingKeepsControlCenterConfigured() async {
+        let (suppressor, shell, _) = make()
+        shell.preference = false
+        defaults.set(true, forKey: "hud.controlCenterConfigured")
+        await suppressor.apply()
+        shell.clearSteps()
+        await suppressor.lift()
+
+        #expect(shell.steps == [.kickstartOSDUIHelper])
+        #expect(defaults.bool(forKey: "hud.controlCenterConfigured"))
     }
 
     @Test func liftRemovesOnlyOurPreference() async {

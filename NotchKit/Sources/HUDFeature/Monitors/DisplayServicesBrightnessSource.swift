@@ -70,11 +70,15 @@ public final class DisplayServicesBrightnessSource: BrightnessSource {
 
     // MARK: - Private
 
-    /// Fires on the registering thread's run loop — the main thread, because `observe` is
-    /// main-actor — hence the isolation assumption.
+    /// Fires on CoreBrightness's own XPC queue, *not* on the thread that registered: a
+    /// `MainActor.assumeIsolated` straight out of the callback traps (`_dispatch_assert_queue_fail`,
+    /// one brightness key press away). So it hops to the main queue first, and everything
+    /// main-actor — the static and the handler — is touched only inside that block.
     private static let callback: CFNotificationCallback = { _, _, _, _, _ in
-        MainActor.assumeIsolated {
-            current?.handler?()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                DisplayServicesBrightnessSource.current?.handler?()
+            }
         }
     }
 
