@@ -29,4 +29,12 @@ enum MusicMotion {
     /// One artwork replacing another. A cross-dissolve is already the reduced form of itself,
     /// so Reduce Motion changes nothing here.
     static let artworkDissolve: Animation = .easeInOut(duration: 0.25)
+
+    // MARK: Press feedback (audit B4)
+
+    /// Mouse-down and mouse-up on a transport button. `nonisolated` because `ButtonStyle`
+    /// bodies are not main-actor isolated; the values are plain `Sendable` constants.
+    nonisolated static let press: Animation = .spring(response: 0.2, dampingFraction: 0.6)
+    nonisolated static let pressedScale: CGFloat = 0.88
+    nonisolated static let pressedOpacity: Double = 0.7
 }
