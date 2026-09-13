@@ -66,6 +66,15 @@ public final class MusicViewModel {
     public var isPlaying: Bool { snapshot?.isPlaying ?? false }
     public var duration: TimeInterval { snapshot?.duration ?? 0 }
 
+    /// What ``displayedElapsed`` belongs to, for views that must cut rather than animate when
+    /// the track changes — the progress bar resets to zero on a skip and must not run
+    /// backwards to get there. The artist is deliberately not part of it: it never moves the
+    /// playhead on its own.
+    var trackKey: String? {
+        guard let snapshot, snapshot.hasTrack else { return nil }
+        return "\(snapshot.title ?? "")|\(snapshot.artworkID ?? "")"
+    }
+
     /// The island this feature presents on. Exposed read-only so the feature's context
     /// menu can embed `CardsMenuSection`, which needs the presenter to list the cards.
     @ObservationIgnored public let islandPresenter: any IslandPresenting

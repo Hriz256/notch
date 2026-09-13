@@ -500,3 +500,56 @@ that costs CPU, and that needs a real session to judge; **matched-geometry peek 
 — the most Apple thing in this document and the most likely to reproduce the rejected
 "separate shape"; **the HUD bar overshoot (B8)** — juicier than macOS, which may be the wrong
 kind of juicy.
+
+---
+
+## Implemented (Music) — branch `motion/music`, 2026-09-13
+
+Five of the audit's items, all inside `NotchKit/Sources/MusicFeature/`. Curves live in one
+place, `Views/MusicMotion.swift`, next to `GlyphMotion` (Code) and `MotionPreference`
+(Drop Zones) in spirit. Nothing outside the Music module was touched.
+
+| Item | What landed | Final values |
+|---|---|---|
+| **A6 / A14 / B12** — track-change peek | `isShowingTrackChange` now drives the presentation's `peekSlotWidth`: while the banner is up the peek slots ask for 96 pt instead of 56 and the leading slot shows the new title (marquee) over the artist, beside the 18 pt thumbnail. The island's own width animation *is* the entrance — no second shape. | slot 96 pt (the HUD's), duration 2.5 s (unchanged, spec'd); label rise 8 pt + fade on `.spring(response: 0.32, dampingFraction: 0.85)`; artwork cross-dissolve `.easeInOut(0.25)` keyed on artwork identity |
+| **A9 / shortlist 7** — visualizer bars | Each bar is drawn at its full 14 pt and squashed by `scaleEffect(y:, anchor: .center)`; no `.frame(height:)` is interpolated any more, so the subtree stops re-running layout on every displayed frame while music plays. No new timer. | scale = old height ÷ 14, per-bar `.easeInOut(0.35 + i × 0.07).repeatForever(autoreverses: true)`, rest `.easeOut(0.2)` at 3/14 |
+| **B4 / shortlist 9** — press feedback | `TransportButtonStyle` on the three transport buttons; they had no pressed state at all. Buttons only — the island-shape squash half of B4 is still only proposed. | scale 0.88, opacity 0.7, `.spring(response: 0.2, dampingFraction: 0.6)` |
+| **B3 / shortlist 6 (Music half)** — symbol morph | `.contentTransition(.symbolEffect(.replace.downUp))` on play/pause. Plays on the optimistic state change, i.e. at the click, not at the XPC echo. | `.snappy(duration: 0.28, extraBounce: 0.05)` |
+| **Item 11 (owner-added)** — progress bar glides | The fill crosses each 1 Hz gap at a constant rate instead of stepping. A pure `ProgressGlide` classifies each change as glide / seek / cut, so a seek eases and a track change resets with no animation — the bar can never run backwards. Drag-to-seek is untouched and still follows the pointer with no curve. | glide `.linear(1.0)`, seek `.easeOut(0.2)`, track change `nil`; tick step ≤ 1.5 s counts as a tick |
+
+### Idle cost
+
+No timer was added and none was removed. The glide rides the existing 1 Hz tick, which the
+expanded card already starts in `onAppear` and stops in `onDisappear`; a paused track ticks
+without moving, which now classifies as a *cut*, so nothing animates. The visualizer change
+strictly removes per-frame layout. CPU while music plays should fall — **measured by the
+owner, not here**: this branch never ran the app.
+
+### Reduce Motion
+
+Kept everywhere it existed and added where these items introduced motion: the banner loses
+its 8 pt rise and its spring (`.easeInOut(0.2)`, cross-fade only), the press feedback keeps
+the dimming and drops the scale, the symbol morph falls back to a 0.15 s cross-fade.
+
+**One deliberate departure from B12.** B12 says "cross-fade only, **no widening**" under
+Reduce Motion. The widening is kept, because it is what makes room for the title: suppressing
+it would not reduce motion so much as delete the information the peek exists to deliver, and
+the width change is already played on the island's reduced curve (`TransitionChoreographer.reducedMotion`,
+`.easeInOut(0.2)`) rather than on a spring. Flagged here rather than changed silently.
+
+### Spec
+
+`docs/superpowers/specs/2026-09-11-island-core-music-design.md` §3.4 gained a line: the
+track-change peek is a widening of the *same* presentation (a second `.activity` presentation
+gives the panel a new view identity and blinks it away and back, twice), and asks for 96 pt
+slots for its duration. No spec'd constant was changed — `trackChangePeekDuration` is still
+2.5 s and `expandedSize` still 380 × 160.
+
+### Not done, and why
+
+- **A10, the marquee** — the audit says leave it; only a `height` parameter was added so the
+  peek banner can stack an 11 pt title over a 9 pt artist inside the notch's height.
+- **A12** — nothing in Music; the session ring and HUD bar belong to other modules.
+- **B14** — poof particles, rejected in the audit and not revisited.
+- Everything in `IslandCore`, `HUDFeature` and `DropZonesFeature`, which belong to the other
+  two engineers on this audit.
