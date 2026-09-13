@@ -392,6 +392,58 @@ struct IslandPresenterTests {
         #expect(p.cycleDirection(arrivingAt: nil) == nil)
     }
 
+    @Test func theSameCardReturningLaterDoesNotInheritTheDirection() {
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code")
+        p.present(music)
+        p.present(code)
+        p.cycle(.previous)
+        #expect(p.current?.id == music.id)
+        #expect(p.cycleDirection(arrivingAt: music.id) == .previous)
+
+        // An alert borrows the island: the swipe has been played out, and Music coming
+        // back when the alert expires is an arrival, not a gesture.
+        let alert = makePresentation(feature: "code", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        #expect(p.current?.id == alert.id)
+        clock.advance(by: .seconds(4))
+        #expect(p.current?.id == music.id)
+        #expect(p.cycleDirection(arrivingAt: music.id) == nil)
+        #expect(p.lastCycle == nil)
+    }
+
+    @Test func aSwipeMadeUnderAnAlertStillLandsWhenTheAlertClears() {
+        // The other half of the rule: the card was swiped to but never got the island, so
+        // the intent is not spent and it arrives sliding.
+        let clock = ManualClock()
+        let p = IslandPresenter(clock: clock)
+        let music = makePresentation(feature: "music")
+        let code = makePresentation(feature: "code")
+        p.present(music)
+        p.present(code)
+        let alert = makePresentation(feature: "devices", priority: .alert, ttl: .seconds(4))
+        p.present(alert)
+        p.cycle(.next)
+        #expect(p.current?.id == alert.id)
+        clock.advance(by: .seconds(4))
+        #expect(p.current?.id == music.id)
+        #expect(p.cycleDirection(arrivingAt: music.id) == .next)
+    }
+
+    @Test func aCardLeavingTheStackTakesItsCycleIntentWithIt() {
+        let p = IslandPresenter(clock: ManualClock())
+        let a = makePresentation(feature: "a")
+        let b = makePresentation(feature: "b")
+        p.present(a)
+        p.present(b)
+        p.cycle(.next)
+        #expect(p.lastCycle?.id == a.id)
+        p.dismiss(a.id)
+        #expect(p.lastCycle == nil)
+    }
+
     @Test func pickingACardByNameHasNoDirection() {
         let p = IslandPresenter(clock: ManualClock())
         let a = makePresentation(feature: "a")

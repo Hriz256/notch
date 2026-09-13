@@ -23,16 +23,22 @@ public final class IslandPresenter: IslandPresenting {
 
     /// The card a swipe asked for, and which way the user swiped to get it.
     ///
-    /// Kept as a pair rather than a bare direction so it cannot go stale: the surface uses
-    /// it only while the card it names is the one arriving, so an alert borrowing the
-    /// island, or a feature re-presenting its card a second later, never inherits the
-    /// direction of an older swipe.
+    /// Kept as a pair rather than a bare direction so a card can never inherit the
+    /// direction of a swipe that was not aimed at it, and dropped as soon as it is spent:
+    /// the moment the card it names has been on screen and then left, or has left the
+    /// stack altogether, the intent is gone (see ``queueDidChange()``). A card coming back
+    /// after a transient alert borrowed the island is arriving, not being swiped to.
     public struct CycleIntent: Sendable, Equatable {
         public let id: PresentationID
         public let direction: CycleDirection
     }
 
     public private(set) var lastCycle: CycleIntent?
+
+    /// Whether the card ``lastCycle`` names has actually taken the island since the swipe.
+    /// Once it has, the next change that takes it off screen spends the intent: the slide
+    /// has been played, and it must not be played again when the card comes back.
+    @ObservationIgnored private var lastCycleWasShown = false
 
     /// Which way content should travel for the card now taking the island, or `nil` when it
     /// did not arrive by a swipe (a menu pick, an alert, a feature presenting itself).
@@ -235,6 +241,7 @@ public final class IslandPresenter: IslandPresenting {
         // same card either way, and a left flick that looks like a right one is the
         // feedback the swipe has never had.
         lastCycle = CycleIntent(id: id, direction: direction)
+        lastCycleWasShown = false
         logger.info("cycle \(direction == .next ? "next" : "previous", privacy: .public) → pinned \(id.description, privacy: .public)")
         queueDidChange()
     }
@@ -248,7 +255,7 @@ public final class IslandPresenter: IslandPresenting {
         guard pinnedID != id, stack.contains(where: { $0.id == id }) else { return }
         pinnedID = id
         // Picked by name, not by gesture: there is no axis to slide along.
-        if lastCycle != nil { lastCycle = nil }
+        clearCycleIntent()
         logger.info("pin → pinned \(id.description, privacy: .public)")
         queueDidChange()
     }
@@ -257,7 +264,7 @@ public final class IslandPresenter: IslandPresenting {
     public func unpin() {
         guard pinnedID != nil else { return }
         pinnedID = nil
-        if lastCycle != nil { lastCycle = nil }
+        clearCycleIntent()
         logger.info("unpin")
         queueDidChange()
     }
@@ -344,12 +351,38 @@ public final class IslandPresenter: IslandPresenting {
         if let pinnedID, !stack.contains(where: { $0.id == pinnedID }) {
             self.pinnedID = nil
         }
+        expireCycleIntent()
         if isHoverEligible {
             armHoverEnterIfNeeded()
         } else {
             cancelHoverTimer()
             if isHoverPromoted { isHoverPromoted = false }
         }
+    }
+
+    /// Drops a cycle intent once it can no longer describe an arrival.
+    ///
+    /// Two ways it dies. Its card leaving ``stack`` is the same rule the pin follows. The
+    /// other is subtler and is what the type's own promise depends on: once the card has
+    /// been ``current`` and something else has taken the island, the slide has been played
+    /// and is spent. Without this, a card that came back after a transient alert — or was
+    /// re-presented under a retained id — slid in as if the user had just swiped to it.
+    private func expireCycleIntent() {
+        guard let lastCycle else { return }
+        guard stack.contains(where: { $0.id == lastCycle.id }) else { return clearCycleIntent() }
+        if current?.id == lastCycle.id {
+            lastCycleWasShown = true
+        } else if lastCycleWasShown {
+            clearCycleIntent()
+        }
+    }
+
+    /// Writes only when there is something to clear: an `@Observable` set re-draws every
+    /// view reading it, and the island must not re-draw because a feature refreshed a card.
+    private func clearCycleIntent() {
+        lastCycleWasShown = false
+        guard lastCycle != nil else { return }
+        lastCycle = nil
     }
 
     /// Starts the enter delay when the pointer is inside, the winner is eligible, and no
