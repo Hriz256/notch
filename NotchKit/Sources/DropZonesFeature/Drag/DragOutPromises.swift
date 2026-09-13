@@ -86,13 +86,14 @@ public final class DragOutPromiseTracker: DragOutPromiseTracking {
         }
         let unredeemed = outstandingFileIDs
         guard !unredeemed.isEmpty else { return [] }
-        // Given up on: a receiver that has not asked by now never will (it crashed, it
-        // accepted a drop it then abandoned), and leaving the registration standing would
-        // make every later drag-out wait the full timeout and keep its files too. The
-        // caller keeps the file, so the user can simply drag it out again.
-        logger.error("""
-            giving up on \(unredeemed.count, privacy: .public) unredeemed file promise(s); \
-            the files stay in the stash
+        // Not waited on any longer: the receiver almost always took the file *URL* the
+        // pasteboard also carries and never had a promise to redeem, and in the rare other
+        // case (a receiver that crashed, a drop it abandoned) it never will. Either way a
+        // registration left standing would make every later drag-out wait the full timeout
+        // too. The bytes are not lost: they stay on disk until the orphan sweep.
+        logger.info("""
+            \(unredeemed.count, privacy: .public) file promise(s) were not redeemed within the \
+            timeout; the receiver took the URL, the bytes stay until the orphan sweep
             """)
         outstanding.removeAll()
         return unredeemed

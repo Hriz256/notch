@@ -26,7 +26,9 @@ struct StashLeadingView: View {
                     files: model.index.files,
                     store: model.store,
                     promises: model.promises,
-                    thumbnail: { model.thumbnails[$0.id]?.image },
+                    // Only a real preview: a file QuickLook had nothing for has the
+                    // system icon in its `Thumbnail`, and the drag draws its own at 32 pt.
+                    thumbnail: { model.thumbnails[$0.id].flatMap { $0.hasPreview ? $0.image : nil } },
                     onBegan: { model.dragOutBegan() },
                     onEnded: { model.dragOutEnded(completed: $0) }
                 )
