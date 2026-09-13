@@ -36,10 +36,17 @@ enum VisualizerMetrics {
 ///
 /// The animated property is a **transform**, not a frame (audit A9): each bar is drawn once
 /// at its full height and squashed by `scaleEffect(y:)`. Animating `.frame(height:)` instead
-/// makes SwiftUI re-run layout for this subtree on every displayed frame, on the main thread,
-/// for as long as music plays — and the music peek is the island's resting state, so that was
-/// the app's steady-state cost rather than a transient one. A scale is a layer property the
-/// render server can own outright: same pixels, no per-frame layout, and no extra timer.
+/// invalidates this subtree's layout on every displayed frame, for as long as music plays —
+/// and the music peek is the island's resting state, so that was the app's steady-state cost
+/// rather than a transient one. SwiftUI still drives the scale per frame; what it no longer
+/// does is re-run layout to get there. No extra timer either way.
+///
+/// The bars occupy the same rectangles they did: the scale is the old height over 14, which
+/// `VisualizerMetricsTests` pins to measured values. One thing genuinely changed — the 1 pt
+/// corner radius is squashed along with the bar, so the paused dot's corners are ~0.21 pt
+/// instead of 1 pt and read a little sharper. A `Capsule()` or a radius scaled back up does
+/// not recover it (both are clamped by the 3 pt width), and animating the radius would put
+/// the per-frame shape rebuild back, so it stands as a deliberate, noted regression.
 struct VisualizerBars: View {
     let isPlaying: Bool
     var color: Color = .white

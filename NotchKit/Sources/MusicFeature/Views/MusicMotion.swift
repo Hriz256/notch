@@ -35,6 +35,9 @@ enum MusicMotion {
     /// Mouse-down and mouse-up on a transport button. `nonisolated` because `ButtonStyle`
     /// bodies are not main-actor isolated; the values are plain `Sendable` constants.
     nonisolated static let press: Animation = .spring(response: 0.2, dampingFraction: 0.6)
+    /// Reduce Motion keeps the dimming and loses the scale — and with the scale gone there is
+    /// nothing for a spring to settle, so the opacity takes a plain curve.
+    nonisolated static let pressReduced: Animation = .easeOut(duration: 0.15)
     nonisolated static let pressedScale: CGFloat = 0.88
     nonisolated static let pressedOpacity: Double = 0.7
 

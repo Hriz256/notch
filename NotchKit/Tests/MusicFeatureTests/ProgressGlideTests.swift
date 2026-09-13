@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftUI
 @testable import MusicFeature
 
 /// The rule that decides whether the progress fill glides, eases or cuts. The bar must never
@@ -36,6 +37,15 @@ struct ProgressGlideTests {
     /// not the old track's 5 s, and interpolating between them is meaningless.
     @Test func aTrackChangeCutsEvenWhenItMovesForward() {
         #expect(ProgressGlide.classify(from: sample(3, "one"), to: sample(4, "two")) == .cut)
+    }
+
+    /// The case that made the fill sweep backwards across the whole bar: a live album where
+    /// consecutive tracks share a title and a cover and differ only by artist. `trackKey`
+    /// carries the artist, so this is a track change and it cuts.
+    @Test func anArtistOnlyTrackChangeCuts() {
+        let before = ProgressGlide.Sample(elapsed: 174, trackID: "Intro\u{1F}Ann\u{1F}art-7")
+        let after = ProgressGlide.Sample(elapsed: 0, trackID: "Intro\u{1F}Bo\u{1F}art-7")
+        #expect(ProgressGlide.classify(from: before, to: after) == .cut)
     }
 
     /// A paused island still ticks (the timer is what resumes cleanly); the value does not

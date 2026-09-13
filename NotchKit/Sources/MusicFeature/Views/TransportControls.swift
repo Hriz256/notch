@@ -18,7 +18,7 @@ struct TransportButtonStyle: ButtonStyle {
         return configuration.label
             .scaleEffect(pressed && !isReduced ? MusicMotion.pressedScale : 1)
             .opacity(pressed ? MusicMotion.pressedOpacity : 1)
-            .animation(MusicMotion.press, value: pressed)
+            .animation(isReduced ? MusicMotion.pressReduced : MusicMotion.press, value: pressed)
     }
 }
 

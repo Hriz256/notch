@@ -76,11 +76,15 @@ public final class MusicViewModel {
 
     /// What ``displayedElapsed`` belongs to, for views that must cut rather than animate when
     /// the track changes — the progress bar resets to zero on a skip and must not run
-    /// backwards to get there. The artist is deliberately not part of it: it never moves the
-    /// playhead on its own.
+    /// backwards to get there.
+    ///
+    /// Derived from the same ``TrackIdentity`` the banner is triggered by, so the two cannot
+    /// disagree: a live album where consecutive tracks share a title and a cover still changes
+    /// artist, and keying on title + artwork alone would have called that a *seek* and swept
+    /// the fill backwards across the whole bar.
     var trackKey: String? {
         guard let snapshot, snapshot.hasTrack else { return nil }
-        return "\(snapshot.title ?? "")|\(snapshot.artworkID ?? "")"
+        return TrackIdentity(snapshot).key
     }
 
     /// The island this feature presents on. Exposed read-only so the feature's context
@@ -117,6 +121,11 @@ public final class MusicViewModel {
             artist = s.artist
             artworkID = s.artworkID
         }
+
+        /// The same identity as one value, for views that key on the track. Joined on a unit
+        /// separator, which cannot appear in a title or an artist, so two different tracks
+        /// cannot collide by punctuation.
+        var key: String { [title, artist, artworkID].map { $0 ?? "" }.joined(separator: "\u{1F}") }
     }
 
     public init(presenter: any IslandPresenting,
