@@ -9,7 +9,9 @@ import IslandCore
 /// menu-bar slider moves, whatever the device's channel layout; devices without it are
 /// reported as `nil` and get no HUD. Mute is optional per device.
 @MainActor
-final class CoreAudioVolumeSource: VolumeDeviceSource {
+public final class CoreAudioVolumeSource: VolumeDeviceSource {
+    public init() {}
+
     private static let defaultDeviceAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -26,7 +28,7 @@ final class CoreAudioVolumeSource: VolumeDeviceSource {
         mElement: kAudioObjectPropertyElementMain
     )
 
-    func defaultOutputDevice() -> UInt32? {
+    public func defaultOutputDevice() -> UInt32? {
         var device = AudioDeviceID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = Self.defaultDeviceAddress
@@ -36,7 +38,7 @@ final class CoreAudioVolumeSource: VolumeDeviceSource {
         return device
     }
 
-    func sample(of device: UInt32) -> VolumeSample? {
+    public func sample(of device: UInt32) -> VolumeSample? {
         var volumeAddress = Self.volumeAddress
         guard AudioObjectHasProperty(device, &volumeAddress) else { return nil }
         var volume: Float32 = 0
@@ -54,11 +56,11 @@ final class CoreAudioVolumeSource: VolumeDeviceSource {
         return VolumeSample(level: Double(volume), isMuted: isMuted)
     }
 
-    func observeDefaultDevice(_ handler: @escaping @MainActor () -> Void) -> ScheduledToken {
+    public func observeDefaultDevice(_ handler: @escaping @MainActor () -> Void) -> ScheduledToken {
         listen(AudioObjectID(kAudioObjectSystemObject), Self.defaultDeviceAddress, handler)
     }
 
-    func observeVolume(of device: UInt32, _ handler: @escaping @MainActor () -> Void) -> ScheduledToken {
+    public func observeVolume(of device: UInt32, _ handler: @escaping @MainActor () -> Void) -> ScheduledToken {
         var tokens = [listen(device, Self.volumeAddress, handler)]
         var muteAddress = Self.muteAddress
         if AudioObjectHasProperty(device, &muteAddress) {
