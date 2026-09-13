@@ -3,13 +3,13 @@ import Testing
 
 struct SuppressionPlanTests {
     @Test func applySetsThePreferenceRestartsControlCenterThenStopsTheHelper() {
-        #expect(SuppressionPlan.apply(preferenceAlreadyFalse: false) == [
+        #expect(SuppressionPlan.apply(controlCenterConfigured: false) == [
             .setBannersPreference(false), .restartControlCenter, .kickstartOSDUIHelper, .stopOSDUIHelper,
         ])
     }
 
-    @Test func applyWithThePreferenceAlreadyOffSkipsControlCenter() {
-        #expect(SuppressionPlan.apply(preferenceAlreadyFalse: true) == [.kickstartOSDUIHelper, .stopOSDUIHelper])
+    @Test func applyWithControlCenterAlreadyConfiguredSkipsIt() {
+        #expect(SuppressionPlan.apply(controlCenterConfigured: true) == [.kickstartOSDUIHelper, .stopOSDUIHelper])
     }
 
     @Test func liftRelaunchesTheHelperAndRemovesOnlyOurPreference() {

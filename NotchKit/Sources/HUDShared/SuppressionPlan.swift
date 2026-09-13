@@ -19,12 +19,13 @@ public enum SuppressionStep: Equatable, Sendable {
 public enum SuppressionPlan {
     /// The steps that put the system HUD away.
     ///
-    /// - Parameter preferenceAlreadyFalse: the key is already `false` (we set it on an
-    ///   earlier run, or the user did): Control Center already runs the wanted way and a
-    ///   restart would only blink the menu bar.
-    public static func apply(preferenceAlreadyFalse: Bool) -> [SuppressionStep] {
+    /// - Parameter controlCenterConfigured: the key is already `false` *and* Control Center
+    ///   has been restarted since we set it, so it already runs the wanted way and another
+    ///   restart would only blink the menu bar. The preference's value alone is not enough:
+    ///   an earlier run may have written it and then failed to restart Control Center.
+    public static func apply(controlCenterConfigured: Bool) -> [SuppressionStep] {
         var steps: [SuppressionStep] = []
-        if !preferenceAlreadyFalse {
+        if !controlCenterConfigured {
             steps += [.setBannersPreference(false), .restartControlCenter]
         }
         steps += [.kickstartOSDUIHelper, .stopOSDUIHelper]

@@ -66,9 +66,24 @@ final class SystemHUDSuppressorTests {
     @Test func applyWithThePreferenceAlreadyOffLeavesControlCenterAlone() async {
         let (suppressor, shell, _) = make()
         shell.preference = false
+        defaults.set(true, forKey: "hud.controlCenterConfigured")
         await suppressor.apply()
 
         #expect(shell.steps == [.kickstartOSDUIHelper, .stopOSDUIHelper])
+        #expect(!defaults.bool(forKey: "hud.weSetBannersPreference"))
+    }
+
+    /// The preference survives a run that wrote it and then failed to restart Control Center
+    /// (SIP refuses `launchctl kickstart -k`), so its value alone must not skip the restart.
+    @Test func applyWithThePreferenceOffButControlCenterNotYetRestartedRestartsIt() async {
+        let (suppressor, shell, _) = make()
+        shell.preference = false
+        await suppressor.apply()
+
+        #expect(shell.steps == [
+            .setBannersPreference(false), .restartControlCenter, .kickstartOSDUIHelper, .stopOSDUIHelper,
+        ])
+        #expect(defaults.bool(forKey: "hud.controlCenterConfigured"))
         #expect(!defaults.bool(forKey: "hud.weSetBannersPreference"))
     }
 
@@ -81,6 +96,7 @@ final class SystemHUDSuppressorTests {
         #expect(shell.steps == [.kickstartOSDUIHelper, .setBannersPreference(nil), .restartControlCenter])
         #expect(!suppressor.isApplied)
         #expect(!defaults.bool(forKey: "hud.suppressionApplied"))
+        #expect(!defaults.bool(forKey: "hud.controlCenterConfigured"))
         #expect(clock.pendingCount == 0)
 
         let (other, otherShell, _) = make()

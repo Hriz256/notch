@@ -28,6 +28,10 @@ public final class SystemHUDSuppressor {
     public static let watchdogInterval: Duration = .seconds(5)
     public static let appliedKey = "hud.suppressionApplied"
     public static let weSetPreferenceKey = "hud.weSetBannersPreference"
+    /// Control Center has been restarted since the preference became `false`, so it is really
+    /// running the wanted way. Written only after the restart step has run: the preference's
+    /// own value proves nothing, an earlier run could have written it and failed to restart.
+    public static let controlCenterConfiguredKey = "hud.controlCenterConfigured"
 
     public private(set) var isApplied: Bool
 
@@ -57,10 +61,12 @@ public final class SystemHUDSuppressor {
             let alreadyFalse = await offMain { shell.bannersPreference() == false }
             guard !isTerminating else { return }
             let weSet = defaults.bool(forKey: Self.weSetPreferenceKey) || !alreadyFalse
+            let configured = alreadyFalse && defaults.bool(forKey: Self.controlCenterConfiguredKey)
             defaults.set(true, forKey: Self.appliedKey)
             defaults.set(weSet, forKey: Self.weSetPreferenceKey)
             isApplied = true
-            await execute(SuppressionPlan.apply(preferenceAlreadyFalse: alreadyFalse))
+            await execute(SuppressionPlan.apply(controlCenterConfigured: configured))
+            if !configured { defaults.set(true, forKey: Self.controlCenterConfiguredKey) }
             guard !isTerminating else { return }
             logger.info("system HUD suppressed")
             armWatchdog()
@@ -198,5 +204,6 @@ public final class SystemHUDSuppressor {
         isApplied = false
         defaults.set(false, forKey: Self.appliedKey)
         defaults.set(false, forKey: Self.weSetPreferenceKey)
+        defaults.set(false, forKey: Self.controlCenterConfiguredKey)
     }
 }
