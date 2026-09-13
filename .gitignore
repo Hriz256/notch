@@ -5,3 +5,9 @@
 xcuserdata/
 .swiftpm/
 .build/
+
+# Local tooling scratch and build artefacts
+.superpowers/
+.claude/
+*.dmg
+/build-*/
