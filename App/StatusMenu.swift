@@ -3,6 +3,7 @@ import CodeAgentFeature
 import CodeAgentShared
 import DropZonesFeature
 import DropZonesShared
+import HUDFeature
 import IslandCore
 import MusicFeature
 
@@ -24,6 +25,7 @@ struct StatusMenu: View {
         cards
         codingAgents
         dropZones
+        hud
         Divider()
         // Reloading is a no-op while music is off, so the button reflects that rather than looking
         // like it did something.
@@ -39,9 +41,13 @@ struct StatusMenu: View {
     }
 
     /// The master-switch row's label. `capitalized` on the raw id reads correctly for
-    /// "music" and "code"; "dropzones" is the one id that stands for two words.
+    /// "music" and "code"; the ids that stand for more than one word are spelled out.
     private static func title(for id: FeatureID) -> String {
-        id == DropZonesViewModel.featureID ? DropZonesViewModel.displayTitle : id.rawValue.capitalized
+        switch id {
+        case DropZonesViewModel.featureID: DropZonesViewModel.displayTitle
+        case HUDViewModel.featureID: "Volume & Brightness HUD"
+        default: id.rawValue.capitalized
+        }
     }
 
     /// The same card list the island's own menu shows, reachable when the pointer is
@@ -139,5 +145,20 @@ struct StatusMenu: View {
         }
         // Switched off, none of this has any effect until the feature comes back.
         .disabled(!coordinator.registry.isEnabled(DropZonesViewModel.featureID))
+    }
+
+    /// Which levels show a HUD. Both off leaves the system HUD alone.
+    private var hud: some View {
+        Menu("HUD") {
+            Toggle("Volume", isOn: Binding(
+                get: { coordinator.hudFeature.settings.volume },
+                set: { coordinator.hudFeature.setVolume($0) }
+            ))
+            Toggle("Brightness", isOn: Binding(
+                get: { coordinator.hudFeature.settings.brightness },
+                set: { coordinator.hudFeature.setBrightness($0) }
+            ))
+        }
+        .disabled(!coordinator.registry.isEnabled(HUDViewModel.featureID))
     }
 }

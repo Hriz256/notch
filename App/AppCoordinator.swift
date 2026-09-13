@@ -2,6 +2,7 @@ import SwiftUI
 import os
 import CodeAgentFeature
 import DropZonesFeature
+import HUDFeature
 import IslandCore
 import MusicFeature
 
@@ -17,6 +18,9 @@ final class AppCoordinator {
     /// Held by name for the same reason: the status menu reads its settings, and clears or
     /// reveals the stash through it.
     let dropZonesFeature = DropZonesFeature()
+    /// Held by name: the status menu reads its settings, and termination lifts its
+    /// system-HUD suppression synchronously.
+    let hudFeature = HUDFeature()
     @ObservationIgnored private let logger = Logger(subsystem: "app.notch", category: "coordinator")
     private var demoID: PresentationID?
 
@@ -35,9 +39,17 @@ final class AppCoordinator {
         registry.register(MusicFeature(), enabledByDefault: true)
         registry.register(codeFeature, enabledByDefault: true)
         registry.register(dropZonesFeature, enabledByDefault: true)
+        // Registered a turn later than the rest: a suppression left behind by a crash has to
+        // be repaired before the feature activates and decides whether to re-apply it.
+        let hudEnabled = UserDefaults.standard.object(forKey: FeatureRegistry.defaultsKey(HUDFeature.featureID)) as? Bool ?? true
+        Task { @MainActor [hudFeature, registry] in
+            await hudFeature.repairAfterUncleanExit(featureEnabled: hudEnabled)
+            registry.register(hudFeature, enabledByDefault: true)
+        }
     }
 
     func stop() {
+        hudFeature.prepareForTermination()
         registry.deactivateAll()
         surface.stop()
     }
