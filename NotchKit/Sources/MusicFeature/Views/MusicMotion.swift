@@ -37,4 +37,12 @@ enum MusicMotion {
     nonisolated static let press: Animation = .spring(response: 0.2, dampingFraction: 0.6)
     nonisolated static let pressedScale: CGFloat = 0.88
     nonisolated static let pressedOpacity: Double = 0.7
+
+    // MARK: Symbol morph (audit B3)
+
+    /// Play ↔ pause. Short and barely bouncy: the glyph is 20 pt and the user has already
+    /// heard the audio change by the time it lands.
+    static let symbolReplace: Animation = .snappy(duration: 0.28, extraBounce: 0.05)
+    /// Reduce Motion: a straight cross-fade, no travel.
+    static let symbolReplaceReduced: Animation = .easeInOut(duration: 0.15)
 }
