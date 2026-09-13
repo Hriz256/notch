@@ -57,7 +57,12 @@ struct HUDBarView: View {
                 .frame(width: HUDBarLayout.fillWidth(fraction: fraction, total: HUDBarLayout.size.width))
         }
         .frame(width: HUDBarLayout.size.width, height: HUDBarLayout.size.height)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: fraction)
+        // The fill's width is sprung, so at the top of the range the overshoot would run
+        // past the track and leave a white nub sticking out of the capsule's right end.
+        // Clipping to the track is what keeps the overshoot a *settle* rather than a
+        // glitch; it costs nothing, since the track is this exact shape already.
+        .clipShape(Capsule())
+        .animation(HUDMotion.bar(reduceMotion: reduceMotion), value: fraction)
         .padding(.trailing, HUDBarLayout.inset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
     }

@@ -34,4 +34,31 @@ struct HUDMotionTests {
         }
         #expect(Set(symbols).count == symbols.count)
     }
+
+    // MARK: - The bar's overshoot (audit B8, owner's call)
+
+    @Test("The fill is sprung so it runs past the new level and settles")
+    func barCurve() {
+        #expect(HUDMotion.bar(reduceMotion: false)
+            == .spring(response: 0.24, dampingFraction: 0.72))
+        #expect(HUDMotion.barResponse == 0.24)
+        #expect(HUDMotion.barDamping == 0.72)
+    }
+
+    @Test("Reduce Motion still cuts the fill to the level, as the spec has always said")
+    func barUnderReduceMotion() {
+        #expect(HUDMotion.bar(reduceMotion: true) == nil)
+    }
+
+    /// The spring overshoots the *width*, which the view clips to the track. The target it
+    /// overshoots from and returns to is still clamped here, so a level the monitors
+    /// report out of range can never park the fill outside the capsule.
+    @Test("Whatever the level, the fill's resting width is inside the track")
+    func fillWidthNeverLeavesTheTrack() {
+        let total = HUDBarLayout.size.width
+        for fraction in [-1.0, -0.06, 0, 0.5, 1, 1.06, 4, .infinity, .nan] {
+            let width = HUDBarLayout.fillWidth(fraction: fraction, total: total)
+            #expect(width >= 0 && width <= total)
+        }
+    }
 }

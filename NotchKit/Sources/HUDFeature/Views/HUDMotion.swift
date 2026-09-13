@@ -33,4 +33,26 @@ enum HUDMotion {
     /// Whether the glyph morphs at all — the boolean half of ``symbolTransition(reduceMotion:)``,
     /// separated out because `ContentTransition` is opaque to a test.
     static func morphsSymbol(reduceMotion: Bool) -> Bool { !reduceMotion }
+
+    // MARK: - The bar (audit B8)
+
+    /// The fill runs slightly past the new level and settles, instead of decelerating into
+    /// it and stopping dead.
+    ///
+    /// This is a **deliberate departure from the system HUD**, whose bar does not
+    /// overshoot: the owner took the audit's optional B8 on the grounds that it is
+    /// juicier than macOS. The spec's "The bar" row carries the same note.
+    ///
+    /// 0.24 keeps it inside the 0.12 s the spec used to ask for *perceptually* — the fill
+    /// is past the new level within about a tenth of a second and only the tail is late —
+    /// so holding a volume key still reads as a continuous slide rather than a queue of
+    /// springs; 0.72 is one visible overshoot and no wobble.
+    static let barResponse: Double = 0.24
+    static let barDamping: Double = 0.72
+
+    /// Reduce Motion drops the animation entirely, as the spec has always said: the fill
+    /// cuts to the new level.
+    static func bar(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(response: barResponse, dampingFraction: barDamping)
+    }
 }
