@@ -235,6 +235,34 @@ struct DropZonesViewsTests {
         #expect(provider.fileType == "public.png")
     }
 
+    @Test("A promise also offers the stored file's URL, so apps that ignore promises take the drop")
+    func promiseProviderOffersAFileURL() throws {
+        // Finder redeems promises; Chromium/Electron apps, Telegram and most file inputs
+        // read `public.file-url` and never look at one. The provider therefore carries
+        // both — the promise types first, so Finder keeps using the promise.
+        let store = StashStore(
+            baseDirectory: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("DropZonesViewsTests-\(UUID().uuidString)")
+        )
+        let provider = StashFilePromiseProvider(
+            file: StashedFile(name: "a.png", storedPath: "/tmp/notch-stash/a.png", bytes: 1),
+            fileType: "public.png",
+            delegate: StashFilePromiseDelegate(store: store, promises: DragOutPromiseTracker())
+        )
+        let pasteboard = NSPasteboard(name: .init("app.notch.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+
+        let types = provider.writableTypes(for: pasteboard)
+
+        #expect(types.contains(.fileURL))
+        #expect(types.last == .fileURL, "the promise types stay first, so Finder still promises")
+        // The URL is written eagerly: a promised file-URL would hand the receiver nothing.
+        #expect(provider.writingOptions(forType: .fileURL, pasteboard: pasteboard) == [])
+        let plist = try #require(provider.pasteboardPropertyList(forType: .fileURL))
+        let url = try #require(NSURL(pasteboardPropertyList: plist, ofType: .fileURL) as URL?)
+        #expect(url.path == "/tmp/notch-stash/a.png")
+    }
+
     @Test("The drag image is the 32 pt cascade the spec describes")
     func dragImageCascade() {
         #expect(DragSourceView.iconSide == 32)

@@ -247,6 +247,38 @@ final class StashFilePromiseProvider: NSFilePromiseProvider {
         self.fileType = fileType
         self.delegate = delegate
     }
+
+    // MARK: The file URL beside the promise
+
+    /// The promise's own types **plus** `public.file-url`.
+    ///
+    /// A promise alone is a drag only Finder takes: Chromium and Electron apps (the Claude
+    /// desktop app, Slack, Telegram), most document apps and every HTML file input read
+    /// `public.file-url` and never look at a promise, so they refused the drop. The stashed
+    /// file really is on disk at ``StashedFile/storedPath``, so there is a URL to give them.
+    ///
+    /// Appended rather than prepended: a receiver picks the first type it understands, so
+    /// Finder keeps redeeming the promise and its copy semantics — and the promise tracker
+    /// keeps counting — exactly as before. Adding types this way is the pattern of Apple's
+    /// "Supporting Drag and Drop Through File Promises" sample.
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        super.writableTypes(for: pasteboard) + [.fileURL]
+    }
+
+    /// The URL is written eagerly; only the promise's own types are promised. A promised
+    /// file URL would hand the receiver nothing until it asked, which is the one thing
+    /// these receivers never do.
+    override func writingOptions(
+        forType type: NSPasteboard.PasteboardType,
+        pasteboard: NSPasteboard
+    ) -> NSPasteboard.WritingOptions {
+        type == .fileURL ? [] : super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        guard type == .fileURL else { return super.pasteboardPropertyList(forType: type) }
+        return (URL(fileURLWithPath: file.storedPath) as NSURL).pasteboardPropertyList(forType: type)
+    }
 }
 
 /// Writes a stashed file to wherever the receiving application asked for it.
