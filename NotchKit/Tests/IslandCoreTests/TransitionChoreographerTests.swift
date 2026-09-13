@@ -44,6 +44,46 @@ struct ContentTimingTests {
     }
 }
 
+/// The two curves the black shape itself moves on.
+struct GeometrySpringTests {
+    typealias Spring = TransitionChoreographer.Spring
+
+    @Test func theShapeUsesTheRetunedSprings() {
+        let c = TransitionChoreographer.standard
+        #expect(c.geometry == Spring.grow.animation)
+        #expect(c.collapseGeometry == Spring.collapse.animation)
+        #expect(Spring.grow == .init(response: 0.38, damping: 0.82))
+        #expect(Spring.collapse == .init(response: 0.30, damping: 0.92))
+    }
+
+    @Test func theGrowStaysInsideTheAppleWindow() {
+        // Rule 1 of the yardstick: shape changes are springs, 0.35-0.5 s response,
+        // 0.75-0.85 damping.
+        #expect(Spring.grow.response >= 0.35 && Spring.grow.response <= 0.5)
+        #expect(Spring.grow.damping >= 0.75 && Spring.grow.damping <= 0.85)
+    }
+
+    @Test func theCollapseIsTheSameGestureQuickerAndFlatter() {
+        // Rule 3: same family, ~0.75x the response, damping >= 0.9 — and short of
+        // critical, so it arrives rather than creeping.
+        #expect(Spring.collapse.response < Spring.grow.response)
+        #expect(Spring.collapse.response >= Spring.grow.response * 0.7)
+        #expect(Spring.collapse.damping >= 0.9)
+        #expect(Spring.collapse.damping < 1.0)
+    }
+
+    @Test func aMidExpandReversalGetsTheCollapseCurve() {
+        // Interruptibility: the curve is chosen from where the island is heading, so a
+        // collapse that starts while the grow is still in flight retargets on the
+        // collapse spring (springs carry their velocity across).
+        let c = TransitionChoreographer.standard
+        let peek = IslandLayout(mode: .peek, size: CGSize(width: 312, height: 38), topRadius: 8, bottomRadius: 14)
+        let expanded = IslandLayout(mode: .expanded, size: CGSize(width: 390, height: 200), topRadius: 12, bottomRadius: 24)
+        #expect(c.geometryAnimation(from: expanded, to: peek) == c.collapseGeometry)
+        #expect(c.geometryAnimation(from: peek, to: expanded) == c.geometry)
+    }
+}
+
 /// Content has to arrive the way the shape does: out of the notch, at the top.
 struct ContentMotionTests {
     @Test func contentUnfoldsFromUnderTheNotch() {

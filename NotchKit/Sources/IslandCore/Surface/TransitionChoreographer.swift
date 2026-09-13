@@ -3,11 +3,14 @@ import AppKit
 
 /// One place for every animation curve so the island always moves the same way.
 public struct TransitionChoreographer: Sendable {
-    /// Growing: bouncy is fine, an overshoot past the target reads as energy.
+    /// Growing: a little bounce past the target reads as energy.
     public var geometry: Animation
-    /// Shrinking: critically damped. A bouncy spring undershoots, and an undershoot below
-    /// the notch draws the island *inside* the physical notch and exposes its edges.
-    public var collapseGeometry: Animation = .spring(response: 0.38, dampingFraction: 1.0)
+    /// Shrinking: the same gesture played quicker and flatter, never a different feel and
+    /// never a different anchor. It is damped short of critical on purpose — a critically
+    /// damped spring *creeps* into its target instead of arriving — and the undershoot
+    /// that buys is harmless, because `IslandFrame.clamped` floors every interpolated
+    /// frame at the notch, so the island can never be drawn inside the hardware.
+    public var collapseGeometry: Animation = Spring.collapse.animation
     /// Content arriving. A spring, never delayed: the shape and its content start in the
     /// same frame, or the island reads as a box that fills up afterwards. Quicker than the
     /// geometry spring (rule 2 of the audit's yardstick) but overlapping it, not sequenced
@@ -31,11 +34,12 @@ public struct TransitionChoreographer: Sendable {
 
         public var animation: Animation { .spring(response: response, dampingFraction: damping) }
 
-        /// Growing: a little bounce past the target reads as energy.
-        public static let grow = Spring(response: 0.42, damping: 0.78)
-        /// Shrinking: the same gesture, flatter. `IslandFrame.clamped` floors every
-        /// interpolated frame at the notch, so an undershoot can never expose its edges.
-        public static let collapse = Spring(response: 0.38, damping: 1.0)
+        /// Growing. 0.42/0.78 was a touch slow and a touch loose for a 32 pt → 170 pt
+        /// move: the bottom corners of a 380 pt card wobbled visibly on arrival.
+        public static let grow = Spring(response: 0.38, damping: 0.82)
+        /// Shrinking: the same gesture, ~0.8× the response, flat enough not to bounce but
+        /// fast enough to arrive. `IslandFrame.clamped` keeps the undershoot honest.
+        public static let collapse = Spring(response: 0.30, damping: 0.92)
         public static let contentIn = Spring(response: 0.26, damping: 0.9)
         public static let contentOut = Spring(response: 0.22, damping: 1.0)
     }
