@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import IslandCore
 
 struct ArtworkView: View {
     let data: Data?
@@ -30,9 +31,11 @@ struct MusicCompactLeading: View {
     /// Artwork, then — for ``MusicViewModel/trackChangePeekDuration`` after a skip — the new
     /// track's title and artist beside it, in the room the widened peek slot has just made.
     ///
-    /// The row is centred in the slot, so as the island grows the artwork slides left by
-    /// roughly half the label's width while the island's own left edge moves left by the same
-    /// amount: the thumbnail stays put on screen and the text unfolds out of the notch.
+    /// The row is pinned ``MusicPeekBanner/edgeInset`` from the island's edge in *both* states,
+    /// and that inset is exactly where centring already put the thumbnail in the plain 56 pt
+    /// slot. So the thumbnail's position inside its slot never changes: when the banner opens
+    /// it travels outward with the island's own left edge and nothing else, instead of lurching
+    /// to sit flush in the bottom corner's curve. The label unfolds into the new room beside it.
     var body: some View {
         HStack(spacing: MusicPeekBanner.spacing) {
             artwork
@@ -41,7 +44,8 @@ struct MusicCompactLeading: View {
                     .transition(.musicPeekBanner(rise: MusicMotion.trackChangeRise))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.leading, MusicPeekBanner.edgeInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         // The island's width and this row animate on different curves, so for a few frames the
         // label is wider than the slot it lives in. Clipping to the slot turns that into the
         // shape *revealing* the text as it grows, instead of text spilling over the notch.
@@ -55,7 +59,7 @@ struct MusicCompactLeading: View {
     /// so a snapshot that merely refreshes progress does not re-run it.
     private var artwork: some View {
         ZStack {
-            ArtworkView(data: model.artwork, size: 18, radius: 4)
+            ArtworkView(data: model.artwork, size: MusicPeekBanner.artworkSize, radius: 4)
                 .id(artworkIdentity)
                 .transition(.opacity)
         }
@@ -73,13 +77,31 @@ struct MusicPeekBanner: View {
     let title: String
     let artist: String?
 
+    static let artworkSize: CGFloat = 18
     static let spacing: CGFloat = 6
-    /// Whatever the widened slot has left once the 18 pt thumbnail and its gap are paid for.
-    static let labelWidth: CGFloat = MusicViewModel.trackChangePeekSlotWidth - 18 - spacing
+
+    /// How far the row stays from the island's own edge. This is exactly where centring puts
+    /// the thumbnail in the plain 56 pt slot, so pinning to it moves nothing when the banner
+    /// opens — and it comfortably clears the peek's 14 pt bottom-corner curve, which is what
+    /// the HUD's flat 12 pt inset (`HUDBarLayout.inset`) is for. The two features cannot
+    /// share the constant: features never import each other.
+    static let edgeInset: CGFloat = (IslandLayout.peekSlotWidth - artworkSize) / 2
+
+    /// A slot's inner edge *is* the notch's edge — `PeekRow` puts the notch straight after it
+    /// — and the notch is a hole in the display, so a glyph that reaches the boundary is a
+    /// glyph sliced in half. Text stops short of it.
+    static let notchGap: CGFloat = 4
+
+    /// Whatever the widened slot has left once the inset, the thumbnail and the two gaps are
+    /// paid for. Narrow on purpose: 90 pt is the widest slot that leaves the expanded card
+    /// alone, and a title too long for it scrolls.
+    static let labelWidth: CGFloat =
+        MusicViewModel.trackChangePeekSlotWidth - edgeInset - artworkSize - spacing - notchGap
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MarqueeText(text: title, font: .system(size: 11, weight: .semibold), height: 13)
+            // 14, not 13: an 11 pt semibold "g" or "y" loses its descender in a 13 pt line box.
+            MarqueeText(text: title, font: .system(size: 11, weight: .semibold), height: 14)
             if let artist, !artist.isEmpty {
                 Text(artist)
                     .font(.system(size: 9))

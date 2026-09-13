@@ -110,6 +110,14 @@ struct MusicViewModelTests {
         #expect(presenter.presented.count == 1)
     }
 
+    /// `IslandLayout.resolve` floors the *expanded* width at `notch + 2 × slot` too, so a slot
+    /// wide enough to out-grow the card makes a skip shove the hover-expanded panel wider and
+    /// back again. The banner is allowed to widen the peek; it is not allowed to touch the card.
+    @Test func theWidenedPeekNeverOutgrowsTheExpandedCard() {
+        #expect(MusicViewModel.expandedSize.width
+                >= MusicViewModel.targetNotchWidth + 2 * MusicViewModel.trackChangePeekSlotWidth)
+    }
+
     /// The banner's entrance *is* the island's width: the peek slots widen while it is up and
     /// settle back when it expires. Without this the flag had no visible consequence at all.
     @Test func trackChangeWidensThePeekSlotsAndSettlesBack() {

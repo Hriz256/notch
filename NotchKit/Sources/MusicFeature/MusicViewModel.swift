@@ -38,12 +38,20 @@ public final class MusicViewModel {
     public static let pauseDismissDelay: Duration = .seconds(600)
     public static let trackChangePeekDuration: Duration = .seconds(2.5)
     public static let expandedSize = CGSize(width: 380, height: 160)
+    /// The built-in display's notch width on the hardware this app targets. Nothing is laid
+    /// out against it — `NotchGeometry` measures the real one — but ``trackChangePeekSlotWidth``
+    /// is *chosen* against it, so it is written down rather than left in a comment.
+    public static let targetNotchWidth: CGFloat = 200
+
     /// How wide the peek slots grow to while the track-change banner is up, so the leading
-    /// slot can hold the new title and artist beside the 18 pt thumbnail. 96 pt is the same
-    /// slot the HUD asks for, i.e. the widening the island already knows how to play. The
-    /// peek then measures `notch + 192` — within a dozen points of the 380 pt expanded card
-    /// on this hardware — so hovering while the banner is up barely moves the panel's width.
-    public static let trackChangePeekSlotWidth: CGFloat = 96
+    /// slot can hold the new title and artist beside the 18 pt thumbnail.
+    ///
+    /// 90, not the HUD's 96, because `IslandLayout.resolve` floors the *expanded* width at
+    /// `notch + 2 × slot` as well: at 96 a skip while the user was hovering would have pushed
+    /// the panel from 380 pt to 392 and back. 90 makes the widened peek exactly the expanded
+    /// card's 380 pt on this hardware, so the panel provably never moves — asserted in
+    /// `MusicViewModelTests`.
+    public static let trackChangePeekSlotWidth: CGFloat = 90
     /// UserDefaults key backing the "Track change peek" setting (absent means on).
     public nonisolated static let trackChangePeekDefaultsKey = "music.trackChangePeek"
     /// UserDefaults key backing the "Keep paused track" setting (absent means on).
