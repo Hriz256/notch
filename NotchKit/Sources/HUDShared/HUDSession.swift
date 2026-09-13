@@ -36,12 +36,13 @@ public struct HUDSession: Equatable, Sendable {
 
     public mutating func receive(_ reading: HUDReading) -> Effect {
         defer { baselines[reading.kind] = reading }
+        // Not a change for its own kind — whatever is on screen stays there.
+        if baselines[reading.kind] == reading { return .none }
         if let current {
             if current == reading { return .none }
             self.current = reading
             return current.kind == reading.kind ? .update(reading) : .replace(reading)
         }
-        if baselines[reading.kind] == reading { return .none }
         current = reading
         return .present(reading)
     }

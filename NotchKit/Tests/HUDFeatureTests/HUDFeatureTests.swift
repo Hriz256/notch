@@ -131,6 +131,28 @@ final class HUDFeatureTests {
         #expect(shell.steps == [.kickstartOSDUIHelper, .setBannersPreference(nil), .restartControlCenter])
     }
 
+    @Test func activateAfterACrashRepairAppliesWithoutLiftingFirst() async {
+        let (first, _, _, _, presenter) = make()
+        first.activate(presenter: presenter)
+        await first.settle()
+        // The flags stay in the shared defaults, as they would after a crash.
+
+        let (second, shell, _, _, secondPresenter) = make()
+        shell.preference = false   // Control Center is already set the way the apply wants it
+        await second.repairAfterUncleanExit(featureEnabled: true)
+        second.activate(presenter: secondPresenter)
+        await second.settle()
+
+        #expect(shell.steps == [.kickstartOSDUIHelper, .stopOSDUIHelper])
+    }
+
+    @Test func deactivateWithoutAnActivateTouchesNothing() async {
+        let (feature, shell, _, _, _) = make()
+        feature.deactivate()
+        await feature.settle()
+        #expect(shell.steps.isEmpty)
+    }
+
     @Test func prepareForTerminationLiftsSynchronously() async {
         let (feature, shell, _, _, presenter) = make()
         feature.activate(presenter: presenter)

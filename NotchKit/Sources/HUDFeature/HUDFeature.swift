@@ -65,8 +65,12 @@ public final class HUDFeature: IslandFeature {
         stopMonitors()
         model?.stop()
         model = nil
+        // Nothing was active, so there is nothing of ours to undo: a `deactivate()` here
+        // would lift a suppression this launch is about to re-apply (the leading call in
+        // ``activate(presenter:)`` after a crash left the flags set).
+        guard wasActive else { return }
         syncSuppression()
-        if wasActive { logger.info("HUD feature deactivated") }
+        logger.info("HUD feature deactivated")
     }
 
     /// For `applicationWillTerminate`: the system HUD is back before the process ends.

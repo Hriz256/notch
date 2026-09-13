@@ -46,6 +46,25 @@ struct HUDSessionTests {
         #expect(session.current == dim)
     }
 
+    @Test func aReadingEqualToItsOwnBaselineLeavesTheOtherKindUp() {
+        var session = HUDSession()
+        session.baseline(half)
+        #expect(session.receive(dim) == .present(dim))
+        // An auto-brightness-style tick of the *volume*'s last known value is not a change,
+        // so it must not replace the brightness HUD that is up.
+        #expect(session.receive(half) == .none)
+        #expect(session.current == dim)
+    }
+
+    @Test func baselineForOneKindLeavesTheOtherKindsAlone() {
+        var session = HUDSession()
+        session.baseline(half)
+        session.baseline(dim)
+        #expect(session.receive(half) == .none)
+        #expect(session.receive(dim) == .none)
+        #expect(session.current == nil)
+    }
+
     @Test func muteToggleIsAChangeEachWay() {
         var session = HUDSession()
         session.baseline(half)
