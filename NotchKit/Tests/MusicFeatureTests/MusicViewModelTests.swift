@@ -110,6 +110,51 @@ struct MusicViewModelTests {
         #expect(presenter.presented.count == 1)
     }
 
+    /// The banner's entrance *is* the island's width: the peek slots widen while it is up and
+    /// settle back when it expires. Without this the flag had no visible consequence at all.
+    @Test func trackChangeWidensThePeekSlotsAndSettlesBack() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        let id = presenter.presented[0].id
+        #expect(presenter.live[id]?.peekSlotWidth == IslandLayout.peekSlotWidth)
+
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        #expect(presenter.live[id]?.peekSlotWidth == MusicViewModel.trackChangePeekSlotWidth)
+        // One update, not two: the island must grow in a single spring, not in two steps.
+        #expect(presenter.updated.count == 1)
+
+        clock.advance(by: MusicViewModel.trackChangePeekDuration)
+        #expect(presenter.live[id]?.peekSlotWidth == IslandLayout.peekSlotWidth)
+        #expect(presenter.updated.count == 2)
+    }
+
+    /// A skip the user cannot see (peek disabled, or paused) must leave the island the width
+    /// it already was.
+    @Test func suppressedBannerLeavesThePeekWidthAlone() {
+        let (vm, presenter, _, _) = make(trackChangePeekEnabled: false)
+        vm.handle(.snapshot(snap("One")))
+        let id = presenter.presented[0].id
+        vm.handle(.snapshot(snap("Two", artworkID: "b")))
+        #expect(presenter.live[id]?.peekSlotWidth == IslandLayout.peekSlotWidth)
+    }
+
+    /// The banner going away with the card must not re-present anything: a dismissal that
+    /// pushed an update would put music back in the stack it had just left.
+    @Test func dismissWhileBannerIsUpDoesNotUpdateAfterwards() {
+        let (vm, presenter, clock, _) = make()
+        vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))
+        vm.handle(.snapshot(snap("Two", artworkID: "b", timestamp: clock.currentDate)))
+        #expect(vm.isShowingTrackChange)
+        let updatesBefore = presenter.updated.count
+
+        vm.handle(.unavailable("gone"))
+        #expect(presenter.dismissed.count == 1)
+        #expect(presenter.updated.count == updatesBefore)
+        #expect(vm.isShowingTrackChange == false)
+        clock.advance(by: MusicViewModel.trackChangePeekDuration)
+        #expect(presenter.updated.count == updatesBefore)
+    }
+
     @Test func consecutiveTrackChangesReArmTheBanner() {
         let (vm, _, clock, _) = make()
         vm.handle(.snapshot(snap("One", timestamp: clock.currentDate)))

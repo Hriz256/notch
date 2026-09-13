@@ -6,6 +6,10 @@ struct MarqueeText: View {
     var font: Font = .system(size: 13, weight: .semibold)
     var color: Color = .white
     var speed: Double = 30 // points per second
+    /// The line box the marquee occupies. The expanded card's 13 pt title wants 18 pt; the
+    /// track-change peek stacks an 11 pt title over a 9 pt artist inside the notch's height
+    /// and asks for less.
+    var height: CGFloat = 18
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
@@ -33,7 +37,7 @@ struct MarqueeText: View {
             // immediately so the old title's scroll does not linger under the new one.
             .onChange(of: text) { _, _ in offset = 0; restart() }
         }
-        .frame(height: 18)
+        .frame(height: height)
         .clipped()
         .mask(edgeFade)
     }

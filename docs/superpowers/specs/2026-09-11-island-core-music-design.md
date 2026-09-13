@@ -138,7 +138,7 @@ struct NowPlayingSnapshot: Sendable, Equatable {
 **MusicFeature: IslandFeature** — owns `NowPlayingCoordinator` and a `MusicViewModel`. Behavior:
 
 - First snapshot with `title != nil` → `present` a sticky `.background` presentation with `style: .peek` (compact) — the island stays slightly widened while media exists.
-- Track change (title/artist/artworkID changed while rate > 0) → `update` compact content and, in addition, present a 2.5 s `.activity` peek showing the new title scrolling (Seam's "track change animation"). Toggle via `UserDefaults` key `music.trackChangePeek`.
+- Track change (title/artist/artworkID changed while rate > 0) → `update` compact content and, in addition, raise a 2.5 s track-change banner showing the new title scrolling (Seam's "track change animation"). Toggle via `UserDefaults` key `music.trackChangePeek`. Implemented as a widening of the *same* presentation rather than a second `.activity` one — a second presentation gives the panel a new view identity and blinks it away and back, twice. For its duration the peek slots ask for 96 pt instead of 56 (the HUD's slot width) so the leading slot fits the title and artist beside the thumbnail; the island's own width animation is the entrance.
 - Rate becomes 0 and stays 0 for 10 min → `dismiss` (island collapses to bare notch). Playback resumes → present again.
 - Hover on collapsed/peek island → presenter promotes to `.expanded` (handled by IslandCore rule 3).
 - Media app quits / no snapshot → dismiss.
