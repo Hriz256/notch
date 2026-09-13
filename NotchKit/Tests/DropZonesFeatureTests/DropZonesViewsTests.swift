@@ -263,6 +263,20 @@ struct DropZonesViewsTests {
         #expect(url.path == "/tmp/notch-stash/a.png")
     }
 
+    @Test("The dragged thumbnail keeps its aspect ratio inside the drag image's box")
+    func draggedThumbnailIsFittedNotSquashed() {
+        // A photo dragged out should look like the photo, not like a square crop of it.
+        #expect(DragSourceView.fittedFrame(for: CGSize(width: 300, height: 200), in: 48)
+            == CGSize(width: 48, height: 32))
+        #expect(DragSourceView.fittedFrame(for: CGSize(width: 200, height: 300), in: 48)
+            == CGSize(width: 32, height: 48))
+        #expect(DragSourceView.fittedFrame(for: CGSize(width: 64, height: 64), in: 48)
+            == CGSize(width: 48, height: 48))
+        // A thumbnail that has no size at all still gets a frame to be drawn in.
+        #expect(DragSourceView.fittedFrame(for: .zero, in: 48) == CGSize(width: 48, height: 48))
+        #expect(DragSourceView.dragImageSide == 48)
+    }
+
     @Test("The drag image is the 32 pt cascade the spec describes")
     func dragImageCascade() {
         #expect(DragSourceView.iconSide == 32)

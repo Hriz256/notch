@@ -23,6 +23,9 @@ struct StashDragSource: NSViewRepresentable {
     /// Where the session's unredeemed promises are counted, so the stash is not deleted
     /// out from under a receiver that has not asked for the bytes yet.
     let promises: DragOutPromiseTracker
+    /// The picture to drag, per file: the QuickLook thumbnail the tiles already draw.
+    /// `nil` for a file QuickLook had nothing for, which falls back to the system icon.
+    let thumbnail: (StashedFile) -> NSImage?
     let onBegan: () -> Void
     let onEnded: (Bool) -> Void
 
@@ -40,6 +43,7 @@ struct StashDragSource: NSViewRepresentable {
         view.files = files
         view.store = store
         view.promises = promises
+        view.thumbnail = thumbnail
         view.onBegan = onBegan
         view.onEnded = onEnded
     }
@@ -57,14 +61,19 @@ final class DragSourceView: NSView, NSDraggingSource {
     var files: [StashedFile] = []
     var store: StashStore?
     var promises: DragOutPromiseTracker?
+    var thumbnail: (StashedFile) -> NSImage? = { _ in nil }
     var onBegan: () -> Void = {}
     var onEnded: (Bool) -> Void = { _ in }
 
     /// How far the pointer must travel before a press becomes a drag. Below it the gesture
     /// is a click, and the island's tap-to-expand must still work through the thumbnails.
     static let dragThreshold: CGFloat = 4
-    /// The drag image: one file icon per item, at the size Finder uses for a drag.
+    /// The fallback drag image: one file icon per item, at the size Finder uses for a drag.
     static let iconSide: CGFloat = 32
+    /// The box a dragged thumbnail is fitted into. Larger than ``iconSide`` because this is
+    /// a *picture* rather than a glyph: at 32 pt a photo is unrecognisable, and the drag
+    /// has to say which file is being carried.
+    static let dragImageSide: CGFloat = 48
 
     private var mouseDownPoint: NSPoint?
 
@@ -140,20 +149,19 @@ final class DragSourceView: NSView, NSDraggingSource {
             )
             let item = NSDraggingItem(pasteboardWriter: provider)
 
-            let icon = NSWorkspace.shared.icon(forFile: file.storedPath)
-            icon.size = NSSize(width: Self.iconSide, height: Self.iconSide)
+            let (image, size) = dragImage(for: file)
             // The cascade steps right and up-screen per item (`DragOutPolicy`), measured
             // from the pointer so the stack is under the cursor rather than at the view's
             // corner. `−4` is up because this view is flipped; see `isFlipped`.
             let offset = DragOutPolicy.dragImageOffset(index: index)
             item.setDraggingFrame(
                 CGRect(
-                    x: origin.x - Self.iconSide / 2 + offset.x,
-                    y: origin.y - Self.iconSide / 2 + offset.y,
-                    width: Self.iconSide,
-                    height: Self.iconSide
+                    x: origin.x - size.width / 2 + offset.x,
+                    y: origin.y - size.height / 2 + offset.y,
+                    width: size.width,
+                    height: size.height
                 ),
-                contents: icon
+                contents: image
             )
             return item
         }
@@ -166,6 +174,42 @@ final class DragSourceView: NSView, NSDraggingSource {
         // impossible to read too late (the drop can be accepted inside that call).
         for file in files { promises.register(fileID: file.id) }
         beginDraggingSession(with: items, event: event, source: self)
+    }
+
+    /// What the user sees under the cursor, and the frame to draw it in.
+    ///
+    /// The thumbnail the tiles already show, fitted into ``dragImageSide`` — dragging a
+    /// photo out used to hand the user a blank document icon while dragging the same photo
+    /// *in* showed the picture. Only when QuickLook had nothing (and the tile is drawing a
+    /// system icon too) does the workspace icon stand in, at its own 32 pt.
+    ///
+    /// The image itself is never resized: the frame carries the thumbnail's aspect ratio,
+    /// so AppKit draws it to fit, and the cached `NSImage` the tiles are drawing from is
+    /// left exactly as it is.
+    private func dragImage(for file: StashedFile) -> (image: NSImage, size: CGSize) {
+        if let preview = thumbnail(file) {
+            return (preview, Self.fittedFrame(for: preview.size, in: Self.dragImageSide))
+        }
+        let icon = NSWorkspace.shared.icon(forFile: file.storedPath)
+        let side = CGSize(width: Self.iconSide, height: Self.iconSide)
+        icon.size = side
+        return (icon, side)
+    }
+
+    /// The largest box with `imageSize`'s aspect ratio that fits in `box` × `box`.
+    ///
+    /// A landscape picture comes out wide and a portrait one tall, so what the user drags
+    /// looks like what they are dragging; a thumbnail with no size at all (nothing ever
+    /// drew into it) falls back to the full square rather than to nothing.
+    static func fittedFrame(for imageSize: CGSize, in box: CGFloat) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return CGSize(width: box, height: box)
+        }
+        let scale = min(box / imageSize.width, box / imageSize.height)
+        return CGSize(
+            width: (imageSize.width * scale).rounded(),
+            height: (imageSize.height * scale).rounded()
+        )
     }
 
     /// The UTI the promise advertises. Falling back to `public.data` rather than refusing
