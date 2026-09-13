@@ -213,13 +213,14 @@ private func touch(_ url: URL, at date: Date) throws {
 
         let clock = MutableClock(start)
         let store = StashStore(baseDirectory: fixture.base, now: clock.read)
-        _ = await store.stash([a], action: .replace)
+        let stashed = await store.stash([a], action: .replace)
 
         clock.set(start.addingTimeInterval(25 * 3_600))
         let loaded = await store.load()
 
         #expect(loaded == StashIndex())
-        #expect(!exists(fixture.stashDirectory))
+        #expect(!exists(stashed.files[0].storedPath), "every folder the index pointed at goes")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.stashDirectory.path).isEmpty)
         #expect(!exists(fixture.indexURL))
         #expect(exists(a), "the original is still the user's file")
     }
@@ -382,30 +383,39 @@ private func touch(_ url: URL, at date: Date) throws {
 
     // MARK: - Sweeping detached folders
 
-    @Test func loadSweepsDetachedFoldersOnlyOnceTheyAreAnHourOld() async throws {
+    /// The hour runs from the **detach**, not from the drop.
+    ///
+    /// Measured from the folder's stash time, a file that had been in the stash since the
+    /// morning was swept by the very next `load()` — another drop, another tile leaving —
+    /// seconds after the user dragged it into an application still holding its URL.
+    @Test func aDetachedFolderStartsItsHourAtTheDetachNotAtTheDrop() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        let old = try fixture.makeFile("old.txt")
-        let young = try fixture.makeFile("young.txt")
+        let dragged = try fixture.makeFile("dragged.txt")
         let kept = try fixture.makeFile("kept.txt")
 
-        let store = StashStore(baseDirectory: fixture.base, now: { start })
-        let stashed = await store.stash([old, young, kept], action: .replace)
-        let folders = stashed.files.map {
-            URL(fileURLWithPath: $0.storedPath).deletingLastPathComponent()
-        }
-        await store.detach(fileIDs: [stashed.files[0].id, stashed.files[1].id])
-        // The receiver of the first file has had its hour; the second was dragged out a
-        // minute ago and may still be being read.
-        try touch(folders[0], at: start.addingTimeInterval(-StashStore.orphanLifetime - 1))
-        try touch(folders[1], at: start.addingTimeInterval(-60))
+        let clock = MutableClock(start)
+        let store = StashStore(baseDirectory: fixture.base, now: clock.read)
+        let stashed = await store.stash([dragged, kept], action: .replace)
+        let folder = URL(fileURLWithPath: stashed.files[0].storedPath).deletingLastPathComponent()
+        // Stashed hours ago, and dragged out just now.
+        try touch(folder, at: start.addingTimeInterval(-2 * StashStore.orphanLifetime))
+        await store.detach(fileIDs: [stashed.files[0].id])
 
         let loaded = await store.load()
 
         #expect(loaded.files.map(\.name) == ["kept.txt"], "the sweep is about bytes, not entries")
-        #expect(!exists(folders[0]), "an hour-old detached folder is swept")
-        #expect(exists(folders[1]), "a fresh one is left for whoever is still reading it")
-        #expect(exists(stashed.files[2].storedPath), "and a file still in the index is never touched")
+        #expect(exists(folder), "the receiver has had no time at all with it yet")
+
+        // An hour after the drag-out, and not a moment before.
+        clock.set(start.addingTimeInterval(StashStore.orphanLifetime - 1))
+        _ = await store.load()
+        #expect(exists(folder))
+        clock.set(start.addingTimeInterval(StashStore.orphanLifetime))
+        _ = await store.load()
+
+        #expect(!exists(folder), "an hour after it was detached, nobody is waiting for it")
+        #expect(exists(stashed.files[1].storedPath), "and a file still in the index is never touched")
     }
 
     @Test func sweepOrphansCollectsTheSameFoldersWithoutReadingTheStashBack() async throws {
@@ -427,6 +437,66 @@ private func touch(_ url: URL, at date: Date) throws {
         // The index is only read, never rewritten: the sweep is about bytes.
         let onDisk = try JSONDecoder().decode(StashIndex.self, from: Data(contentsOf: fixture.indexURL))
         #expect(onDisk.files.map(\.name) == ["kept.txt"])
+    }
+
+    // MARK: - deleteDetached(fileID:)
+
+    @Test func deleteDetachedTakesTheBytesOfAFileThatHasAlreadyLeftTheIndex() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let taken = try fixture.makeFile("taken.txt")
+        let kept = try fixture.makeFile("kept.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([taken, kept], action: .replace)
+        let folder = URL(fileURLWithPath: stashed.files[0].storedPath).deletingLastPathComponent()
+        await store.detach(fileIDs: [stashed.files[0].id])
+
+        // The receiver redeemed its promise, so nobody is owed those bytes any more.
+        await store.deleteDetached(fileID: stashed.files[0].id)
+
+        #expect(!exists(folder))
+        #expect(exists(stashed.files[1].storedPath))
+        #expect(await store.load().files.map(\.name) == ["kept.txt"], "the index is not touched")
+    }
+
+    @Test func deleteDetachedRefusesAFileTheIndexStillLists() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let a = try fixture.makeFile("a.txt")
+
+        let store = StashStore(baseDirectory: fixture.base, now: { start })
+        let stashed = await store.stash([a], action: .replace)
+
+        await store.deleteDetached(fileID: stashed.files[0].id)
+
+        #expect(exists(stashed.files[0].storedPath), "it never left the shelf")
+    }
+
+    // MARK: - expire
+
+    @Test func expiryTakesThePileAndLeavesAFreshlyDetachedFolder() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        let dragged = try fixture.makeFile("dragged.txt")
+        let expired = try fixture.makeFile("expired.txt")
+
+        let clock = MutableClock(start)
+        let store = StashStore(baseDirectory: fixture.base, now: clock.read)
+        let stashed = await store.stash([dragged, expired], action: .replace)
+        let folder = URL(fileURLWithPath: stashed.files[0].storedPath).deletingLastPathComponent()
+        // Dragged out a second before the pile's day is up.
+        clock.set(start.addingTimeInterval(StashIndex.ttl - 1))
+        await store.detach(fileIDs: [stashed.files[0].id])
+
+        clock.set(start.addingTimeInterval(StashIndex.ttl))
+        let loaded = await store.load()
+
+        #expect(loaded == StashIndex())
+        #expect(!exists(fixture.indexURL))
+        #expect(!exists(stashed.files[1].storedPath), "the expired pile goes")
+        #expect(exists(folder), "the detached file keeps its own hour")
+        #expect(exists(dragged), "and the originals are the user's files")
     }
 
     // MARK: - clear

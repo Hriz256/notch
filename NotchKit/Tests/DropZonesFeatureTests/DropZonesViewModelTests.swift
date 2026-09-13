@@ -79,6 +79,21 @@ private final class ManualClock: IslandClock {
     }
 }
 
+/// A wall clock the test moves by hand, for the few cases where the *store's* notion of
+/// now has to pass time (the orphan sweep) and not just the island's timers.
+///
+/// `@unchecked Sendable` justification: the only mutable state is guarded by `lock`.
+private final class MutableDate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    init(_ date: Date) { self.date = date }
+
+    func set(_ date: Date) { lock.withLock { self.date = date } }
+
+    var read: @Sendable () -> Date { { [self] in lock.withLock { date } } }
+}
+
 @MainActor
 private final class AirDropSpy {
     var calls: [[URL]] = []
@@ -1460,7 +1475,9 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.clock.advance(by: .milliseconds(400))
     }
 
-    @Test func aCompletedDragOutDeletesNothingUntilThePromisesAreWritten() async throws {
+    /// The shelf empties the moment the poof is over; only the *bytes* wait for the
+    /// receiver, which is the one thing that must never be taken from under it.
+    @Test func aCompletedDragOutDeletesNoBytesUntilThePromisesAreWritten() async throws {
         let harness = try Harness()
         defer { harness.cleanUp() }
         let tracker = FakePromiseTracker()
@@ -1474,23 +1491,20 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.model.dragOutEnded(completed: true)
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
 
-        // The poof has played on time and the wait has started — and nothing is gone.
-        let waiting = await waitUntil { tracker.waits == 1 }
-        #expect(waiting)
-        #expect(harness.model.index.files.count == 1)
+        // The card goes with the poof and the entry with it — while the receiver, which has
+        // accepted the drop and not yet asked for the bytes, still has them.
+        #expect(await waitUntil { harness.model.index.files.isEmpty })
+        #expect(await waitUntil { harness.presenter.live[peekID] == nil })
+        #expect(await waitUntil { tracker.waits == 1 }, "and the bytes' own wait has started")
+        #expect(harness.model.dragOutPhase == .idle)
         #expect(FileManager.default.fileExists(atPath: file.storedPath))
-        #expect(harness.presenter.live[peekID] != nil)
         let held = await harness.store.load()
-        #expect(held.files.count == 1)
+        #expect(held.files.isEmpty)
 
         tracker.release()
 
-        let cleared = await waitUntil { harness.model.index.files.isEmpty }
-        #expect(cleared)
-        #expect(await waitUntil { harness.presenter.live[peekID] == nil })
-        #expect(harness.model.dragOutPhase == .idle)
-        let stored = await harness.store.load()
-        #expect(stored.files.isEmpty)
+        // Redeemed: the receiver has its own copy now, so ours goes.
+        #expect(await waitUntil { !FileManager.default.fileExists(atPath: file.storedPath) })
     }
 
     /// The normal path now that the pasteboard also carries a file URL: a receiver that
@@ -1512,7 +1526,7 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
 
         let settled = await waitUntil { harness.model.index.files.isEmpty }
-        #expect(settled, "the shelf empties on the timeout rather than keeping the files")
+        #expect(settled, "the shelf empties with the poof rather than keeping the files")
         #expect(await waitUntil { harness.presenter.live[peekID] == nil }, "and the card goes with it")
         #expect(harness.model.dragOutPhase == .idle)
         #expect(harness.model.poofingFileIDs.isEmpty)
@@ -1542,7 +1556,9 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
 
         #expect(await waitUntil { harness.model.index.files.isEmpty })
-        #expect(!FileManager.default.fileExists(atPath: taken.storedPath), "the receiver has those bytes")
+        // The bytes are settled behind the poof: the redeemed file's copy goes as soon as
+        // the promise is in, the other's waits for the sweep.
+        #expect(await waitUntil { !FileManager.default.fileExists(atPath: taken.storedPath) })
         #expect(FileManager.default.fileExists(atPath: byURL.storedPath))
         let stored = await harness.store.load()
         #expect(stored.files.isEmpty)
@@ -1595,7 +1611,8 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
     /// The bytes a detach leaves behind are swept an hour later without waiting for the
     /// next launch: the drag-out arms one sweep on the island's clock.
     @Test func aDetachedFilesBytesAreSweptAnHourLater() async throws {
-        let harness = try Harness()
+        let wallClock = MutableDate(start)
+        let harness = try Harness(now: wallClock.read)
         defer { harness.cleanUp() }
         let tracker = FakePromiseTracker()
         harness.model.promiseTracker = tracker
@@ -1608,14 +1625,12 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         harness.model.dragOutEnded(completed: true)
         harness.clock.advance(by: DropZonesViewModel.poofDuration)
         #expect(await waitUntil { harness.model.index.files.isEmpty })
+        #expect(await waitUntil { tracker.waits == 1 })
         #expect(FileManager.default.fileExists(atPath: folder.path), "still there for the receiver")
-        // The store's clock is the harness's fixed `start`, so the folder has to *look* an
-        // hour old by the time the sweep runs; only the delay is the island clock's.
-        try FileManager.default.setAttributes(
-            [.modificationDate: start.addingTimeInterval(-StashStore.orphanLifetime - 1)],
-            ofItemAtPath: folder.path
-        )
 
+        // Nothing is backdated by hand: the detach dated the folder itself, so what the
+        // sweep measures is the hour the user's file really gets. Both clocks move.
+        wallClock.set(start.addingTimeInterval(StashStore.orphanLifetime + 1))
         harness.clock.advance(by: DropZonesViewModel.orphanSweepDelay)
 
         #expect(await waitUntil { !FileManager.default.fileExists(atPath: folder.path) })
@@ -1645,8 +1660,11 @@ private final class FakePromiseTracker: DragOutPromiseTracking {
         _ = await waitUntil(timeout: .milliseconds(200)) { false }
         #expect(harness.presenter.presented.count == presentedBefore)
         #expect(harness.presenter.updated.count == updatedBefore)
+        // The tile left the shelf before the stop, as it should have; what the resumed work
+        // must not do is delete bytes into a model that is finished.
         let stored = await harness.store.load()
-        #expect(stored.files.count == 2)
+        #expect(stored.files.map(\.name) == ["b.txt"])
+        #expect(FileManager.default.fileExists(atPath: taken.storedPath))
     }
 }
 

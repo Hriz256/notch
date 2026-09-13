@@ -84,7 +84,7 @@ public actor StashStore {
         }
 
         if index.isExpired(now: now()) {
-            clear()
+            expire(index)
             return StashIndex()
         }
 
@@ -167,14 +167,57 @@ public actor StashStore {
     @discardableResult
     public func detach(fileIDs: Set<UUID>) -> StashIndex {
         var index = load()
-        guard index.files.contains(where: { fileIDs.contains($0.id) }) else { return index }
+        let detached = index.files.filter { fileIDs.contains($0.id) }
+        guard !detached.isEmpty else { return index }
 
         index.files.removeAll { fileIDs.contains($0.id) }
         // Emptying the index outright, like `remove`, so no TTL timer is armed for a stash
         // with nothing left in it.
         if index.files.isEmpty { index.removeAll() }
-        writeIndex(index)
+        if writeIndex(index) { startOrphanClock(for: detached) }
         return index
+    }
+
+    /// Deletes the bytes of a file that has already left the index.
+    ///
+    /// What a redeemed promise leads to after its file was detached: the receiver has its
+    /// copy, so the folder ``detach(fileIDs:)`` left behind is no longer owed to anybody
+    /// and does not have to wait for the sweep. The folder is found by id rather than
+    /// through the index — the entry is gone by now — which is exactly the name
+    /// ``copyIntoStash(_:)`` gave it.
+    ///
+    /// A file the index still lists is not touched — it never left the shelf — and neither
+    /// is anything at all when the index cannot be read, which is the same caution
+    /// ``load()`` takes: an unreadable index is very probably a good one.
+    public func deleteDetached(fileID: UUID) {
+        guard case let .index(index) = readIndex(),
+              !index.files.contains(where: { $0.id == fileID }) else { return }
+        remove(stashDirectory.appendingPathComponent(fileID.uuidString, isDirectory: true))
+    }
+
+    /// Starts the orphan clock for folders that have just left the index.
+    ///
+    /// Without this the sweep would measure a detached folder's hour from the moment the
+    /// file was *stashed*, which is routinely hours ago: the very next `load()` — another
+    /// drop, another tile leaving — would delete the bytes of a file dragged out seconds
+    /// earlier, out from under the application still holding its URL.
+    private func startOrphanClock(for files: [StashedFile]) {
+        for file in files {
+            let folder = URL(fileURLWithPath: file.storedPath).deletingLastPathComponent()
+            // Only ever inside our own Stash/, never the original.
+            guard folder.deletingLastPathComponent().standardizedFileURL
+                == stashDirectory.standardizedFileURL else { continue }
+            do {
+                try fileManager.setAttributes([.modificationDate: now()], ofItemAtPath: folder.path)
+            } catch {
+                // The bytes are still there and the sweep still has a date to read; it is
+                // only an older one, so at worst this folder is collected early.
+                logger.error("""
+                    could not date the detached folder of \(file.name, privacy: .public): \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
     }
 
     /// The orphan sweep on its own, for a caller that knows bytes are owed a collection
@@ -191,11 +234,29 @@ public actor StashStore {
 
     /// Empties the stash: both the copies and the index.
     ///
-    /// Everything under `Stash/` goes, detached folders included: "Clear stash" and the
-    /// TTL mean the bytes are gone now, not in an hour.
+    /// Everything under `Stash/` goes, detached folders included. This is the "Clear stash"
+    /// menu row: the user asked for the stash to be gone *now*, and a folder whose bytes a
+    /// receiver might still want is not a reason to leave their files on disk.
     public func clear() {
         remove(stashDirectory)
         remove(indexURL)
+    }
+
+    /// The 24-hour TTL running out.
+    ///
+    /// Everything the index points at goes, exactly as ``clear()`` would — but a folder a
+    /// drag-out detached minutes ago is *not* part of the expired pile: it left the shelf
+    /// under its own clock, and the receiver may still be reading it. Those wait for the
+    /// ordinary sweep, which runs here too so an expiry still collects what is due.
+    public func expire() {
+        guard case let .index(index) = readIndex() else { return }
+        expire(index)
+    }
+
+    private func expire(_ index: StashIndex) {
+        deleteFolders(of: index.files)
+        remove(indexURL)
+        sweepOrphanFolders(keeping: StashIndex())
     }
 
     /// Copies a stashed file to `destination`, replacing whatever is there.
@@ -298,7 +359,7 @@ public actor StashStore {
     private func sweepOrphanFolders(keeping index: StashIndex) {
         guard let folders = try? fileManager.contentsOfDirectory(
             at: stashDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return }
 
@@ -307,9 +368,12 @@ public actor StashStore {
         })
         var swept = 0
         for folder in folders where !kept.contains(folder.standardizedFileURL) {
-            guard let modified = try? folder.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate,
-                now().timeIntervalSince(modified) >= Self.orphanLifetime else { continue }
+            // Only `Stash/<UUID>/` folders are ours to collect, the same rule
+            // `deleteFolders(of:)` follows; anything else in there we did not put there.
+            let values = try? folder.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
+            guard values?.isDirectory == true,
+                  let modified = values?.contentModificationDate,
+                  now().timeIntervalSince(modified) >= Self.orphanLifetime else { continue }
             remove(folder)
             swept += 1
         }
