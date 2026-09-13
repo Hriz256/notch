@@ -5,11 +5,11 @@ public enum SuppressionStep: Equatable, Sendable {
     /// `EnableSystemBanners` in `com.apple.controlcenter`: `false` hands the OSD back to
     /// `OSDUIHelper`, `nil` removes the key.
     case setBannersPreference(Bool?)
-    /// `launchctl kickstart -k gui/<uid>/com.apple.controlcenter` — the preference is read
-    /// at launch.
+    /// `SIGTERM` to Control Center, which launchd brings straight back — the preference is
+    /// read at launch.
     case restartControlCenter
-    /// `launchctl kickstart -k gui/<uid>/com.apple.OSDUIHelper`: a fresh helper, so a
-    /// stopped one's queued requests die with it instead of replaying.
+    /// `SIGKILL` to the helper, then `launchctl kickstart gui/<uid>/com.apple.OSDUIHelper`:
+    /// a fresh helper, so a stopped one's queued requests die with it instead of replaying.
     case kickstartOSDUIHelper
     /// `SIGSTOP` to the helper: it keeps its launchd slot but never draws.
     case stopOSDUIHelper
