@@ -235,8 +235,9 @@ struct MusicViewModelTests {
     @Test func performForwardsCommands() async {
         let (vm, _, _, sent) = make()
         vm.perform(.next)
-        try? await Task.sleep(for: .milliseconds(100))
-        #expect(await sent.all == [.next])
+        // `perform` hands the command to an unstructured task, so poll for it rather than
+        // betting a fixed sleep beats the scheduler under a loaded suite.
+        #expect(await sent.waitForCount(1) == [.next])
     }
 
     @Test func togglePlayPauseIsOptimistic() {
@@ -353,4 +354,18 @@ struct MusicViewModelTests {
 actor SentCommands {
     private(set) var all: [PlaybackCommand] = []
     func append(_ c: PlaybackCommand) { all.append(c) }
+
+    /// Waits until at least `count` commands have been recorded, or the deadline passes.
+    /// Actor reentrancy lets `append` run while this is suspended. Returns whatever was
+    /// recorded, so the caller asserts on the real contents either way.
+    func waitForCount(_ count: Int, timeout: Duration = .seconds(5)) async -> [PlaybackCommand] {
+        let deadline = ContinuousClock.now + timeout
+        while all.count < count {
+            await Task.yield()
+            if all.count >= count { break }
+            guard ContinuousClock.now < deadline else { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return all
+    }
 }
