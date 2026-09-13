@@ -8,15 +8,40 @@ public struct TransitionChoreographer: Sendable {
     /// Shrinking: critically damped. A bouncy spring undershoots, and an undershoot below
     /// the notch draws the island *inside* the physical notch and exposes its edges.
     public var collapseGeometry: Animation = .spring(response: 0.38, dampingFraction: 1.0)
+    /// Content arriving. A spring, never delayed: the shape and its content start in the
+    /// same frame, or the island reads as a box that fills up afterwards. Quicker than the
+    /// geometry spring (rule 2 of the audit's yardstick) but overlapping it, not sequenced
+    /// after it.
     public var contentIn: Animation
+    /// Content leaving. Still quicker than the collapse, but only slightly: an exit that
+    /// finishes before the shape does leaves the user watching an *empty* panel deflate.
     public var contentOut: Animation
     public var usesBlur: Bool
 
+    /// The springs the island moves on, named and kept as numbers rather than only as
+    /// `Animation` values: `Animation` cannot be introspected, so the relationships the
+    /// island depends on — content quicker than the shape, the collapse the same gesture
+    /// played quicker and flatter — are only assertable in this form.
+    public struct Spring: Equatable, Sendable {
+        public var response: Double
+        public var damping: Double
+
+        public var animation: Animation { .spring(response: response, dampingFraction: damping) }
+
+        /// Growing: a little bounce past the target reads as energy.
+        public static let grow = Spring(response: 0.42, damping: 0.78)
+        /// Shrinking: the same gesture, flatter. `IslandFrame.clamped` floors every
+        /// interpolated frame at the notch, so an undershoot can never expose its edges.
+        public static let collapse = Spring(response: 0.38, damping: 1.0)
+        public static let contentIn = Spring(response: 0.26, damping: 0.9)
+        public static let contentOut = Spring(response: 0.22, damping: 1.0)
+    }
+
     public static let standard = TransitionChoreographer(
-        geometry: .spring(response: 0.42, dampingFraction: 0.78),
-        collapseGeometry: .spring(response: 0.38, dampingFraction: 1.0),
-        contentIn: .easeOut(duration: 0.18).delay(0.06),
-        contentOut: .easeIn(duration: 0.12),
+        geometry: Spring.grow.animation,
+        collapseGeometry: Spring.collapse.animation,
+        contentIn: Spring.contentIn.animation,
+        contentOut: Spring.contentOut.animation,
         usesBlur: true
     )
 

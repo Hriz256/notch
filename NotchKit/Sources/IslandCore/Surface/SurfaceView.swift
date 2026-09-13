@@ -60,8 +60,12 @@ public struct SurfaceView: View {
 
     /// Content enters and leaves on its own curves, not on the geometry spring: the
     /// per-transition `.animation(_:)` overrides the transaction animation supplied by
-    /// the `.animation(choreographer.geometry, value:)` modifiers on `body`, so the
-    /// shape still springs while content eases in (delayed) and eases out (immediately).
+    /// the `.animation(choreographer.geometry, value:)` modifiers on `body`, so the shape
+    /// springs while the content springs slightly quicker.
+    ///
+    /// Both curves start in the same frame as the shape and overlap it — no delay on the
+    /// way in, no early exit on the way out. Content that waits for the shape, or leaves
+    /// before it, is what makes the island read as two objects instead of one.
     private var contentTransition: AnyTransition {
         .asymmetric(
             insertion: .islandContent(usesBlur: choreographer.usesBlur)
