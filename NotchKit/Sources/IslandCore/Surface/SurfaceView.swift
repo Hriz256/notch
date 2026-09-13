@@ -120,7 +120,8 @@ public struct SurfaceView: View {
                 PeekRow(
                     leading: current.leading,
                     trailing: current.trailing,
-                    notch: CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
+                    notch: CGSize(width: geometry.notchWidth, height: geometry.notchHeight),
+                    slotWidth: current.peekSlotWidth
                 )
                     .id("peek-\(current.id)")
                     .transition(contentTransition)

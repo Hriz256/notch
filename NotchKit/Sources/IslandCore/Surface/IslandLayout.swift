@@ -20,7 +20,8 @@ public struct IslandLayout: Equatable, Sendable {
     @MainActor
     public static func resolve(state: IslandState, current: Presentation?, geometry: NotchGeometry) -> IslandLayout {
         let notch = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
-        let peekWidth = notch.width + 2 * peekSlotWidth
+        let slot = current?.peekSlotWidth ?? peekSlotWidth
+        let peekWidth = notch.width + 2 * slot
         switch state {
         case .collapsed:
             return IslandLayout(mode: .collapsed, size: notch, topRadius: 6, bottomRadius: 10)

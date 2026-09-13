@@ -41,6 +41,10 @@ public struct Presentation: Identifiable {
     /// page of the stack in the user's mind (the Drop Zones cards, which exist only for
     /// the length of a drag) turns them off rather than inviting a swipe mid-drop.
     public var showsStackDots: Bool
+    /// How wide each peek slot is for this presentation. The default is the island's
+    /// standard slot; a presentation whose slots hold more than a glyph (the HUD's label
+    /// and bar) asks for more, and the peek island widens to `notch + 2 × slot`.
+    public var peekSlotWidth: CGFloat
 
     public init(
         id: PresentationID = PresentationID(),
@@ -53,7 +57,8 @@ public struct Presentation: Identifiable {
         trailing: AnyView,
         expanded: AnyView?,
         expandedSize: CGSize = CGSize(width: 390, height: 200),
-        showsStackDots: Bool = true
+        showsStackDots: Bool = true,
+        peekSlotWidth: CGFloat = IslandLayout.peekSlotWidth
     ) {
         precondition(style == .peek || expanded != nil, "expanded style requires an expanded view")
         self.id = id
@@ -67,6 +72,7 @@ public struct Presentation: Identifiable {
         self.expanded = expanded
         self.expandedSize = expandedSize
         self.showsStackDots = showsStackDots
+        self.peekSlotWidth = peekSlotWidth
     }
 
     /// The name menus show for this card: the feature-provided title, else the feature id

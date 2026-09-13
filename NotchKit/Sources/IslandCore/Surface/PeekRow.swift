@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The peek island's content: one ``IslandLayout/peekSlotWidth`` slot hugging each edge of
-/// the island, with the notch between them.
+/// The peek island's content: one ``slotWidth``-wide slot hugging each edge of the island,
+/// with the notch between them.
 ///
 /// The row **fills** the width it is proposed instead of measuring a fixed
 /// `notch + 2 * slot`. That distinction only shows up while the island's width is in
@@ -23,20 +23,25 @@ public struct PeekRow: View {
     public let leading: AnyView
     public let trailing: AnyView
     public let notch: CGSize
+    /// How wide each slot is. Matches the presentation's ``Presentation/peekSlotWidth`` so the
+    /// row's two slots fill exactly the width the layout gave the island either side of the notch.
+    public let slotWidth: CGFloat
 
-    public init(leading: AnyView, trailing: AnyView, notch: CGSize) {
+    public init(leading: AnyView, trailing: AnyView, notch: CGSize,
+                slotWidth: CGFloat = IslandLayout.peekSlotWidth) {
         self.leading = leading
         self.trailing = trailing
         self.notch = notch
+        self.slotWidth = slotWidth
     }
 
     public var body: some View {
         HStack(spacing: 0) {
             leading
-                .frame(width: IslandLayout.peekSlotWidth, height: notch.height)
+                .frame(width: slotWidth, height: notch.height)
             Spacer(minLength: notch.width)
             trailing
-                .frame(width: IslandLayout.peekSlotWidth, height: notch.height)
+                .frame(width: slotWidth, height: notch.height)
         }
         .frame(maxWidth: .infinity)
     }

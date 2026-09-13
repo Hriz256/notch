@@ -45,4 +45,21 @@ struct IslandLayoutTests {
         let l = IslandLayout.resolve(state: .expanded(PresentationID()), current: nil, geometry: geometry)
         #expect(l.mode == .collapsed)
     }
+
+    @Test func peekHonoursThePresentationsSlotWidth() {
+        let p = Presentation(featureID: FeatureID("hud"), priority: .alert, style: .peek, ttl: .seconds(1),
+                             leading: AnyView(EmptyView()), trailing: AnyView(EmptyView()),
+                             expanded: nil, peekSlotWidth: 96)
+        let l = IslandLayout.resolve(state: .peek(p.id), current: p, geometry: geometry)
+        #expect(l.size == CGSize(width: 200 + 2 * 96, height: 38))
+    }
+
+    @Test func expandedNeverNarrowerThanTheWidePeek() {
+        let p = Presentation(featureID: FeatureID("hud"), priority: .alert, style: .peek, ttl: .seconds(1),
+                             leading: AnyView(EmptyView()), trailing: AnyView(EmptyView()),
+                             expanded: AnyView(EmptyView()), expandedSize: CGSize(width: 100, height: 100),
+                             peekSlotWidth: 96)
+        let l = IslandLayout.resolve(state: .expanded(p.id), current: p, geometry: geometry)
+        #expect(l.size.width == CGFloat(200 + 2 * 96))
+    }
 }
