@@ -4,9 +4,8 @@ import Testing
 
 @testable import HUDFeature
 
-/// The HUD's curves. `Animation` is `Equatable`, so the spec's constants can be asserted
-/// without a renderer; the morph itself is checked through its boolean twin because
-/// `ContentTransition` is opaque.
+/// The HUD's curves. `Animation` is `Equatable`, so the composed curve a view is handed
+/// can be asserted without a renderer.
 @Suite("HUD motion")
 struct HUDMotionTests {
 
@@ -16,15 +15,13 @@ struct HUDMotionTests {
     func symbolCurve() {
         #expect(HUDMotion.symbol(reduceMotion: false)
             == .spring(response: 0.2, dampingFraction: 1.0))
-        #expect(HUDMotion.symbolResponse == 0.2)
-        #expect(HUDMotion.symbolDamping == 1.0)
     }
 
-    @Test("Reduce Motion swaps the glyph plainly: no animation and no replace effect")
+    /// A nil animation is the whole of the plain swap: `.replace` needs an animated
+    /// transaction to run in, so without one the glyph cuts whatever the transition says.
+    @Test("Reduce Motion swaps the glyph plainly")
     func symbolUnderReduceMotion() {
         #expect(HUDMotion.symbol(reduceMotion: true) == nil)
-        #expect(HUDMotion.morphsSymbol(reduceMotion: true) == false)
-        #expect(HUDMotion.morphsSymbol(reduceMotion: false) == true)
     }
 
     @Test("There is something to morph: each third of the volume range draws its own glyph")
@@ -41,8 +38,6 @@ struct HUDMotionTests {
     func barCurve() {
         #expect(HUDMotion.bar(reduceMotion: false)
             == .spring(response: 0.24, dampingFraction: 0.72))
-        #expect(HUDMotion.barResponse == 0.24)
-        #expect(HUDMotion.barDamping == 0.72)
     }
 
     @Test("Reduce Motion still cuts the fill to the level, as the spec has always said")
@@ -50,9 +45,9 @@ struct HUDMotionTests {
         #expect(HUDMotion.bar(reduceMotion: true) == nil)
     }
 
-    /// The spring overshoots the *width*, which the view clips to the track. The target it
-    /// overshoots from and returns to is still clamped here, so a level the monitors
-    /// report out of range can never park the fill outside the capsule.
+    /// Three clamps hold the bar inside its track, and this is the first: the *target* the
+    /// spring travels to. The other two are in the view — the capsule clip for the
+    /// overshoot at the top, `BarFill`'s `max(0,)` for the undershoot at the bottom.
     @Test("Whatever the level, the fill's resting width is inside the track")
     func fillWidthNeverLeavesTheTrack() {
         let total = HUDBarLayout.size.width

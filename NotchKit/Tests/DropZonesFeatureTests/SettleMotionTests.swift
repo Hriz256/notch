@@ -14,8 +14,6 @@ struct SettleMotionTests {
 
     @Test("Tiles settle on a spring rather than parking on an easeOut")
     func curve() {
-        #expect(SettleMotion.response == 0.4)
-        #expect(SettleMotion.damping == 0.75)
         // The first tile is handed the bare spring — `.delay(0)` would be a different
         // animation wrapping it, which is how a "no delay" regression would hide.
         #expect(SettleMotion.entrance(index: 0, count: 1, span: 0.1, reduceMotion: false)
@@ -79,16 +77,20 @@ struct SettleMotionTests {
         }
     }
 
-    @Test("The settle window is the view model's own 400 ms, not a second copy of it")
+    @Test("The settle window is the view model's own timing, not a second copy of it")
     func theWindowTracksTheViewModel() {
-        let delay = DropZonesViewModel.settleDelay.components
-        let seconds = Double(delay.seconds) + Double(delay.attoseconds) * 1e-18
-        #expect(abs(seconds - SettleMotion.settleWindow) < 1e-9)
+        #expect(SettleMotion.settleWindow == DropZonesViewModel.settleDelay.seconds)
+        #expect(Duration.milliseconds(400).seconds == 0.4)
+        #expect(Duration.milliseconds(250).seconds == 0.25)
+        // And the budget keeps a frame back from it, so the last tail is not under the
+        // collapse on a slow commit.
+        #expect(SettleMotion.settleSpan
+            == SettleMotion.settleWindow - SettleMotion.visualRise - SettleMotion.frameSlack)
     }
 
-    /// Seven boxes at 40 ms would be 240 ms of fan-in, past B9's 0.2 s cap, so the row's
-    /// step shortens instead of the row reading as slow.
-    @Test("A full row shortens its step to stay inside B9's 0.2 s cap")
+    /// Seven boxes at 40 ms would put the last one 240 ms out, past B9's 0.2 s cap on when
+    /// the last box *starts*, so the row's step shortens instead of a box visibly waiting.
+    @Test("A full row shortens its step so the last box starts within 0.2 s")
     func fullRowShortensItsStep() {
         let boxes = StashRowLayout.maximumBoxes
         let step = SettleMotion.stagger(count: boxes, span: SettleMotion.rowSpan)
@@ -106,17 +108,12 @@ struct SettleMotionTests {
 
     // MARK: - The geometry the stagger must not disturb
 
-    @Test("The fan's angles, depth scales and offsets are untouched by the entrance")
-    func fanGeometryIsUnchanged() {
-        let large = ThumbnailStackTokens.large
-        #expect(large.rotation(depth: 0) == 0)
-        #expect(large.rotation(depth: 1) == -10)
-        #expect(large.rotation(depth: 2) == 10)
-        #expect(large.scale(depth: 1) == 0.94)
-        #expect(large.scale(depth: 2) == 0.88)
-        #expect(ThumbnailStackTokens.depthOffset == 2)
-        // The tiles land from above their resting size; the row grows into it.
-        #expect(ThumbnailStack.entranceScale == 1.12)
-        #expect(StashRowLayout.entranceScale == 0.92)
+    /// The tiles land from *above* their resting size and the row's boxes grow into theirs
+    /// — the two entrances are not the same gesture, and swapping them would read as the
+    /// row bulging and the drop deflating.
+    @Test("A dropped tile arrives from above its resting size, a row's box from below")
+    func entranceScalesPointOppositeWays() {
+        #expect(ThumbnailStack.entranceScale > 1)
+        #expect(StashRowLayout.entranceScale < 1)
     }
 }

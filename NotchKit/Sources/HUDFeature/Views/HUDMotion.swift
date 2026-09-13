@@ -30,10 +30,6 @@ enum HUDMotion {
         reduceMotion ? .identity : .symbolEffect(.replace.downUp)
     }
 
-    /// Whether the glyph morphs at all — the boolean half of ``symbolTransition(reduceMotion:)``,
-    /// separated out because `ContentTransition` is opaque to a test.
-    static func morphsSymbol(reduceMotion: Bool) -> Bool { !reduceMotion }
-
     // MARK: - The bar (audit B8)
 
     /// The fill runs slightly past the new level and settles, instead of decelerating into

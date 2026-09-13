@@ -516,16 +516,26 @@ two items it had argued *against* adopting silently (B8) or *for* only with a sp
 needs an animated transaction or the glyph cuts. The 14 pt box is unchanged and sits
 *outside* the transition, so `speaker.wave.3.fill` cannot shove the label sideways.
 Reduce Motion takes `.identity` + a nil animation: a plain swap, not the cross-fade
-`.replace` degrades to on its own. Curves live in the new `HUDMotion`, with tests.
+`.replace` degrades to on its own — and the nil animation is the load-bearing half, since a
+replace effect with no animated transaction to run in cuts whatever the transition says.
+Curves live in the new `HUDMotion`, with tests. The spec's "Copy and symbols" row carries
+the change.
 
 ### B8 — the HUD bar overshoots (owner's call)
 `HUDBarView`. Fill animates `.spring(response: 0.24, dampingFraction: 0.72)` instead of
 `.easeOut(duration: 0.12)`; Reduce Motion still `nil`. The audit's caution stands and is
 recorded rather than dropped — macOS's own bar does not overshoot — so the spec's "The bar"
 row now carries the change and the reason ("owner's call: juicier than macOS"), edited in
-the same commit. One addition the audit did not name: the track **clips**, because a sprung
-`.frame(width:)` overshoots past 60 pt at full volume and would otherwise leave a white nub
-outside the capsule's right end.
+the same commit.
+
+Two clamps the audit did not name, because a sprung `.frame(width:)` leaves the legal range
+at *both* ends. The top: the track **clips** to a capsule, or the overshoot at full volume
+leaves a white nub outside its right end. The bottom: muting undershoots ~3.8 % of the
+displacement into a **negative width**, which SwiftUI rejects with "Invalid frame dimension"
+— so the fill is a small `@MainActor Animatable` view (`BarFill`) that interpolates the
+width itself and floors it at 0. `max(0,)` on the parent's `.frame` would only clamp the
+*target*, not the values passed through on the way to it; `scaleEffect(x:)` would have
+squashed the capsule's rounded ends into ellipses.
 
 ### Shortlist 10 — A8 + B9, the tiles settle on staggered springs
 `ThumbnailStack` (settle card) and `StashThumbnailRow` (hover-expanded row), through a new
@@ -538,15 +548,19 @@ outside the capsule's right end.
   stagger, and innermost is what leaves the fan's rotations (−10/0/10), depth scales
   (1/0.94/0.88) and 2 pt depth offsets untouched. Newest first: depth 0 never waits.
 - **Stagger, and where it was shortened.** Nominal 40 ms, clamped to a span budget:
-  - *Settle card* — span = `settleWindow (0.4) − visualRise (0.3) = 0.1 s`. `visualRise` is
-    when a ζ = 0.75 spring at this response is within 3 % of target (3 % of a 0.12
-    displacement is a tenth of a point). Three tiles need 2 × 40 = 80 ms of that 100 ms, so
-    **the nominal 40 ms survives here** and the whole settle stays inside the 400 ms the
-    island waits before collapsing — a constant this work did not get to move. A test
-    asserts that, and asserts the window is `DropZonesViewModel.settleDelay` rather than a
-    second copy of 400 ms.
-  - *Expanded row* — B9's own 0.2 s cap. Seven boxes at 40 ms would be 240 ms, so the step
-    **shortens to 33.3 ms** there. Short rows keep 40 ms.
+  - *Settle card* — span = `settleWindow − visualRise (0.3) − frameSlack (1/60) ≈ 83 ms`.
+    `settleWindow` is read from `DropZonesViewModel.settleDelay`, not a second copy of
+    400 ms; `visualRise` is when a ζ = 0.75 spring at this response is within 3 % of target
+    (3 % of a 0.12 displacement is a tenth of a point); `frameSlack` is one frame at 60 Hz,
+    kept back because the window ends when a *timer* fires and the collapse starts on the
+    next commit. Three tiles need 2 × 40 = 80 ms of that 83, so **the nominal 40 ms survives
+    here** and the whole settle stays inside the 400 ms the island waits before collapsing —
+    a constant this work did not get to move. Tested.
+  - *Expanded row* — B9's 0.2 s, which bounds when the last box **starts**, not when the row
+    is finished (the last box still takes its own `visualRise` after that, so end to end the
+    fan-in is about 0.5 s). What the cap buys is that no box is visibly *waiting* to begin,
+    which is the half that reads as slow. Seven boxes at 40 ms would put the last one 240 ms
+    out, so the step **shortens to 33.3 ms** there. Short rows keep 40 ms.
 - Reduce Motion: `.easeOut(duration: 0.18)` opacity only — no scale, no stagger, tiles at
   rest, all together.
 - Spec: the "Settle" row and the animations line of `2026-09-12-drop-zones-design.md` were

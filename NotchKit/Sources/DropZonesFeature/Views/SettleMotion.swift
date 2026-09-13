@@ -1,5 +1,14 @@
 import SwiftUI
 
+extension Duration {
+    /// The same span as the seconds an `Animation` is spelled in, so a timing the view
+    /// model owns can be spent against by a curve without being retyped.
+    var seconds: Double {
+        let parts = components
+        return Double(parts.seconds) + Double(parts.attoseconds) * 1e-18
+    }
+}
+
 /// How dropped tiles arrive — the curve, and how far apart they arrive.
 ///
 /// Pulled out of the views because the interesting half is arithmetic: the stagger is
@@ -27,16 +36,29 @@ enum SettleMotion {
     /// What B9 asks for: tiles land about 40 ms apart, newest first.
     static let nominalStagger: Double = 0.04
 
-    /// The settle card's whole life — `DropZonesViewModel.settleDelay`, which the audit's
-    /// "what I will not touch" list pins at 400 ms. The last tile has to be *still* before
-    /// the island starts collapsing, so only what is left of the window once one tile's
-    /// rise is paid for can go to the stagger.
-    static let settleWindow: Double = 0.4
-    static var settleSpan: Double { max(settleWindow - visualRise, 0) }
+    /// The settle card's whole life, read from ``DropZonesViewModel/settleDelay`` rather
+    /// than copied from it: the audit's "what I will not touch" list pins that at 400 ms,
+    /// and a second spelling of the number here is exactly how the two would drift apart.
+    @MainActor
+    static var settleWindow: Double { DropZonesViewModel.settleDelay.seconds }
+
+    /// One frame at 60 Hz, kept back from the stagger. The window ends when a *timer*
+    /// fires and the collapse starts on the next commit, so spending the budget down to
+    /// the last microsecond would put the final tile's tail under the collapse on a slow
+    /// frame.
+    static let frameSlack: Double = 1.0 / 60.0
+
+    /// The last tile has to be *still* before the island starts collapsing, so the stagger
+    /// gets only what is left of the window once one tile's rise and a frame of slack are
+    /// paid for.
+    @MainActor
+    static var settleSpan: Double { max(settleWindow - visualRise - frameSlack, 0) }
 
     /// B9's own cap for the hover-expanded row, which has no window of its own but has up
-    /// to seven boxes: the whole fan-in is over within a fifth of a second, or the row
-    /// reads as slow.
+    /// to seven boxes. It bounds when the last box *starts*, not when the row is finished:
+    /// the last box still takes its own ``visualRise`` after that, so end to end the fan-in
+    /// is about 0.5 s. What the cap buys is that nothing is visibly *waiting* to begin,
+    /// which is the half that reads as slow.
     static let rowSpan: Double = 0.2
 
     /// How far apart consecutive tiles land — the nominal 40 ms, shortened when `count`
