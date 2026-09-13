@@ -500,3 +500,40 @@ that costs CPU, and that needs a real session to judge; **matched-geometry peek 
 — the most Apple thing in this document and the most likely to reproduce the rejected
 "separate shape"; **the HUD bar overshoot (B8)** — juicier than macOS, which may be the wrong
 kind of juicy.
+
+---
+
+## Implemented (island core)
+
+Branch `motion/island-core`, everything under `NotchKit/Sources/IslandCore`. Final values as
+shipped; the springs all live in `TransitionChoreographer.Spring`, one place.
+
+| Item | What landed | Values |
+| --- | --- | --- |
+| A2 (shortlist 1) | Content enters and leaves *with* the shape. No delay in, no early exit. | `contentIn` spring 0.26 / 0.9, `contentOut` spring 0.22 / 1.0 |
+| A2 (shortlist 2) | Content unfolds from under the notch instead of appearing mid-air. | `scale 0.96 anchor .top`, `offset(y: -4 → 0)`, `blur 2.5 → 0` |
+| A1 (shortlist 3) | The two geometry springs retuned. | grow 0.38 / 0.82, collapse 0.30 / 0.92 |
+| A3 + A5 (shortlist 4) | A page turn is its own kind, judged by identity before size, and content slides along the axis of the swipe inside the island's clip. | `pageChange` spring 0.34 / 0.86, slide ±14 pt |
+| A7 + B13 (shortlist 5) | One bright marker travels the dot track and grows, instead of two opacities crossfading. | dot 3 pt, marker 4 pt, pitch 8 pt, spring 0.3 / 0.8 |
+| B1 (shortlist 8) | The island beats once when a card takes it over. | +8 pt wide, +3 pt tall, held 90 ms, spring 0.32 / 0.62 |
+| A13 | Reduce Motion is live: `MotionSettings` observes `NSWorkspaceAccessibilityDisplayOptionsDidChange` and the surface resolves its curves while drawing. | — |
+
+Two deliberate departures from the proposals above, both in the conservative direction:
+
+- **A1's "collapse the two `.animation` modifiers into one" was not done.** `layout` does *not*
+  change when a card is replaced by one of identical size — which is exactly the A6 case — and
+  the modifier keyed on `presenter.state` is what animates the content swap there. Merging them
+  would have made the commonest arrival silent.
+- **B1 fires only when the layout is otherwise unchanged**, i.e. the A6 case, not on every
+  arrival. When the arrival resizes the island the geometry spring already owns the frame and is
+  already reacting; a second animation on the same value would fight it for no gain.
+
+Reduce Motion now has a real form rather than a partial one: the reduced content transition is
+opacity alone (it used to still scale 0.94), the page slide and the arrival beat are skipped, and
+the dot marker stays dot-sized. Still outstanding for A13's "standardise on one mechanism
+repo-wide": `GlyphMotion.isReduced` and `MotionPreference.isReduced` in the feature modules read
+`NSWorkspace` directly on every draw — correct, but a third spelling of the same idea.
+
+Untouched here and still open: A6's widening variant, A8/A9/A10/A11/A12, every Part B item other
+than B1 and B13. Nothing in this work goes near the mirror-window machinery, `IslandFrame`'s
+clamp, or any feature-owned constant.

@@ -144,7 +144,7 @@ public final class SurfaceController {
             height: Self.windowSize.height
         )
         let panel = SurfaceWindow(contentRect: frame)
-        let root = SurfaceView(presenter: presenter, geometry: geometry, choreographer: .current())
+        let root = SurfaceView(presenter: presenter, geometry: geometry)
         let hosting = PassThroughHostingView(rootView: root)
         hosting.hitRectProvider = { [weak self] in self?.islandScreenRect() ?? .zero }
         panel.contentView = hosting
@@ -211,7 +211,7 @@ public final class SurfaceController {
         let swap = MirrorSwap.resolve(mirrored: mirrored)
 
         if swap.mirrorHasContent, mirrorHostingView == nil {
-            let root = SurfaceView(presenter: presenter, geometry: geometry, choreographer: .current())
+            let root = SurfaceView(presenter: presenter, geometry: geometry)
             let hosting = PassThroughHostingView(rootView: root)
             mirror.contentView = hosting
             hosting.layoutSubtreeIfNeeded()

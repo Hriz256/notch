@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// One place for every animation curve so the island always moves the same way.
-public struct TransitionChoreographer: Sendable {
+public struct TransitionChoreographer: Sendable, Equatable {
     /// Growing: a little bounce past the target reads as energy.
     public var geometry: Animation
     /// Shrinking: the same gesture played quicker and flatter, never a different feel and
@@ -122,9 +122,14 @@ public struct TransitionChoreographer: Sendable {
         }
     }
 
-    @MainActor
-    public static func current() -> TransitionChoreographer {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .reducedMotion : .standard
+    /// The choreography for a given Reduce Motion state.
+    ///
+    /// A pure function of the setting on purpose: the island resolves it while drawing,
+    /// from the live ``MotionSettings``, so the setting can be turned on and off while the
+    /// app runs. Sampling it once — which is what this type used to do, at window build —
+    /// meant Reduce Motion did not reach the island's own geometry until a display change.
+    public static func resolved(isReduced: Bool) -> TransitionChoreographer {
+        isReduced ? .reducedMotion : .standard
     }
 }
 

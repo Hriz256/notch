@@ -9,7 +9,18 @@ import SwiftUI
 public struct SurfaceView: View {
     private let presenter: IslandPresenter
     private let geometry: NotchGeometry
-    private let choreographer: TransitionChoreographer
+    /// A fixed choreography, when one was handed in. `nil` in the app, where the curves
+    /// are resolved while drawing from the live Reduce Motion setting; tests and previews
+    /// pin one so they do not depend on the machine they run on.
+    private let pinnedChoreographer: TransitionChoreographer?
+    private let motion: MotionSettings
+
+    /// The curves in force for this draw. Reading ``MotionSettings/isReduced`` here is
+    /// what makes Reduce Motion live: the setting changing re-draws the island, and the
+    /// island picks up the reduced curves without the window being rebuilt.
+    private var choreographer: TransitionChoreographer {
+        pinnedChoreographer ?? .resolved(isReduced: motion.isReduced)
+    }
 
     /// Last layout handed to `.animation(_:value:)`. Written only from `onChange`, which runs
     /// after `body`, so the value read while building `body` is genuinely the previous one.
@@ -22,10 +33,25 @@ public struct SurfaceView: View {
     /// `Bool`, set twice per arrival and never at rest.
     @State private var isBeating = false
 
+    /// The app's initialiser: the island follows the Reduce Motion setting as it changes.
+    public init(
+        presenter: IslandPresenter,
+        geometry: NotchGeometry,
+        motion: MotionSettings = .shared
+    ) {
+        self.presenter = presenter
+        self.geometry = geometry
+        self.pinnedChoreographer = nil
+        self.motion = motion
+    }
+
+    /// Pins one choreography for the life of the view — tests and previews, which must not
+    /// change behaviour with the setting on the machine running them.
     public init(presenter: IslandPresenter, geometry: NotchGeometry, choreographer: TransitionChoreographer) {
         self.presenter = presenter
         self.geometry = geometry
-        self.choreographer = choreographer
+        self.pinnedChoreographer = choreographer
+        self.motion = .shared
     }
 
     public var body: some View {
