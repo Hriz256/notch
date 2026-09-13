@@ -45,6 +45,10 @@ targets:
         product: DropZonesShared
       - package: NotchKit
         product: DropZonesFeature
+      - package: NotchKit
+        product: HUDShared
+      - package: NotchKit
+        product: HUDFeature
       - target: NotchHelper
         embed: true
       - target: NotchHook

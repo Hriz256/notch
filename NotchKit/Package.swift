@@ -13,6 +13,8 @@ let package = Package(
         .library(name: "CodeAgentFeature", targets: ["CodeAgentFeature"]),
         .library(name: "DropZonesShared", targets: ["DropZonesShared"]),
         .library(name: "DropZonesFeature", targets: ["DropZonesFeature"]),
+        .library(name: "HUDShared", targets: ["HUDShared"]),
+        .library(name: "HUDFeature", targets: ["HUDFeature"]),
     ],
     targets: [
         .target(name: "IslandCore"),
@@ -23,6 +25,8 @@ let package = Package(
         .target(name: "CodeAgentFeature", dependencies: ["IslandCore", "CodeAgentShared"]),
         .target(name: "DropZonesShared"),
         .target(name: "DropZonesFeature", dependencies: ["IslandCore", "DropZonesShared"]),
+        .target(name: "HUDShared"),
+        .target(name: "HUDFeature", dependencies: ["IslandCore", "HUDShared"]),
         .testTarget(name: "IslandCoreTests", dependencies: ["IslandCore"]),
         .testTarget(name: "NowPlayingSharedTests", dependencies: ["NowPlayingShared"]),
         .testTarget(name: "NowPlayingClientTests", dependencies: ["NowPlayingClient", "NowPlayingShared"]),
@@ -31,6 +35,8 @@ let package = Package(
         .testTarget(name: "CodeAgentFeatureTests", dependencies: ["CodeAgentFeature", "IslandCore", "CodeAgentShared"]),
         .testTarget(name: "DropZonesSharedTests", dependencies: ["DropZonesShared"]),
         .testTarget(name: "DropZonesFeatureTests", dependencies: ["DropZonesFeature", "IslandCore", "DropZonesShared"]),
+        .testTarget(name: "HUDSharedTests", dependencies: ["HUDShared"]),
+        .testTarget(name: "HUDFeatureTests", dependencies: ["HUDFeature", "IslandCore", "HUDShared"]),
     ],
     swiftLanguageModes: [.v6]
 )
