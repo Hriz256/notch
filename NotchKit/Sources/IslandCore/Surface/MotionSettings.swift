@@ -21,8 +21,11 @@ public final class MotionSettings {
     public private(set) var isReduced: Bool
 
     @ObservationIgnored private let read: @MainActor () -> Bool
-    @ObservationIgnored private let centre: NotificationCenter
-    @ObservationIgnored private var observer: (any NSObjectProtocol)?
+    /// Both `nonisolated` so `deinit`, which is not main-actor isolated, can detach the
+    /// observer. `observer` is written only on the main actor and read once more here,
+    /// after the last reference is gone, so there is nothing to race with.
+    @ObservationIgnored private nonisolated let centre: NotificationCenter
+    @ObservationIgnored private nonisolated(unsafe) var observer: (any NSObjectProtocol)?
 
     /// - Parameters:
     ///   - read: where the current value comes from. Injectable for tests; in the app it
@@ -60,8 +63,17 @@ public final class MotionSettings {
         isReduced = now
     }
 
-    /// Stops observing. The shared instance never needs this; instances made by tests do.
+    /// Stops observing. The shared instance never needs this; instances made by tests can
+    /// use it to detach at a point of their choosing rather than at deallocation.
     public func stop() {
+        detach()
+    }
+
+    nonisolated deinit {
+        detach()
+    }
+
+    private nonisolated func detach() {
         if let observer { centre.removeObserver(observer) }
         observer = nil
     }

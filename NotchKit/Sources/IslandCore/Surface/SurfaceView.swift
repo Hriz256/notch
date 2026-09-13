@@ -13,25 +13,34 @@ public struct SurfaceView: View {
     /// are resolved while drawing from the live Reduce Motion setting; tests and previews
     /// pin one so they do not depend on the machine they run on.
     private let pinnedChoreographer: TransitionChoreographer?
-    private let motion: MotionSettings
+    /// `nil` whenever a choreography is pinned, so a test or a preview never reaches for
+    /// the shared instance and its workspace observer.
+    private let motion: MotionSettings?
 
     /// The curves in force for this draw. Reading ``MotionSettings/isReduced`` here is
     /// what makes Reduce Motion live: the setting changing re-draws the island, and the
     /// island picks up the reduced curves without the window being rebuilt.
     private var choreographer: TransitionChoreographer {
-        pinnedChoreographer ?? .resolved(isReduced: motion.isReduced)
+        if let pinnedChoreographer { return pinnedChoreographer }
+        return .resolved(isReduced: motion?.isReduced ?? false)
     }
 
-    /// Last layout handed to `.animation(_:value:)`. Written only from `onChange`, which runs
-    /// after `body`, so the value read while building `body` is genuinely the previous one.
-    /// It feeds nothing but the choice of curve, so the extra update it schedules is inert.
-    @State private var previousLayout: IslandLayout?
-    /// The card `body` last drew, tracked the same way and for the same reason: a page
-    /// turn is told from a grow by *identity*, not by size.
-    @State private var previousPresentationID: PresentationID?
-    /// Whether the island is holding its arrival beat (see ``IslandArrival``). One
-    /// `Bool`, set twice per arrival and never at rest.
+    /// The island as `body` last drew it. Written only from `onChange`, which runs after
+    /// `body`, so the value read while building `body` is genuinely the previous one.
+    ///
+    /// Three things are decided by comparing it against the draw in hand, which is why it
+    /// carries the card and the feature and not only the shape: which curve the geometry
+    /// takes (grow, collapse or page turn), whether content slides along a swipe's axis or
+    /// unfolds out of the notch, and whether the island owes the arrival a beat. The extra
+    /// update the write schedules is inert — nothing downstream of it draws differently.
+    @State private var previousDraw: IslandDraw?
+    /// Whether the island is holding its arrival beat (see ``IslandArrival``). One `Bool`,
+    /// written twice per arrival and never at rest.
     @State private var isBeating = false
+    /// The sleep that ends the current beat, held so it can be cancelled — by the next
+    /// arrival, which restarts the beat, or by a real layout change, which takes the frame
+    /// away from it.
+    @State private var beatTask: Task<Void, Never>?
 
     /// The app's initialiser: the island follows the Reduce Motion setting as it changes.
     public init(
@@ -51,34 +60,37 @@ public struct SurfaceView: View {
         self.presenter = presenter
         self.geometry = geometry
         self.pinnedChoreographer = choreographer
-        self.motion = .shared
+        self.motion = nil
     }
 
     public var body: some View {
+        // Bound once: in the app this resolves the live Reduce Motion setting, and every
+        // decision below has to be made against the same answer.
+        let choreographer = self.choreographer
         let current = presenter.current
         let layout = IslandLayout.resolve(state: presenter.state, current: current, geometry: geometry)
         // The notch itself is the floor: the black shape may cover it, never sit inside it.
         let floor = CGSize(width: geometry.notchWidth, height: geometry.notchHeight)
-        let presentationChanged = previousPresentationID != current?.id
+        let draw = IslandDraw(layout: layout, presentationID: current?.id, featureID: current?.featureID)
+        let presentationChanged = previousDraw?.presentationID != draw.presentationID
         let kind = TransitionChoreographer.kind(
-            from: previousLayout,
+            from: previousDraw?.layout,
             to: layout,
             presentationChanged: presentationChanged
         )
         let animation = choreographer.geometryAnimation(
-            from: previousLayout,
+            from: previousDraw?.layout,
             to: layout,
             presentationChanged: presentationChanged
         )
         // A swipe, and only a swipe, gives content an axis to travel along.
         let pageDirection = kind == .pageChange ? presenter.cycleDirection(arrivingAt: current?.id) : nil
-        // Decided here, where the *previous* layout is still readable, and consumed by the
+        // Decided here, where the *previous* draw is still readable, and carried out by the
         // `onChange` below, which runs after this body with the same captured value.
-        let announcesArrival = IslandArrival.shouldBeat(
-            from: previousLayout,
-            to: layout,
-            presentationChanged: presentationChanged,
-            isReduced: choreographer.isReduced
+        let beatChange = IslandArrival.beatChange(
+            arrives: IslandArrival.shouldBeat(from: previousDraw, to: draw, isReduced: choreographer.isReduced),
+            layoutChanged: previousDraw.map { $0.layout != layout } ?? false,
+            isHeld: isBeating
         )
         let shapeSize = isBeating ? IslandArrival.beat(layout.size) : layout.size
 
@@ -108,24 +120,52 @@ public struct SurfaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(animation, value: layout)
         .animation(animation, value: presenter.state)
-        .onChange(of: layout, initial: true) { _, new in previousLayout = new }
-        .onChange(of: current?.id, initial: true) { _, new in
-            previousPresentationID = new
-            if announcesArrival { playArrivalBeat() }
+        // One handler for both halves of a draw, so the order the two used to run in can
+        // no longer decide whether the island beats.
+        .onChange(of: draw, initial: true) { _, new in
+            previousDraw = new
+            apply(beatChange, choreographer: choreographer)
         }
     }
 
-    /// Swells the island by a few points and lets it settle, so a card taking over an
-    /// island that is not otherwise moving is still *announced* by the shape.
+    private func apply(_ change: IslandArrival.BeatChange, choreographer: TransitionChoreographer) {
+        switch change {
+        case .start: startArrivalBeat(choreographer: choreographer)
+        case .cancel: cancelArrivalBeat()
+        case .none: break
+        }
+    }
+
+    /// Pushes the island outward by a few points and pulls it back, so a card taking over
+    /// an island that is not otherwise moving is still *announced* by the shape.
     ///
     /// Two state writes and one sleep — no timer, nothing repeating, nothing running once
-    /// the island has settled.
-    private func playArrivalBeat() {
+    /// the island has settled. Re-entrant: a second arrival inside the hold cancels the
+    /// first beat's sleep and starts its own, rather than being cut short by it.
+    private func startArrivalBeat(choreographer: TransitionChoreographer) {
+        beatTask?.cancel()
         withAnimation(choreographer.arrival) { isBeating = true }
-        Task { @MainActor in
+        beatTask = Task { @MainActor in
             try? await Task.sleep(for: IslandArrival.hold)
+            guard !Task.isCancelled else { return }
             withAnimation(choreographer.arrival) { isBeating = false }
+            beatTask = nil
         }
+    }
+
+    /// Drops a beat the island no longer owns the frame for.
+    ///
+    /// Without animation on purpose: the beat's spring is deliberately loose (0.62), and
+    /// letting it settle *through* a move the user asked for — an expand, a page turn —
+    /// puts a wobble on that move. The few points it has travelled are absorbed by the
+    /// geometry transaction that is starting in the same turn.
+    private func cancelArrivalBeat() {
+        beatTask?.cancel()
+        beatTask = nil
+        guard isBeating else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { isBeating = false }
     }
 
     /// Content enters and leaves on its own curves, not on the geometry spring: the
@@ -181,7 +221,8 @@ public struct SurfaceView: View {
     private func stackDots(layout: IslandLayout, current: Presentation?) -> some View {
         let count = presenter.stack.count
         if count > 1, layout.mode == .expanded, current?.showsStackDots != false {
-            let index = presenter.isShowingTransientAlert ? nil : presenter.stackIndex
+            // `stackIndex` is already `nil` while a transient alert borrows the island.
+            let index = presenter.stackIndex
             let isReduced = choreographer.isReduced
             ZStack(alignment: .top) {
                 VStack(spacing: StackDotMetrics.spacing) {

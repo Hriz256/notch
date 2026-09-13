@@ -515,7 +515,7 @@ shipped; the springs all live in `TransitionChoreographer.Spring`, one place.
 | A1 (shortlist 3) | The two geometry springs retuned. | grow 0.38 / 0.82, collapse 0.30 / 0.92 |
 | A3 + A5 (shortlist 4) | A page turn is its own kind, judged by identity before size, and content slides along the axis of the swipe inside the island's clip. | `pageChange` spring 0.34 / 0.86, slide ±14 pt |
 | A7 + B13 (shortlist 5) | One bright marker travels the dot track and grows, instead of two opacities crossfading. | dot 3 pt, marker 4 pt, pitch 8 pt, spring 0.3 / 0.8 |
-| B1 (shortlist 8) | The island beats once when a card takes it over. | +8 pt wide, +3 pt tall, held 90 ms, spring 0.32 / 0.62 |
+| B1 (shortlist 8) | The island pulses once when a card from *another feature* takes it over without moving it. | a pulse aiming at +8 / +3 pt, reversed after 90 ms, peaking around +4 pt, spring 0.32 / 0.62 |
 | A13 | Reduce Motion is live: `MotionSettings` observes `NSWorkspaceAccessibilityDisplayOptionsDidChange` and the surface resolves its curves while drawing. | — |
 
 Two deliberate departures from the proposals above, both in the conservative direction:
@@ -526,7 +526,12 @@ Two deliberate departures from the proposals above, both in the conservative dir
   would have made the commonest arrival silent.
 - **B1 fires only when the layout is otherwise unchanged**, i.e. the A6 case, not on every
   arrival. When the arrival resizes the island the geometry spring already owns the frame and is
-  already reacting; a second animation on the same value would fight it for no gain.
+  already reacting; a second animation on the same value would fight it for no gain. It is also
+  skipped when the arriving card belongs to the **same feature** as the one leaving: the HUD
+  presents a fresh id at the same 96 pt width when volume gives way to brightness, and a notch
+  that twitches while the user holds a volume key is noise. A Code completion alert landing over
+  Music still pulses. A real layout change inside the 90 ms cancels the pulse outright, without
+  animating, so its deliberately loose spring can never wobble a move the user asked for.
 
 Reduce Motion now has a real form rather than a partial one: the reduced content transition is
 opacity alone (it used to still scale 0.94), the page slide and the arrival beat are skipped, and
