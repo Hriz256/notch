@@ -30,7 +30,10 @@ public final class BrightnessMonitor {
         self.source = source
     }
 
+    /// Idempotent: a second `start()` without a `stop()` is a no-op, so the real source never
+    /// registers twice for the same display (which would double every later change).
     public func start() {
+        guard !isObserving else { return }
         isStopped = false
         guard source.isAvailable else {
             logger.info("brightness unavailable: DisplayServices missing or no adjustable built-in display")

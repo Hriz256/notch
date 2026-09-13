@@ -8,10 +8,12 @@ private final class FakeBrightnessSource: BrightnessSource {
     var level: Double? = 0.8
     var registrationSucceeds = true
     private(set) var handler: (@MainActor () -> Void)?
+    private(set) var observeCount = 0
     private(set) var stopCount = 0
 
     func brightness() -> Double? { level }
     func observe(_ handler: @escaping @MainActor () -> Void) -> Bool {
+        observeCount += 1
         guard registrationSucceeds else { return false }
         self.handler = handler
         return true
@@ -64,6 +66,20 @@ struct BrightnessMonitorTests {
         source.registrationSucceeds = false
         monitor.start()
         #expect(recorder.readings.isEmpty)
+    }
+
+    @Test func aSecondStartIsANoOpButARestartObservesAgain() {
+        let (monitor, source, recorder) = make()
+        monitor.start()
+        monitor.start()
+        #expect(source.observeCount == 1)
+        #expect(recorder.readings.count == 1)
+
+        monitor.stop()
+        monitor.start()
+        #expect(source.observeCount == 2)
+        #expect(recorder.readings.count == 2)
+        #expect(recorder.readings[1].1 == true)
     }
 
     @Test func stopUnregistersAndDropsLateCallbacks() {
