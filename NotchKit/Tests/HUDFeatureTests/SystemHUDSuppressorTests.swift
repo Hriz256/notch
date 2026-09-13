@@ -114,6 +114,46 @@ final class SystemHUDSuppressorTests {
         #expect(shell.steps == [.kickstartOSDUIHelper, .stopOSDUIHelper])
     }
 
+    @Test func watchdogRepairIsSerialisedBehindALift() async {
+        let (suppressor, shell, clock) = make()
+        await suppressor.apply()
+        shell.clearSteps()
+        shell.helperStopped = false
+
+        clock.advance(by: .seconds(5))   // the watchdog wants to stop the helper again
+        await suppressor.lift()          // ... but a lift is queued first
+        await suppressor.settle()
+
+        #expect(shell.steps == [.kickstartOSDUIHelper, .setBannersPreference(nil), .restartControlCenter])
+        #expect(shell.steps.last != .stopOSDUIHelper)
+        #expect(clock.pendingCount == 0)
+    }
+
+    @Test func liftSynchronouslyWinsOverAnInFlightApply() async {
+        let (suppressor, shell, clock) = make()
+        let applying = Task { await suppressor.apply() }
+        suppressor.liftSynchronously()
+        await applying.value
+        await suppressor.settle()
+
+        #expect(!suppressor.isApplied)
+        #expect(!defaults.bool(forKey: "hud.suppressionApplied"))
+        #expect(clock.pendingCount == 0)
+        #expect(shell.steps.last != .stopOSDUIHelper)
+        #expect(shell.steps.suffix(2) != [.kickstartOSDUIHelper, .stopOSDUIHelper])
+    }
+
+    @Test func repairAtLaunchRelaunchesAStoppedHelperWithoutFlags() async {
+        let (suppressor, shell, _) = make()
+        shell.helperStopped = true   // stopped by a run that died before recording it
+
+        await suppressor.repairAtLaunch(featureWillBeOn: false)
+
+        #expect(shell.steps == [.kickstartOSDUIHelper])
+        #expect(shell.preference == nil)
+        #expect(!suppressor.isApplied)
+    }
+
     @Test func repairAtLaunchLiftsALeftoverWhenTheFeatureIsOff() async {
         let (first, _, _) = make()
         await first.apply()

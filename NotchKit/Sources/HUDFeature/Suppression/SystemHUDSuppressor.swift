@@ -38,6 +38,9 @@ public final class SystemHUDSuppressor {
     private var watchdog: ScheduledToken?
     private var chain: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
+    /// Set by ``liftSynchronously()``. Cancelling the chain cannot interrupt a detached step, so
+    /// every queued operation checks this and gives up rather than re-suppressing on the way out.
+    private var isTerminating = false
 
     public init(shell: any SystemShell, clock: any IslandClock, defaults: UserDefaults = .standard) {
         self.shell = shell
@@ -52,11 +55,13 @@ public final class SystemHUDSuppressor {
         await enqueue { [self] in
             let shell = shell
             let alreadyFalse = await offMain { shell.bannersPreference() == false }
+            guard !isTerminating else { return }
             let weSet = defaults.bool(forKey: Self.weSetPreferenceKey) || !alreadyFalse
             defaults.set(true, forKey: Self.appliedKey)
             defaults.set(weSet, forKey: Self.weSetPreferenceKey)
             isApplied = true
             await execute(SuppressionPlan.apply(preferenceAlreadyFalse: alreadyFalse))
+            guard !isTerminating else { return }
             logger.info("system HUD suppressed")
             armWatchdog()
         }
@@ -64,7 +69,7 @@ public final class SystemHUDSuppressor {
 
     public func lift() async {
         await enqueue { [self] in
-            guard isApplied else { return }
+            guard !isTerminating, isApplied else { return }
             cancelWatchdog()
             await execute(SuppressionPlan.lift(weSetPreference: defaults.bool(forKey: Self.weSetPreferenceKey)))
             clearFlags()
@@ -74,11 +79,17 @@ public final class SystemHUDSuppressor {
 
     /// For `applicationWillTerminate`, where nothing can be awaited: runs the lift on the
     /// calling thread (well under a second) so the system HUD is back before the process ends.
+    ///
+    /// An `apply()` that is already in flight cannot be interrupted — its steps run detached —
+    /// so ``isTerminating`` is set first and the apply abandons itself at its next checkpoint.
+    /// The lift also runs off the recorded flag, not just ``isApplied``, so an apply that got as
+    /// far as writing the flags is still undone.
     public func liftSynchronously() {
-        guard isApplied else { return }
+        isTerminating = true
         cancelWatchdog()
         chain?.cancel()
         chain = nil
+        guard isApplied || defaults.bool(forKey: Self.appliedKey) else { return }
         for step in SuppressionPlan.lift(weSetPreference: defaults.bool(forKey: Self.weSetPreferenceKey)) {
             Self.perform(step, on: shell)
         }
@@ -88,10 +99,24 @@ public final class SystemHUDSuppressor {
 
     /// Once per launch, before the registry activates anything: a suppression left behind
     /// by a crash is lifted when the feature will not be on to re-apply it.
+    ///
+    /// A helper can also be left stopped with no record of it — a crash between the `SIGSTOP`
+    /// and the flag write, or a termination that raced an apply — so with no flag to go on the
+    /// helper itself is asked. Relaunching it is safe either way; the preference is not ours to
+    /// touch here, since only a recorded suppression proves we set it.
     public func repairAtLaunch(featureWillBeOn: Bool) async {
-        guard isApplied, !featureWillBeOn else { return }
-        logger.info("lifting a suppression left over from an earlier run")
-        await lift()
+        guard !featureWillBeOn else { return }
+        if isApplied {
+            logger.info("lifting a suppression left over from an earlier run")
+            await lift()
+            return
+        }
+        await enqueue { [self] in
+            let shell = shell
+            guard await offMain({ shell.isOSDUIHelperStopped() }) else { return }
+            logger.notice("OSDUIHelper was left stopped with no record of it; relaunching it")
+            await execute([.kickstartOSDUIHelper])
+        }
     }
 
     /// Test hook: waits for the queued operations and any running watchdog check.
@@ -147,19 +172,25 @@ public final class SystemHUDSuppressor {
         watchdogTask = nil
     }
 
+    /// The check and its repair go through ``enqueue(_:)`` like every other operation: a `lift()`
+    /// queued first makes the `isApplied` guard fail, and one queued after runs only when the
+    /// repair is done, so it can never leave a stopped helper behind.
     private func watchdogFired() {
         guard isApplied else { return }
-        let shell = shell
         watchdogTask = Task { @MainActor [weak self] in
-            let stopped = await Task.detached(priority: .utility) { shell.isOSDUIHelperStopped() }.value
-            guard let self, isApplied, !Task.isCancelled else { return }
-            let steps = SuppressionPlan.repairIfNeeded(osdHelperStopped: stopped)
-            if !steps.isEmpty {
-                logger.notice("OSDUIHelper came back; stopping it again")
-                await execute(steps)
+            await self?.enqueue { [weak self] in
+                guard let self, !isTerminating, isApplied else { return }
+                let shell = shell
+                let stopped = await offMain { shell.isOSDUIHelperStopped() }
+                guard !isTerminating, isApplied else { return }
+                let steps = SuppressionPlan.repairIfNeeded(osdHelperStopped: stopped)
+                if !steps.isEmpty {
+                    logger.notice("OSDUIHelper came back; stopping it again")
+                    await execute(steps)
+                    guard !isTerminating, isApplied else { return }
+                }
+                armWatchdog()
             }
-            guard isApplied else { return }
-            armWatchdog()
         }
     }
 
