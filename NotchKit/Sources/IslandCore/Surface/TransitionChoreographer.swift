@@ -16,7 +16,10 @@ public struct TransitionChoreographer: Sendable {
     /// Content leaving. Still quicker than the collapse, but only slightly: an exit that
     /// finishes before the shape does leaves the user watching an *empty* panel deflate.
     public var contentOut: Animation
-    public var usesBlur: Bool
+    /// Whether this is the Reduce Motion choreography. Content then changes by opacity
+    /// alone — no scale, no offset, no blur — while the shape still resizes on the (eased)
+    /// geometry curve, because the island's size *is* the information.
+    public var isReduced: Bool
 
     /// The springs the island moves on, named and kept as numbers rather than only as
     /// `Animation` values: `Animation` cannot be introspected, so the relationships the
@@ -42,7 +45,7 @@ public struct TransitionChoreographer: Sendable {
         collapseGeometry: Spring.collapse.animation,
         contentIn: Spring.contentIn.animation,
         contentOut: Spring.contentOut.animation,
-        usesBlur: true
+        isReduced: false
     )
 
     public static let reducedMotion = TransitionChoreographer(
@@ -50,7 +53,7 @@ public struct TransitionChoreographer: Sendable {
         collapseGeometry: .easeInOut(duration: 0.2),
         contentIn: .easeInOut(duration: 0.2),
         contentOut: .easeInOut(duration: 0.15),
-        usesBlur: false
+        isReduced: true
     )
 
     /// The curve for `previous -> next`: collapse when the island never grows on either axis.
@@ -65,23 +68,62 @@ public struct TransitionChoreographer: Sendable {
     }
 }
 
-/// Fade + slight scale + blur used for content entering/leaving the island.
+/// Where content sits the instant before it is on screen, and where it goes as it leaves.
+///
+/// The island is one shape growing out of the notch, so its content has to arrive the same
+/// way: scaled slightly down *about its top edge* — the edge that touches the hardware —
+/// and lifted a few points, so it unfolds from under the notch instead of materialising in
+/// the middle of a box that is already open. Scaling about the centre, which is what a
+/// default anchor does, gives the content a different origin than the shape, and two
+/// origins is exactly the cue that reads as two objects.
+public struct IslandContentMotion: Equatable, Sendable {
+    /// Scale on the active side, about `.top`.
+    public var scale: CGFloat
+    /// Offset on the active side. Negative `height` sits content under the notch.
+    public var offset: CGSize
+    /// Blur radius on the active side. A garnish: at 13 pt type anything past ~3 pt is a
+    /// smear rather than a focus pull.
+    public var blur: CGFloat
+
+    /// Opacity alone — the Reduce Motion form, and the shape of the identity side.
+    public static let still = IslandContentMotion(scale: 1, offset: .zero, blur: 0)
+
+    public static let unfoldScale: CGFloat = 0.96
+    /// How far under the notch content starts, in points.
+    public static let unfoldRise: CGFloat = 4
+    public static let unfoldBlur: CGFloat = 2.5
+
+    /// Content unfolding out of the notch with the shape.
+    public static func unfold(isReduced: Bool) -> IslandContentMotion {
+        guard !isReduced else { return .still }
+        return IslandContentMotion(
+            scale: unfoldScale,
+            offset: CGSize(width: 0, height: -unfoldRise),
+            blur: unfoldBlur
+        )
+    }
+}
+
+/// Fade + scale + rise (+ a touch of blur) used for content entering and leaving the island.
 struct IslandContentTransition: ViewModifier {
+    let motion: IslandContentMotion
     let active: Bool
-    let usesBlur: Bool
+
     func body(content: Content) -> some View {
         content
             .opacity(active ? 0 : 1)
-            .scaleEffect(active ? 0.94 : 1)
-            .blur(radius: active && usesBlur ? 6 : 0)
+            // `.top`: the island grows from the notch, and so does what is inside it.
+            .scaleEffect(active ? motion.scale : 1, anchor: .top)
+            .offset(active ? motion.offset : .zero)
+            .blur(radius: active ? motion.blur : 0)
     }
 }
 
 extension AnyTransition {
-    static func islandContent(usesBlur: Bool) -> AnyTransition {
+    static func islandContent(_ motion: IslandContentMotion) -> AnyTransition {
         .modifier(
-            active: IslandContentTransition(active: true, usesBlur: usesBlur),
-            identity: IslandContentTransition(active: false, usesBlur: usesBlur)
+            active: IslandContentTransition(motion: motion, active: true),
+            identity: IslandContentTransition(motion: motion, active: false)
         )
     }
 }

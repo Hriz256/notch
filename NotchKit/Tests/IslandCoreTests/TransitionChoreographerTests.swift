@@ -43,3 +43,41 @@ struct ContentTimingTests {
         #expect(c.contentOut == .easeInOut(duration: 0.15))
     }
 }
+
+/// Content has to arrive the way the shape does: out of the notch, at the top.
+struct ContentMotionTests {
+    @Test func contentUnfoldsFromUnderTheNotch() {
+        let motion = IslandContentMotion.unfold(isReduced: false)
+        #expect(motion.scale == 0.96)
+        // Negative: content starts above its resting place, i.e. under the hardware.
+        #expect(motion.offset.height == -4)
+        #expect(motion.offset.width == 0)
+    }
+
+    @Test func theBlurIsAGarnishNotASmear() {
+        let motion = IslandContentMotion.unfold(isReduced: false)
+        #expect(motion.blur == 2.5)
+        // The audit's ceiling for 13 pt type; the old 6 pt was a smear.
+        #expect(motion.blur <= 3)
+    }
+
+    @Test func theScaleStaysSubtleEnoughToReadAsOneShape() {
+        // A deep scale reads as a picture being zoomed inside a box rather than as the
+        // box unfolding.
+        let motion = IslandContentMotion.unfold(isReduced: false)
+        #expect(motion.scale >= 0.95)
+        #expect(motion.scale < 1)
+    }
+
+    @Test func reduceMotionIsOpacityOnly() {
+        #expect(IslandContentMotion.unfold(isReduced: true) == .still)
+        #expect(IslandContentMotion.still.scale == 1)
+        #expect(IslandContentMotion.still.offset == .zero)
+        #expect(IslandContentMotion.still.blur == 0)
+    }
+
+    @Test func theReducedChoreographerIsTheOneThatReduces() {
+        #expect(TransitionChoreographer.reducedMotion.isReduced)
+        #expect(!TransitionChoreographer.standard.isReduced)
+    }
+}

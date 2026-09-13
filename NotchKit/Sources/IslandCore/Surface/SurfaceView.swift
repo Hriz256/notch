@@ -67,11 +67,10 @@ public struct SurfaceView: View {
     /// way in, no early exit on the way out. Content that waits for the shape, or leaves
     /// before it, is what makes the island read as two objects instead of one.
     private var contentTransition: AnyTransition {
-        .asymmetric(
-            insertion: .islandContent(usesBlur: choreographer.usesBlur)
-                .animation(choreographer.contentIn),
-            removal: .islandContent(usesBlur: choreographer.usesBlur)
-                .animation(choreographer.contentOut)
+        let motion = IslandContentMotion.unfold(isReduced: choreographer.isReduced)
+        return .asymmetric(
+            insertion: .islandContent(motion).animation(choreographer.contentIn),
+            removal: .islandContent(motion).animation(choreographer.contentOut)
         )
     }
 
