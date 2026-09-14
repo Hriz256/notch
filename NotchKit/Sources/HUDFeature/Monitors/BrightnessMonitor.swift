@@ -17,17 +17,24 @@ public protocol BrightnessSource: AnyObject {
 ///
 /// `onReading`'s second argument is `initial`: the level at start, which the view model
 /// records as a baseline and never shows.
+///
+/// Only changes the user made get through: DisplayServices reports the ambient light
+/// sensor's adjustments through the same notification, and macOS shows no HUD for those.
+/// ``BrightnessChangeClassifier`` tells the two apart by the shape of the change.
 @MainActor
 public final class BrightnessMonitor {
     public var onReading: (HUDReading, Bool) -> Void = { _, _ in }
 
     private let source: any BrightnessSource
+    private let now: () -> Date
     private let logger = Logger(subsystem: "app.notch", category: "hud.brightness")
+    private var classifier = BrightnessChangeClassifier()
     private var isObserving = false
     private var isStopped = false
 
-    public init(source: any BrightnessSource) {
+    public init(source: any BrightnessSource, now: @escaping () -> Date = { Date() }) {
         self.source = source
+        self.now = now
     }
 
     /// Idempotent: a second `start()` without a `stop()` is a no-op, so the real source never
@@ -45,6 +52,7 @@ public final class BrightnessMonitor {
         }
         isObserving = true
         if let level = source.brightness() {
+            classifier.record(level: level, at: now())
             onReading(HUDReading(kind: .brightness, level: level), true)
         }
     }
@@ -59,6 +67,10 @@ public final class BrightnessMonitor {
 
     private func changed() {
         guard !isStopped, isObserving, let level = source.brightness() else { return }
+        // The sensor's creep is dropped here, before the session ever sees it: it must not
+        // present a HUD, and it must not count as the change a later key press is judged
+        // against either — the classifier keeps its own short memory for that.
+        guard classifier.classify(level: level, at: now()) == .manual else { return }
         onReading(HUDReading(kind: .brightness, level: level), false)
     }
 }
