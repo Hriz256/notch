@@ -8,70 +8,58 @@ import Foundation
 /// of the signal, measured on a MacBook Pro on 2026-09-14:
 ///
 /// - **Keys**: one notification, a jump of 1/16 of the scale (1/64 with Option+Shift),
-///   landing exactly on that grid.
-/// - **Ambient**: a ramp of ~0.0001 steps every 8 ms for 3–9 s, ending anywhere.
-///   The fastest ramp seen moved 0.031/s.
+///   landing exactly on that grid — a press after the sensor left the level off the grid
+///   snaps it back onto it.
+/// - **Ambient**: a ramp of small steps every 8 ms. A gentle change creeps at ~0.0001 a
+///   step; covering the sensor outright moved 0.42 → 0.98 in 1.9 s, with steps of up to
+///   0.004 — fast, but still a ramp of small steps ending anywhere.
 ///
-/// Two rules, either of which makes a change manual: a single step of at least most of
-/// a fine key step, or — for hardware that smooths key changes into a ramp — movement of
-/// at least half a key step within ``rampWindow``. Ambient ramps clear neither by a wide
-/// margin (a single ambient step is a hundredth of the first threshold, and 300 ms of
-/// the fastest ramp a third of the second).
+/// So a change is manual when a *single* notification moves the level by at least most
+/// of a fine key step and lands on the 1/64 grid. Speed over a window is deliberately not
+/// a criterion: a strong ambient change is as fast as any smoothed key press would be.
+/// Ambient steps stay a third of the size threshold even at their fastest, and the grid
+/// test catches what would slip through.
 ///
-/// Pure: the caller owns the clock and feeds `(level, time)` in arrival order.
+/// Pure: the caller feeds levels in arrival order.
 public struct BrightnessChangeClassifier: Equatable, Sendable {
     /// The brightness keys move the level by this much.
     public static let keyStep = 1.0 / 16.0
-    /// Option+Shift with a brightness key moves it by this much.
+    /// Option+Shift with a brightness key moves it by this much; also the grid keys land on.
     public static let fineKeyStep = 1.0 / 64.0
-    /// A single notification that moves the level by at least this much is a key press.
-    public static let instantThreshold = fineKeyStep * 0.75
-    /// Movement of at least this much within ``rampWindow`` is a smoothed key press.
-    public static let rampThreshold = keyStep / 2
-    public static let rampWindow: Duration = .milliseconds(300)
+    /// A single notification has to move the level by at least this much to be a key press.
+    public static let stepThreshold = fineKeyStep * 0.75
+    /// How far off the 1/64 grid a level may be and still count as on it. The keys land on
+    /// the grid to float precision, so this only has to absorb rounding; anything wider
+    /// starts admitting ambient levels (the grid points are 0.0156 apart).
+    public static let gridTolerance = 0.0005
 
     public enum Verdict: Equatable, Sendable {
-        /// The user pressed a key (or dragged a slider fast enough to look like one).
+        /// The user pressed a key.
         case manual
-        /// The sensor, or anything else that creeps: not worth a HUD.
+        /// The sensor, a slider drag, or anything else that creeps: not worth a HUD.
         case ambient
     }
 
-    private struct Sample: Equatable, Sendable {
-        var level: Double
-        var time: Date
-    }
-
-    /// Recent levels, oldest first, all within ``rampWindow`` of the newest.
-    private var samples: [Sample] = []
+    private var last: Double?
 
     public init() {}
 
     /// Records a level without judging it: the reading at registration.
-    public mutating func record(level: Double, at time: Date) {
-        samples = [Sample(level: level, time: time)]
+    public mutating func record(level: Double) {
+        last = level
     }
 
-    /// Judges one change. A manual verdict resets the window, so the ambient creep that
-    /// follows a key press is not carried along by the key's jump for the next 300 ms.
-    public mutating func classify(level: Double, at time: Date) -> Verdict {
-        defer { samples.append(Sample(level: level, time: time)) }
-        guard let last = samples.last else { return .ambient }
-        let cutoff = time.addingTimeInterval(-Self.rampWindow.seconds)
-        samples.removeAll { $0.time < cutoff }
-
-        let instant = abs(level - last.level) >= Self.instantThreshold
-        let ramped = samples.contains { abs(level - $0.level) >= Self.rampThreshold }
-        if instant || ramped {
-            samples.removeAll()
-            return .manual
-        }
-        return .ambient
+    /// Judges one change against the level before it.
+    public mutating func classify(level: Double) -> Verdict {
+        defer { last = level }
+        guard let last else { return .ambient }
+        let bigEnough = abs(level - last) >= Self.stepThreshold
+        return bigEnough && Self.isOnGrid(level) ? .manual : .ambient
     }
-}
 
-private extension Duration {
-    var seconds: TimeInterval {
-        TimeInterval(components.seconds) + TimeInterval(components.attoseconds) / 1e18
+    /// Whether `level` sits on the 1/64 grid, within ``gridTolerance``.
+    public static func isOnGrid(_ level: Double) -> Bool {
+        let steps = level / fineKeyStep
+        return abs(steps - steps.rounded()) * fineKeyStep <= gridTolerance
     }
 }

@@ -1,4 +1,3 @@
-import Foundation
 import HUDShared
 import Testing
 @testable import HUDFeature
@@ -27,59 +26,55 @@ private final class FakeBrightnessSource: BrightnessSource {
 struct BrightnessMonitorTests {
     final class Recorder { var readings: [(HUDReading, Bool)] = [] }
 
-    final class Clock { var now = Date(timeIntervalSince1970: 1_700_000_000) }
-
-    private func make() -> (BrightnessMonitor, FakeBrightnessSource, Recorder, Clock) {
+    private func make() -> (BrightnessMonitor, FakeBrightnessSource, Recorder) {
         let source = FakeBrightnessSource()
-        let clock = Clock()
-        let monitor = BrightnessMonitor(source: source, now: { clock.now })
+        let monitor = BrightnessMonitor(source: source)
         let recorder = Recorder()
         monitor.onReading = { reading, initial in recorder.readings.append((reading, initial)) }
-        return (monitor, source, recorder, clock)
+        return (monitor, source, recorder)
     }
 
     @Test func startDeliversTheCurrentLevelAsABaseline() {
-        let (monitor, _, recorder, _) = make()
+        let (monitor, _, recorder) = make()
         monitor.start()
         #expect(recorder.readings.count == 1)
         #expect(recorder.readings[0].0 == HUDReading(kind: .brightness, level: 0.8))
         #expect(recorder.readings[0].1 == true)
     }
 
+    /// A key-shaped change: one notification, landing on the 1/16 grid.
     @Test func aChangeDeliversAReading() {
-        let (monitor, source, recorder, _) = make()
+        let (monitor, source, recorder) = make()
         monitor.start()
-        source.level = 0.4
+        source.level = 0.375
         source.fire()
         #expect(recorder.readings.count == 2)
-        #expect(recorder.readings[1].0 == HUDReading(kind: .brightness, level: 0.4))
+        #expect(recorder.readings[1].0 == HUDReading(kind: .brightness, level: 0.375))
         #expect(recorder.readings[1].1 == false)
     }
 
-    /// The sensor's ramp — tiny steps every 8 ms — never reaches the session, so it never
-    /// presents a HUD. A key press right after it does, with the level the keys left.
+    /// The sensor's ramp — small steps every 8 ms — never reaches the session, so it never
+    /// presents a HUD. A key press right after it does, snapped onto the 1/16 grid.
     @Test func ambientCreepIsDroppedButAKeyPressGetsThrough() {
-        let (monitor, source, recorder, clock) = make()
+        let (monitor, source, recorder) = make()
         monitor.start()
         var level = 0.8
         for _ in 1...100 {
             level -= 0.00012
-            clock.now.addTimeInterval(0.008)
             source.level = level
             source.fire()
         }
         #expect(recorder.readings.count == 1)
 
-        clock.now.addTimeInterval(0.5)
-        source.level = level - 1.0 / 16.0
+        source.level = 0.75
         source.fire()
         #expect(recorder.readings.count == 2)
-        #expect(recorder.readings[1].0.level == level - 1.0 / 16.0)
+        #expect(recorder.readings[1].0.level == 0.75)
         #expect(recorder.readings[1].1 == false)
     }
 
     @Test func unavailableSourceDeliversNothing() {
-        let (monitor, source, recorder, _) = make()
+        let (monitor, source, recorder) = make()
         source.isAvailable = false
         monitor.start()
         source.fire()
@@ -88,14 +83,14 @@ struct BrightnessMonitorTests {
     }
 
     @Test func failedRegistrationDeliversNothing() {
-        let (monitor, source, recorder, _) = make()
+        let (monitor, source, recorder) = make()
         source.registrationSucceeds = false
         monitor.start()
         #expect(recorder.readings.isEmpty)
     }
 
     @Test func aSecondStartIsANoOpButARestartObservesAgain() {
-        let (monitor, source, recorder, _) = make()
+        let (monitor, source, recorder) = make()
         monitor.start()
         monitor.start()
         #expect(source.observeCount == 1)
@@ -109,7 +104,7 @@ struct BrightnessMonitorTests {
     }
 
     @Test func stopUnregistersAndDropsLateCallbacks() {
-        let (monitor, source, recorder, _) = make()
+        let (monitor, source, recorder) = make()
         monitor.start()
         let handler = source.handler
         monitor.stop()

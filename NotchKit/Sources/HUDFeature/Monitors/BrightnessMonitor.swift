@@ -26,15 +26,13 @@ public final class BrightnessMonitor {
     public var onReading: (HUDReading, Bool) -> Void = { _, _ in }
 
     private let source: any BrightnessSource
-    private let now: () -> Date
     private let logger = Logger(subsystem: "app.notch", category: "hud.brightness")
     private var classifier = BrightnessChangeClassifier()
     private var isObserving = false
     private var isStopped = false
 
-    public init(source: any BrightnessSource, now: @escaping () -> Date = { Date() }) {
+    public init(source: any BrightnessSource) {
         self.source = source
-        self.now = now
     }
 
     /// Idempotent: a second `start()` without a `stop()` is a no-op, so the real source never
@@ -52,7 +50,7 @@ public final class BrightnessMonitor {
         }
         isObserving = true
         if let level = source.brightness() {
-            classifier.record(level: level, at: now())
+            classifier.record(level: level)
             onReading(HUDReading(kind: .brightness, level: level), true)
         }
     }
@@ -70,7 +68,7 @@ public final class BrightnessMonitor {
         // The sensor's creep is dropped here, before the session ever sees it: it must not
         // present a HUD, and it must not count as the change a later key press is judged
         // against either — the classifier keeps its own short memory for that.
-        guard classifier.classify(level: level, at: now()) == .manual else { return }
+        guard classifier.classify(level: level) == .manual else { return }
         onReading(HUDReading(kind: .brightness, level: level), false)
     }
 }
