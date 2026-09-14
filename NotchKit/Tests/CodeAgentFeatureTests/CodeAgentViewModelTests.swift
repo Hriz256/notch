@@ -310,6 +310,8 @@ final class CodeAgentViewModelTests {
         #expect(f.vm.activeCount == 1)
     }
 
+    /// A working — or just finished, while its alert is up — session names the agent the
+    /// island shows; only once nothing is happening does the user's pick come back.
     @Test func workingSessionDrivesTheDisplayedAgent() {
         let f = makeFixture(defaults: defaults)
         f.settings.currentAgent = .claude
@@ -317,6 +319,8 @@ final class CodeAgentViewModelTests {
 
         #expect(f.vm.displayedAgent == .codex)
         f.vm.handle(f.event(.completed, agent: .codex))
+        #expect(f.vm.displayedAgent == .codex)
+        f.clock.advance(by: CodeAgentViewModel.alertDuration)
         #expect(f.vm.displayedAgent == .claude)
     }
 
@@ -615,10 +619,47 @@ final class CodeAgentViewModelTests {
         f.clock.advance(by: .milliseconds(200))
         f.vm.handle(f.event(.completed, session: "s1"))
 
-        // The island is about `s2` at once; the completion of `s1` is the separate alert.
-        #expect(f.vm.displayedSession?.id == "s2")
+        // The alert shows `s1`'s check first; once it ends the island is about `s2`.
+        #expect(f.vm.displayedSession?.id == "s1")
         #expect(f.vm.activeCount == 1)
         #expect(f.presenter.presented.count(where: { $0.priority == .alert }) == 1)
+        f.clock.advance(by: CodeAgentViewModel.alertDuration)
+        #expect(f.vm.displayedSession?.id == "s2")
+    }
+
+    /// The finish of one chat is what the alert is about, even while another chat is still
+    /// working: the chime already says "done", and the island has to show the check that
+    /// goes with it — not the other session's dots. The working session gets the island
+    /// back when the alert ends.
+    @Test func aFinishBesideAWorkingSessionShowsTheCheckForTheAlert() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        f.clock.advance(by: .milliseconds(200))
+        f.vm.handle(f.event(.analyzing, agent: .codex, session: "s2", tool: "read_file"))
+        f.clock.advance(by: .seconds(6))
+        f.vm.handle(f.event(.analyzing, agent: .codex, session: "s2", tool: "read_file"))
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.visibleActivity == .reading)
+
+        f.vm.handle(f.event(.completed, session: "s1"))
+
+        #expect(f.vm.displayedSession?.id == "s1")
+        #expect(f.vm.displayedAgent == .claude)
+        #expect(f.vm.visibleStage == .completed)
+        #expect(f.vm.visibleActivity == .completed)
+        #expect(f.sound.count == 1)
+
+        // The working session keeps sending events under the alert; the check stays.
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.creating, agent: .codex, session: "s2", tool: "apply_patch"))
+        #expect(f.vm.visibleActivity == .completed)
+
+        // The alert ends: back to the chat that is still working.
+        f.clock.advance(by: .seconds(4))
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.displayedAgent == .codex)
+        #expect(f.vm.visibleStage == .creating)
+        #expect(f.vm.visibleActivity == .editing)
     }
 
     // MARK: Glyph dwell

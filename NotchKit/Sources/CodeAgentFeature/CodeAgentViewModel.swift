@@ -116,10 +116,11 @@ public final class CodeAgentViewModel {
     public var activeCount: Int { tracker.activeCount }
     public var isCaffeinating: Bool { caffeinator.isActive }
 
-    /// The session the island is currently about: the sticky running one, or — while a
-    /// completion alert is up — the finished one the alert is for. This is what the views
-    /// render.
-    public var displayedSession: SessionTracker.Session? { displayedRunningSession ?? alertingSession }
+    /// The session the island is currently about: while a completion alert is up, the
+    /// finished one the alert is for — even if another chat is still working, because the
+    /// chime just said "done" and the island has to show the check that goes with it;
+    /// otherwise the sticky running one. This is what the views render.
+    public var displayedSession: SessionTracker.Session? { alertingSession ?? displayedRunningSession }
 
     /// The running session ``displayedSessionKey`` names, or `nil` once it has finished or
     /// been dropped.
@@ -396,12 +397,16 @@ public final class CodeAgentViewModel {
             now: now()
         )
         displayedSessionKey = active.map { SessionTracker.key(agent: $0.agent, sessionID: $0.id) }
-        displayedAgent = active?.agent ?? currentEnabledAgent
 
         let newAlert = claimFinishedSession()
         if let newAlert { alertingSession = newAlert }
 
-        updateVisibleStage(driver: active ?? alertingSession)
+        // For the four seconds of an alert the island is about the chat that finished, not
+        // the one still working: the alert's peek draws `visibleActivity`, and a "done" chime
+        // beside another session's dots read as no completion at all.
+        let driver = alertingSession ?? active
+        displayedAgent = driver?.agent ?? currentEnabledAgent
+        updateVisibleStage(driver: driver)
         updateVisibleActivity()
         updateElapsed(active)
         updateMain(active)
