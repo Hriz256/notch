@@ -85,7 +85,9 @@ public final class HookInstaller {
     }
 
     /// Re-installs hooks whose command points at a different copy of the app — which is
-    /// what an installed config looks like after the user moved or replaced `Notch.app`.
+    /// what an installed config looks like after the user moved or replaced `Notch.app` —
+    /// and a Claude config that lacks an event a newer Notch listens for, so an update
+    /// starts receiving it without the user toggling the agent off and on.
     /// Agents without a Notch entry are left alone.
     public func reconcile() throws {
         var firstFailure: (any Error)?
@@ -96,8 +98,11 @@ public final class HookInstaller {
             // Comparing the helper path (not the whole command) keeps the check free of
             // the quoting a path with spaces adds; `JSONSerialization` additionally
             // escapes every "/" as "\/", so the text is unescaped before the compare.
-            guard !Self.unescapingSlashes(text).contains(helperPath) else { continue }
-            logger.info("hook command moved, re-installing \(agent.rawValue, privacy: .public)")
+            let moved = !Self.unescapingSlashes(text).contains(helperPath)
+            let outdated = agent == .claude && !HookConfigEditor.claudeInstallIsComplete(settingsJSON: text)
+            guard moved || outdated else { continue }
+            let why = moved ? "hook command moved" : "hook set outdated"
+            logger.info("\(why, privacy: .public), re-installing \(agent.rawValue, privacy: .public)")
             do { try install(agent) } catch { firstFailure = firstFailure ?? error }
         }
         if let firstFailure { throw firstFailure }

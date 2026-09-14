@@ -70,6 +70,16 @@ public enum StageMapper {
             return make(.thinking)
         case "PermissionRequest":
             return make(.waiting, tool: tool, detail: permissionDetail(payload, tool: tool))
+        case "PermissionDenied":
+            // The user (or a rule) said no; Claude carries on without the tool.
+            return make(.thinking)
+        case "PostToolUseFailure":
+            // `is_interrupt`: the user cut the turn short — Esc on a question, Ctrl+C during
+            // a tool. No Stop follows an interrupt, so this is the last word about the
+            // session until the user speaks again: drop it rather than leave a hand or the
+            // dots up for the abandon timeout.
+            if bool(payload, "is_interrupt") { return make(.ended) }
+            return make(.thinking)
         case "Notification":
             let type = string(payload, "notification_type")
             let message = truncate(string(payload, "message"))

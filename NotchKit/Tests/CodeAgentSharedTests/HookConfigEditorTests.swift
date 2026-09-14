@@ -161,8 +161,8 @@ private func allCommands(_ json: String) throws -> [String] {
         let output = try HookConfigEditor.installClaude(settingsJSON: "{}", command: Fixture.notchCommand)
         let hooks = try hooksDictionary(output)
         #expect(Set(hooks.keys) == Set([
-            "UserPromptSubmit", "PreToolUse", "PostToolUse",
-            "PermissionRequest", "Notification", "Stop", "SessionEnd",
+            "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+            "PermissionRequest", "PermissionDenied", "Notification", "Stop", "SessionEnd",
         ]))
 
         for event in HookConfigEditor.claudeEvents {
@@ -176,9 +176,27 @@ private func allCommands(_ json: String) throws -> [String] {
         }
     }
 
+    /// A config written before an event joined `claudeEvents` is incomplete; a fresh install
+    /// is complete; a foreign hook on the missing event does not make it complete.
+    @Test func completenessTracksTheManagedEventList() throws {
+        let fresh = try HookConfigEditor.installClaude(settingsJSON: "{}", command: Fixture.notchCommand)
+        #expect(HookConfigEditor.claudeInstallIsComplete(settingsJSON: fresh))
+
+        var root = try #require(try JSONSerialization.jsonObject(with: Data(fresh.utf8)) as? [String: Any])
+        var hooks = try #require(root["hooks"] as? [String: Any])
+        hooks["PostToolUseFailure"] = [["matcher": "", "hooks": [["type": "command", "command": "/usr/bin/true"]]]]
+        hooks["PermissionDenied"] = nil
+        root["hooks"] = hooks
+        let stale = String(decoding: try JSONSerialization.data(withJSONObject: root), as: UTF8.self)
+        #expect(!HookConfigEditor.claudeInstallIsComplete(settingsJSON: stale))
+
+        #expect(!HookConfigEditor.claudeInstallIsComplete(settingsJSON: "{}"))
+        #expect(!HookConfigEditor.claudeInstallIsComplete(settingsJSON: "not json"))
+    }
+
     @Test func matcherIsPresentOnlyOnToolEvents() throws {
         let output = try HookConfigEditor.installClaude(settingsJSON: "{}", command: Fixture.notchCommand)
-        for event in ["PreToolUse", "PostToolUse", "PermissionRequest"] {
+        for event in ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied"] {
             let group = try #require(claudeGroups(output, event: event).first)
             #expect(group["matcher"] as? String == "", "\(event) needs a match-all matcher")
         }

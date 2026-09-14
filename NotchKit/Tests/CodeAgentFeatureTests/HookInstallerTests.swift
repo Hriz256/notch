@@ -334,6 +334,27 @@ final class HookInstallerTests {
         #expect(try read(.claude) == before)
     }
 
+    /// A settings.json written by an older Notch lacks the events added since; the next
+    /// launch fills them in without touching what the user had.
+    @Test func reconcileUpgradesAnInstallMissingNewerEvents() throws {
+        let subject = installer()
+        try subject.install(.claude)
+        var root = try #require(try JSONSerialization.jsonObject(with: Data(try read(.claude).utf8)) as? [String: Any])
+        var hooks = try #require(root["hooks"] as? [String: Any])
+        hooks["PostToolUseFailure"] = nil
+        hooks["PermissionDenied"] = nil
+        root["model"] = "opus"
+        root["hooks"] = hooks
+        try write(String(decoding: try JSONSerialization.data(withJSONObject: root), as: UTF8.self), .claude)
+
+        try subject.reconcile()
+
+        let text = try read(.claude)
+        #expect(HookConfigEditor.claudeInstallIsComplete(settingsJSON: text))
+        #expect(text.contains("opus"))
+        #expect(subject.state[.claude] == .installed)
+    }
+
     @Test func reconcileIgnoresAgentsThatWereNeverInstalled() throws {
         try write("{ \"model\": \"opus\" }", .claude)
 

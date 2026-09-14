@@ -185,6 +185,35 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(event?.stage == .completed)
     }
 
+    /// Esc on a question or Ctrl+C during a tool: Claude Code reports the tool as failed
+    /// with `is_interrupt`, and no Stop follows. The hand (or the dots) must not stay up.
+    @Test func claudeInterruptedToolEndsTheSession() {
+        let event = claude([
+            "hook_event_name": "PostToolUseFailure", "session_id": "s1", "tool_name": "AskUserQuestion",
+            "tool_input": [:], "tool_use_id": "t1", "error": "interrupted", "is_interrupt": true,
+        ])
+        #expect(event?.stage == .ended)
+    }
+
+    /// A tool that merely failed is followed by the model deciding what to do next.
+    @Test func claudeFailedToolIsThinking() {
+        let event = claude([
+            "hook_event_name": "PostToolUseFailure", "session_id": "s1", "tool_name": "Bash",
+            "tool_input": [:], "tool_use_id": "t1", "error": "exit 1", "is_interrupt": false,
+        ])
+        #expect(event?.stage == .thinking)
+        #expect(claude(["hook_event_name": "PostToolUseFailure", "session_id": "s1", "tool_name": "Bash"])?.stage == .thinking)
+    }
+
+    @Test func claudePermissionDeniedIsThinking() {
+        let event = claude([
+            "hook_event_name": "PermissionDenied", "session_id": "s1", "tool_name": "Bash",
+            "tool_input": ["command": "rm -rf build"], "tool_use_id": "t1", "reason": "user",
+        ])
+        #expect(event?.stage == .thinking)
+        #expect(event?.tool == nil)
+    }
+
     /// Closing a chat is not finishing a run: the session is simply gone, and a green
     /// check for every terminal tab the user closes would be a false completion.
     @Test func claudeSessionEndEndsTheSession() {

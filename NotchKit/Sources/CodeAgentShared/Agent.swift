@@ -23,8 +23,9 @@ public enum Stage: String, Codable, Sendable {
     case waiting
     case completed
     case failed
-    /// The session is gone: the user closed the chat (`/exit`, `/clear`, a closed terminal
-    /// tab). Not a finish — nothing was completed just now — so it is never shown and never
+    /// Nothing will happen in this session until the user acts: the chat was closed
+    /// (`/exit`, `/clear`, a closed terminal tab) or its turn was cut short (Esc, Ctrl+C).
+    /// Not a finish — nothing was completed just now — so it is never shown and never
     /// alerts; the tracker drops the session on it.
     case ended
 }

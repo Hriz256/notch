@@ -37,12 +37,14 @@ public enum HookConfigEditor {
 
     /// Claude Code events Notch installs, in write order.
     public static let claudeEvents = [
-        "UserPromptSubmit", "PreToolUse", "PostToolUse",
-        "PermissionRequest", "Notification", "Stop", "SessionEnd",
+        "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+        "PermissionRequest", "PermissionDenied", "Notification", "Stop", "SessionEnd",
     ]
 
     /// Claude events where a match-all `"matcher": ""` is meaningful; elsewhere it is omitted.
-    public static let claudeMatcherEvents = ["PreToolUse", "PostToolUse", "PermissionRequest"]
+    public static let claudeMatcherEvents = [
+        "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied",
+    ]
 
     /// Cursor events Notch installs, in write order.
     public static let cursorEvents = [
@@ -75,6 +77,22 @@ public enum HookConfigEditor {
 
         root["hooks"] = hooks
         return try jsonString(root)
+    }
+
+    /// Whether every event in ``claudeEvents`` carries a Notch group. `false` for a config
+    /// written by an older Notch, before an event was added to the list — the installer
+    /// re-installs on that at launch — and for anything that does not parse.
+    public static func claudeInstallIsComplete(settingsJSON: String) -> Bool {
+        guard let root = try? jsonObject(settingsJSON),
+              let hooks = try? dictionary(root["hooks"], path: "hooks")
+        else { return false }
+        return claudeEvents.allSatisfy { event in
+            guard let groups = try? groupArray(hooks[event], path: "hooks.\(event)") else { return false }
+            return groups.contains { group in
+                let handlers = group["hooks"] as? [[String: Any]] ?? []
+                return handlers.contains { ($0["command"] as? String)?.contains(marker) == true }
+            }
+        }
     }
 
     /// Deletes only entries carrying `marker`, then prunes hook groups, event arrays and the
