@@ -72,7 +72,13 @@ public final class EventReceiver {
             logger.debug("dropping \(rawAgent, privacy: .public) event: payload is not a JSON object")
             return
         }
-        guard let event = StageMapper.map(agent: agent, payload: object, now: now()) else { return }
+        // The event's name only — never its payload, which carries prompts and commands.
+        let name = (object["hook_event_name"] ?? object["type"] ?? object["hook_event"]) as? String ?? "?"
+        guard let event = StageMapper.map(agent: agent, payload: object, now: now()) else {
+            logger.debug("ignoring \(rawAgent, privacy: .public) \(name, privacy: .public)")
+            return
+        }
+        logger.debug("received \(rawAgent, privacy: .public) \(name, privacy: .public) → \(event.stage.rawValue, privacy: .public)")
         onEvent(event)
     }
 }
