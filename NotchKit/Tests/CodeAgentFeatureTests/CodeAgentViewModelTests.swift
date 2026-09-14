@@ -662,6 +662,72 @@ final class CodeAgentViewModelTests {
         #expect(f.vm.visibleActivity == .editing)
     }
 
+    /// A question is a state, not an event: the chat that asked it is blocked on the user,
+    /// so the hand stays up however busy another chat is — the five-second handover that
+    /// follows activity must not take it away.
+    @Test func aWaitingChatKeepsTheIslandWhileAnotherWorks() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        f.clock.advance(by: .milliseconds(200))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        f.clock.advance(by: .milliseconds(200))
+        f.vm.handle(f.event(.waiting, agent: .codex, session: "s2", tool: "shell", detail: "shell: rm -rf build"))
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.visibleStage == .waiting)
+
+        // `s1` keeps working for well over the handover window; `s2` says nothing.
+        for _ in 1...8 {
+            f.clock.advance(by: .seconds(1))
+            f.vm.handle(f.event(.creating, session: "s1", tool: "Edit"))
+        }
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.displayedAgent == .codex)
+        #expect(f.vm.visibleStage == .waiting)
+        #expect(f.vm.visibleActivity == .waiting)
+        #expect(f.mainPresentation?.priority == .alert)
+
+        // Answered: the hand goes, and the island is free to follow the work again.
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        #expect(f.vm.visibleStage != .waiting)
+    }
+
+    /// Two open questions: the one asked first shows, and answering it reveals the other.
+    @Test func twoWaitingChatsShowTheOneWaitingLongest() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.waiting, agent: .codex, session: "s2"))
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.waiting, session: "s1"))
+        #expect(f.vm.displayedSession?.id == "s2")
+
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        #expect(f.vm.displayedSession?.id == "s1")
+        #expect(f.vm.visibleStage == .waiting)
+    }
+
+    /// A finish elsewhere still gets its four-second check, and then the hand comes back —
+    /// not the working chat.
+    @Test func aFinishBesideAWaitingChatShowsTheCheckThenTheHandAgain() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking, session: "s1"))
+        f.vm.handle(f.event(.thinking, agent: .codex, session: "s2"))
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.waiting, agent: .codex, session: "s2"))
+        #expect(f.vm.visibleStage == .waiting)
+
+        f.clock.advance(by: .seconds(1))
+        f.vm.handle(f.event(.completed, session: "s1"))
+        #expect(f.vm.visibleStage == .completed)
+
+        f.clock.advance(by: CodeAgentViewModel.alertDuration)
+        #expect(f.vm.displayedSession?.id == "s2")
+        #expect(f.vm.visibleStage == .waiting)
+    }
+
     // MARK: Glyph dwell
 
     /// The timeline from the spec, driven through the view model and its manual clock: a

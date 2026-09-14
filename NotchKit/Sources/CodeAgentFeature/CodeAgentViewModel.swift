@@ -457,12 +457,25 @@ public final class CodeAgentViewModel {
     /// A busier neighbour is never on its own a reason to switch. Pure so the whole rule can
     /// be read, and tested, in one place; `current` is looked up in `sessions` rather than
     /// trusted, so a stale copy cannot keep a finished session on screen.
+    ///
+    /// One exception outranks stickiness: a chat that asked a question. Waiting is a state,
+    /// not an event — that chat is blocked on the user until its next event — so it owns the
+    /// island for as long as it waits, however busy the others are. Of several waiting chats
+    /// the one waiting longest shows, so none is starved; answering it hands the island to
+    /// the next.
     static func chooseDisplayedSession(
         current: SessionTracker.Session?,
         sessions: [String: SessionTracker.Session],
         now: Date
     ) -> SessionTracker.Session? {
         let running = sessions.values.filter { !$0.isFinished }
+
+        // The waiting event is the chat's last event, so the smallest `lastEventAt` is the
+        // one that has waited longest.
+        let waiting = running.filter { $0.stage == .waiting }
+        if let longest = waiting.min(by: { ($0.lastEventAt, $0.id) < ($1.lastEventAt, $1.id) }) {
+            return longest
+        }
 
         guard let current,
               let live = sessions[SessionTracker.key(agent: current.agent, sessionID: current.id)],
