@@ -73,7 +73,8 @@ public final class EventReceiver {
             return
         }
         // The event's name only — never its payload, which carries prompts and commands.
-        let name = (object["hook_event_name"] ?? object["type"] ?? object["hook_event"]) as? String ?? "?"
+        var name = (object["hook_event_name"] ?? object["type"] ?? object["hook_event"]) as? String ?? "?"
+        if let type = object["notification_type"] as? String { name += "/\(type)" }
         guard let event = StageMapper.map(agent: agent, payload: object, now: now()) else {
             logger.debug("ignoring \(rawAgent, privacy: .public) \(name, privacy: .public)")
             return
