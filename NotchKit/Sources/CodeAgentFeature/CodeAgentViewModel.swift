@@ -256,7 +256,9 @@ public final class CodeAgentViewModel {
         tracker.handle(event)
         // A session that just ended is exactly when today's token total changed, and when
         // the user is most likely to open the panel. The coordinator throttles the rescan.
-        if event.stage == .completed || event.stage == .failed { usage.sparklineNeedsRefresh() }
+        if event.stage == .completed || event.stage == .failed || event.stage == .ended {
+            usage.sparklineNeedsRefresh()
+        }
         refreshPresentation()
     }
 
@@ -301,7 +303,7 @@ public final class CodeAgentViewModel {
         case .analyzing: "Show Analyzing"
         case .thinking: "Show Thinking"
         case .creating: "Show Creating"
-        case .waiting, .completed, .failed: "Show \(stage.rawValue)"
+        case .waiting, .completed, .failed, .ended: "Show \(stage.rawValue)"
         }
     }
 

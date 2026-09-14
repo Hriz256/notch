@@ -55,6 +55,8 @@ enum ActivityKind: Equatable, Sendable {
         case .waiting: return .waiting
         case .completed: return .completed
         case .failed: return .failed
+        // A closed chat never reaches the views (the tracker drops it), so it is idle here.
+        case .ended: return .idle
         case .analyzing, .creating, .thinking: break
         }
 

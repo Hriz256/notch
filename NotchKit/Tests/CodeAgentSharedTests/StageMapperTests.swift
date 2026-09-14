@@ -185,8 +185,14 @@ private func cursor(_ payload: [String: Any]) -> AgentEvent? {
         #expect(event?.stage == .completed)
     }
 
-    @Test func claudeSessionEndIsCompleted() {
-        #expect(claude(["hook_event_name": "SessionEnd", "session_id": "s1", "reason": "clear"])?.stage == .completed)
+    /// Closing a chat is not finishing a run: the session is simply gone, and a green
+    /// check for every terminal tab the user closes would be a false completion.
+    @Test func claudeSessionEndEndsTheSession() {
+        for reason in ["clear", "logout", "prompt_input_exit", "other"] {
+            let event = claude(["hook_event_name": "SessionEnd", "session_id": "s1", "reason": reason])
+            #expect(event?.stage == .ended)
+            #expect(event?.sessionID == "s1")
+        }
     }
 
     @Test func claudeUnknownEventIsIgnored() {

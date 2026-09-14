@@ -117,6 +117,35 @@ struct SessionTrackerTests {
         #expect(tracker.latestFinished == nil)
     }
 
+    /// A closed chat is gone at once: no retention window, no alert to keep it for.
+    @Test func endedSessionIsDroppedAtOnce() {
+        let (tracker, clock) = make()
+        tracker.handle(event(.thinking, at: 0, clock: clock))
+        #expect(tracker.activeCount == 1)
+
+        tracker.handle(event(.ended, at: 1, clock: clock))
+
+        #expect(tracker.sessions.isEmpty)
+        #expect(tracker.activeSession == nil)
+        #expect(tracker.latestFinished == nil)
+        #expect(clock.pendingCount == 0)
+    }
+
+    /// Claude Code sends SessionEnd long after Stop — when the user closes the terminal —
+    /// by which time the finished session has been retired. That must not resurrect it.
+    @Test func endedEventForAForgottenSessionCreatesNothing() {
+        let (tracker, clock) = make()
+        tracker.handle(event(.completed, at: 0, clock: clock))
+        clock.advance(by: .seconds(61))
+        #expect(tracker.sessions.isEmpty)
+
+        tracker.handle(event(.ended, at: 61, clock: clock))
+
+        #expect(tracker.sessions.isEmpty)
+        #expect(tracker.latestFinished == nil)
+        #expect(clock.pendingCount == 0)
+    }
+
     @Test func failedSessionIsFinishedToo() {
         let (tracker, clock) = make()
         tracker.handle(event(.failed, at: 0, clock: clock))

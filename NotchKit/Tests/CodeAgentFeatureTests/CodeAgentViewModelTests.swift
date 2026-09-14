@@ -409,6 +409,40 @@ final class CodeAgentViewModelTests {
         #expect(f.presenter.presented.count == 2)
     }
 
+    /// Closing the terminal tab of a chat that finished minutes ago sends SessionEnd after
+    /// the finished session was retired — and used to chime a second "done" for it.
+    @Test func closingAFinishedChatLaterDoesNotChimeAgain() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+        f.vm.handle(f.event(.completed))
+        #expect(f.sound.count == 1)
+        f.clock.advance(by: .seconds(120))
+        #expect(f.tracker.sessions.isEmpty)
+
+        f.vm.handle(f.event(.ended))
+
+        #expect(f.sound.count == 1)
+        #expect(f.presenter.presented.count == 2)
+        #expect(f.vm.visibleStage == nil)
+        #expect(f.vm.activeSession == nil)
+    }
+
+    /// Quitting a chat mid-run (Ctrl+C, /exit) is not a completion either: the card goes
+    /// away without a sound or a check.
+    @Test func closingARunningChatDismissesQuietly() {
+        let f = makeFixture(defaults: defaults)
+        f.vm.handle(f.event(.thinking))
+        #expect(f.mainPresentation != nil)
+
+        f.vm.handle(f.event(.ended))
+
+        #expect(f.sound.count == 0)
+        #expect(f.presenter.presented.count == 1)
+        #expect(f.mainPresentation == nil)
+        #expect(f.vm.activeSession == nil)
+        #expect(f.vm.visibleStage == nil)
+    }
+
     /// A session the user picks back up is a new run, and its finish is worth announcing.
     @Test func aRevivedSessionFinishingAgainAlertsAgain() {
         let f = makeFixture(defaults: defaults)

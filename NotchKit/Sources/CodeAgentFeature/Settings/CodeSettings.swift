@@ -36,7 +36,7 @@ public final class CodeSettings {
         case .analyzing: "showAnalyzing"
         case .thinking: "showThinking"
         case .creating: "showCreating"
-        case .waiting, .completed, .failed: nil
+        case .waiting, .completed, .failed, .ended: nil
         }
     }
 

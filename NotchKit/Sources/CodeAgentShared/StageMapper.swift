@@ -88,7 +88,9 @@ public enum StageMapper {
             if hasBackgroundTasks(payload) { return make(.thinking) }
             return make(.completed)
         case "SessionEnd":
-            return make(.completed)
+            // The chat was closed, not finished: a completed run already reported its Stop,
+            // and a run cut short (Ctrl+C, /exit) never completed at all.
+            return make(.ended)
         default:
             return nil
         }

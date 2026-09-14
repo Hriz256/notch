@@ -8,8 +8,8 @@ import CodeAgentShared
 /// The tracker owns two timers per session, both re-armed on every event:
 /// a finished session is kept for ``finishedRetention`` so the island can show its
 /// completion alert, and a session that goes quiet for ``abandonTimeout`` is dropped
-/// (agents have no "session closed" event we can rely on). No timer runs while
-/// `sessions` is empty, which keeps the idle cost at zero.
+/// (only Claude Code reports a closed chat, as ``Stage/ended``, which drops the session
+/// at once). No timer runs while `sessions` is empty, which keeps the idle cost at zero.
 @MainActor
 @Observable
 public final class SessionTracker {
@@ -92,6 +92,14 @@ public final class SessionTracker {
     /// with no tool clears the tool shown by the previous one.
     public func handle(_ event: AgentEvent) {
         let key = Self.key(agent: event.agent, sessionID: event.sessionID)
+        if event.stage == .ended {
+            // Gone, not finished: nothing to retain for an alert, and a session we had
+            // already retired must not come back as a fresh finish.
+            timers[key]?.cancel()
+            timers[key] = nil
+            sessions[key] = nil
+            return
+        }
         let finished = event.stage == .completed || event.stage == .failed
 
         var session = sessions[key] ?? Session(

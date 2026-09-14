@@ -23,6 +23,10 @@ public enum Stage: String, Codable, Sendable {
     case waiting
     case completed
     case failed
+    /// The session is gone: the user closed the chat (`/exit`, `/clear`, a closed terminal
+    /// tab). Not a finish — nothing was completed just now — so it is never shown and never
+    /// alerts; the tracker drops the session on it.
+    case ended
 }
 
 /// A single normalized activity event emitted by an agent hook.

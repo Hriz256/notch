@@ -15,6 +15,7 @@ enum StageLabel {
         case .waiting: "Waiting for you"
         case .completed: "Done"
         case .failed: "Failed"
+        case .ended: "Idle"
         }
     }
 }
