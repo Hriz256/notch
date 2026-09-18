@@ -45,6 +45,22 @@ struct SnapshotDedupArtworkTests {
         #expect(out?.artworkData == nil)
     }
 
+    /// MediaRemote replays the outgoing track for a moment after a skip. That replay lands
+    /// between two snapshots of the new track, and the receiver drops its artwork the instant an
+    /// id other than the one it holds arrives — so the bytes it was sent are gone and have to be
+    /// sent again, even though this dedup had already recorded them as delivered.
+    @Test func artworkIsResentAfterAnInterveningIDDropsItOnTheReceiver() {
+        var d = SnapshotDedup()
+        let sent = d.prepare(snap(title: "New", artworkID: "b", artwork: Data([2])), now: t0)
+        #expect(sent?.artworkData == Data([2]))
+        // The skip burst: the outgoing track comes back briefly, without bytes of its own.
+        let echo = d.prepare(snap(title: "Old", artworkID: "a", artwork: nil), now: t0)
+        #expect(echo?.artworkID == "a")
+        // The receiver cleared "b" on the echo, so the new track's bytes must go out once more.
+        let again = d.prepare(snap(title: "New", artworkID: "b", artwork: Data([2])), now: t0)
+        #expect(again?.artworkData == Data([2]))
+    }
+
     @Test func dedupDoesNotRetainArtworkBytes() {
         var d = SnapshotDedup()
         _ = d.prepare(snap(artworkID: "a", artwork: Data([1, 2, 3])), now: t0)

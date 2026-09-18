@@ -5,7 +5,12 @@ import Foundation
 public struct SnapshotDedup: Sendable {
     private let driftTolerance: TimeInterval
     private var lastSent: NowPlayingSnapshot?
+    /// The artwork id whose *bytes* the receiver is believed to hold.
     private var lastSentArtworkID: String?
+    /// The artwork id of the last snapshot the receiver saw, bytes or not. The receiver keeps its
+    /// artwork only while the incoming id matches the previous snapshot's, so this is what decides
+    /// whether the belief above is still true.
+    private var lastSeenArtworkID: String?
 
     public init(driftTolerance: TimeInterval = 1.5) {
         self.driftTolerance = driftTolerance
@@ -14,9 +19,18 @@ public struct SnapshotDedup: Sendable {
     public mutating func reset() {
         lastSent = nil
         lastSentArtworkID = nil
+        lastSeenArtworkID = nil
     }
 
     public mutating func prepare(_ new: NowPlayingSnapshot, now: Date) -> NowPlayingSnapshot? {
+        // The receiver throws its artwork away the moment a snapshot arrives under a different id
+        // (`MusicViewModel.mergeArtwork`), so an id that changed since the last snapshot means the
+        // bytes sent for it are gone. MediaRemote replays the outgoing track for a moment after a
+        // skip, which puts exactly such a snapshot between two of the new track's: without this,
+        // the bytes would stay recorded as delivered, be stripped from every later snapshot, and
+        // the cover would be missing until the next track change.
+        if new.artworkID != lastSeenArtworkID { lastSentArtworkID = nil }
+        defer { lastSeenArtworkID = new.artworkID }
         // MediaRemote often delivers the image bytes in a later info update than the metadata
         // that names them. Such an update differs from the last one in no field `isEquivalent`
         // looks at, so it has to be forced through or the artwork never reaches the receiver.
