@@ -17,7 +17,7 @@ The AppleScript fallback never engages: it takes over only when the helper is *s
 Principle: **the island shows what you hear, and its buttons control what it shows.**
 
 1. The shown player is sticky: while it plays, it keeps the island.
-2. If the shown player is paused or stopped and another plays, the island switches to the playing one at once.
+2. If the shown player is paused or stopped and another plays, the island switches to the playing one at once. The switch is **provisional** until the new player has played continuously for 3 s: if it goes quiet before that and nothing else plays, the island returns to the last *established* player, if that app is still running (a 0.2 s sound while the music is paused must not leave the sound's tab on the island). A player is established once it has played continuously for 3 s, or when it took the island by any other rule; a player that already had 3 s of continuous play when the switch happened is established at once. *(Added 2026-09-24 after the final review — "Возвращать остров".)*
 3. If both play, a newcomer — a player that started playing *after* the shown one took the island — takes it only once it has played **continuously for 3 s** (`PlayerChoice.takeoverDelay`). A notification sound, a hover preview, 0.2 s of a video never take it.
 4. If nothing plays, the last shown player stays (paused): what you were listening to, not what beeped last.
 5. If the shown player's app goes away: a playing player if there is one; otherwise macOS's elected player; otherwise the first one listed; otherwise nothing (the card goes).
@@ -32,6 +32,9 @@ Play/pause/next/previous/seek go to the shown player, not to the elected one.
 | Spotify plays, a YouTube video plays 10 s on top | YouTube | YouTube after 3 s (rule 3) |
 | … then the video is paused | YouTube, paused | Spotify, still playing (rule 2) |
 | Everything paused | Whoever started last | What was shown last (rule 4) |
+| Spotify paused, a Chrome tab plays 0.2 s | Chrome, paused | Chrome for 0.2 s, then Spotify, paused (rule 2, provisional) |
+| Spotify plays, a video starts, Spotify is paused 1 s later, the video plays on | YouTube | YouTube at once, established after 3 s of play; pausing it later keeps it (rule 4) |
+| … or Spotify is quit instead | YouTube | YouTube (rule 5); nothing to return to |
 
 Not solved here: the hardware media keys go to macOS's elected player, not through the island (Seam ships a `MediaKeyInterceptor`; a separate step if wanted). No setting, no opt-out.
 

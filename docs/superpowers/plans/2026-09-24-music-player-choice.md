@@ -281,9 +281,141 @@ Symbols: `MRMediaRemoteGetLocalOrigin`, `MRMediaRemoteGetNowPlayingClients`, `MR
 
 ---
 
+### Task 4: a provisional switch hands the island back; final-review fixes
+
+**Why:** the final review found that rule 2 plus rule 4 reproduce the reported screenshot another way — music paused, a 0.2 s sound in a Chrome tab switches the island to Chrome, the sound ends, and rule 4 keeps the paused Chrome item. The user chose to hand the island back (spec §2 rule 2, amended). The same commit series carries the comment and log fixes the final review asked to fold in.
+
+**Files:**
+- Modify: `NotchKit/Sources/NowPlayingShared/PlayerChoice.swift`
+- Modify: `NotchKit/Tests/NowPlayingSharedTests/PlayerChoiceTests.swift`
+- Modify: `Helper/NowPlayingMonitor.swift`, `Helper/MediaRemoteBridge.swift` (comments, one log line, dedup reset after per-client commands)
+- Modify: `NotchKit/Sources/MusicFeature/Views/MarqueeText.swift` (two comments only)
+- Modify: `spikes/MediaRemoteSpike/main.swift` (one comment), `.gitignore` (one line)
+
+**Behaviour to add to `PlayerChoice` (public API unchanged):**
+
+New private state `returnTo: String?` — non-nil exactly while the shown player is *provisional*; it names the last established player, the one the island goes back to.
+
+1. At the top of `decide`, **before** bookkeeping forgets anything: if `returnTo != nil` and the shown player had a continuous-play start `s` with `now − s ≥ takeoverDelay`, the shown player is established: `returnTo = nil`. (This uses the start recorded by earlier calls, so a player that played 10 s and is reported paused in this call counts as established.)
+2. Rule-2 switch (shown listed, not playing, some candidate plays): the new player is `pick(among: playing)` as today. If the new player's start is `≥ takeoverDelay` before `now`, it is established (`returnTo = nil`); otherwise `returnTo = returnTo ?? <the player being replaced>` (a provisional player replaced by another provisional one keeps the original anchor).
+3. Shown listed, not playing, nothing plays: if `returnTo` is non-nil, differs from the shown id and is listed, switch to it and set `returnTo = nil`; otherwise keep the shown player and set `returnTo = nil`.
+4. Every other switch (rule 3 takeover, rule 5 fallback, the first decision) sets `returnTo = nil`. `reset()` clears it.
+5. `recheckAt` is unchanged (no recheck is needed for establishment: it only matters at the moment the provisional player stops, and that moment always arrives with a play-state notification).
+
+- [ ] **Step 1: Write the failing tests** — append to `PlayerChoiceTests`:
+
+```swift
+    // MARK: Provisional switch (spec §2 rule 2, amended)
+
+    @Test func aShortSoundWhileTheMusicIsPausedHandsTheIslandBack() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false), c(chrome, false)], elected: spotify, now: t0)
+        #expect(choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10)).playerID == chrome)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(10.2)) == .init(playerID: spotify, recheckAt: nil))
+    }
+
+    @Test func aNewcomerThatPlaysForTheDelayKeepsTheIslandWhenItStops() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(20)).playerID == chrome)
+    }
+
+    /// The user's question: the music is paused while a video plays, and the video plays on.
+    @Test func pausingTheMusicForAVideoKeepsTheVideoOnceItPlaysForTheDelay() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(11)).playerID == chrome)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(30)).playerID == chrome)
+    }
+
+    @Test func pausingTheMusicForAVideoThatStopsWithinTheDelayReturnsToTheMusic() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(11))
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(11.5)).playerID == spotify)
+    }
+
+    @Test func quittingTheMusicLeavesTheVideoWithNothingToReturnTo() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(chrome, false)], elected: chrome, now: at(10.2)).playerID == chrome)
+    }
+
+    @Test func aPlayerThatAlreadyPlayedForTheDelayIsEstablishedAtOnce() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: t0)
+        #expect(choice.decide([c(spotify, true), c(chrome, false)], elected: chrome, now: at(60)).playerID == spotify)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(61)).playerID == spotify)
+    }
+
+    @Test func aProvisionalPlayerReplacedByAnotherStillReturnsToTheEstablishedOne() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(spotify, false), c(chrome, false), c(music, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true), c(music, false)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, false), c(music, true)], elected: music, now: at(10.5)).playerID == music)
+        #expect(choice.decide([c(spotify, false), c(chrome, false), c(music, false)], elected: music, now: at(11)).playerID == spotify)
+    }
+
+    // MARK: Coverage the task reviews asked for
+
+    @Test func amongSeveralReadyChallengersTheLatestStartWins() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(music, true)], elected: music, now: t0)
+        _ = choice.decide([c(music, true), c(spotify, true)], elected: music, now: at(1))
+        _ = choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(2))
+        #expect(choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(5)).playerID == chrome)
+    }
+
+    @Test func severalPendingChallengersRecheckAtTheEarliest() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(music, true)], elected: music, now: t0)
+        _ = choice.decide([c(music, true), c(spotify, true)], elected: music, now: at(1))
+        #expect(choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(2)).recheckAt == at(4))
+    }
+
+    @Test func resetForgetsWhenPlayersStarted() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: spotify, now: at(1))
+        choice.reset()
+        // Kept starts would make Chrome (1 s) the latest start; forgotten ones tie at 2 s and list order wins.
+        #expect(choice.decide([c(spotify, true), c(chrome, true)], elected: nil, now: at(2)).playerID == spotify)
+    }
+
+    @Test func aCustomTakeoverDelayIsHonoured() {
+        var choice = PlayerChoice(takeoverDelay: 1)
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(11)).playerID == chrome)
+    }
+```
+
+- [ ] **Step 2:** `cd NotchKit && swift test --filter PlayerChoiceTests` — the provisional-switch tests fail (the coverage tests may already pass; say which in the report).
+- [ ] **Step 3:** Implement the behaviour list. Update the type's doc comment and the rule comments so they describe the provisional switch and why it exists. Fix two doc comments while there: `Candidate.id` — the contract is "unique within one `decide` call" (the helper builds the bundle id, `<bundleID>#<pid>` for a second process of one app, `pid-<pid>` without a bundle id); `recheckAt` — "the **earliest** moment …".
+- [ ] **Step 4:** `swift test --filter PlayerChoiceTests`, then the full `swift test` — all pass. Commit `fix(Music): a sound that stops within 3 s hands the island back`.
+- [ ] **Step 5: helper and view fixes** (one commit, `fix(Music): honest comments and a corrective snapshot after commands`):
+  - `NowPlayingMonitor`: `MRMediaRemoteSendCommandToClient` always returns 1 (disassembly: `mov w0, #0x1` before `retab`), so the per-client path can never see a rejection. After a per-client play/pause/toggle/next/previous/seek, reset the dedup (as the rejected path does) so the next refresh always sends a snapshot and the app's optimistic state is corrected if the player ignored the command; say so in the comment, and make the existing comments on that path honest about the constant return.
+  - `NowPlayingMonitor`: the one-time fallback `.notice` must say what is actually missing — the per-client calls, or `MRNowPlayingClientGetBundleIdentifier`.
+  - `MediaRemoteBridge`: the doc on `MRNowPlayingClientGetProcessIdentifier` — it names a player without a bundle id, tells two processes of one app apart, and matches the elected client to its list entry.
+  - `MarqueeText`: `edgeFade`'s comment — drop the claim that the branch lives in the mask "rather than in `body`" (body now branches on `needsScroll`); say instead that the mask branches on its own, so switching between the gradient and the opaque mask never touches the row's identity. `ScrollKey`'s doc — the key exists so a new title restarts from 0 and a new distance restarts with the right keyframes (a keyframe animator does not layer; without the key a new title would continue the old timeline mid-scroll).
+  - `spikes/MediaRemoteSpike/main.swift`: the info block's second parameter is an `MRNowPlayingArtworkImage` passed as `void *` (the `…ForOrigin` wrapper copies its bytes into `ArtworkData`); it is left undeclared because only the dictionary is read.
+  - `.gitignore`: add `spikes/MediaRemoteSpike/spike` (the build output of `build.sh`).
+  - Build: `xcodebuild -project Notch.xcodeproj -scheme Notch -configuration Debug -derivedDataPath build-fix build` — `** BUILD SUCCEEDED **`, no warnings in `Helper/`; full `swift test` — all pass.
+
+---
+
 ## Verification (lead, after all tasks)
 
 1. With a paused Chrome video elected and Spotify playing (the reported state): swap in the new helper, and `log stream --level debug --style compact --predicate 'subsystem == "app.notch"'` must show `Following com.spotify.client (elected com.google.Chrome)` and a `Snapshot:` with Spotify's title and artwork bytes.
 2. The user checks the island visually: Spotify's track, cover, pause glyph; the island's pause pauses Spotify, not Chrome.
 3. A 0.2 s sound or a short video in Chrome while Spotify plays does not take the island; a video played for > 3 s does, and pausing it hands the island back to Spotify.
 4. A long title (the Chrome item, or a long Spotify title) is readable on the expanded card: it waits 1.2 s, scrolls left, and loops without ever leaving the slot empty.
+5. While Chrome stays elected and Spotify is followed: skip a Spotify track in Spotify itself — title and cover update within about 1 s (per-player notification + artwork follow-up); seek from the island — Spotify moves, Chrome does not.
+6. Pause Spotify, play a short sound in Chrome — the island shows Chrome only while it sounds, then Spotify (paused) again.
