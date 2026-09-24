@@ -13,41 +13,60 @@ struct MarqueeText: View {
 
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
-    @State private var offset: CGFloat = 0
 
     private var needsScroll: Bool { textWidth > containerWidth + 1 }
+    /// One loop's travel: the title plus the gap to its copy, so the copy lands exactly where the
+    /// title started and the jump back to 0 is invisible.
+    private var distance: CGFloat { textWidth + Self.gap }
+    private static let gap: CGFloat = 32
+    private static let pause: TimeInterval = 1.2
 
     var body: some View {
         GeometryReader { geo in
-            HStack(spacing: 32) {
-                label
-                if needsScroll { label }
+            Group {
+                if needsScroll {
+                    // The keyframe animator owns the offset outright. Driving it with
+                    // `withAnimation(.repeatForever)` instead layered a new loop on every
+                    // restart — SwiftUI adds animations together and a repeat-forever one
+                    // never finishes — so the stacked loops pushed the title out of the slot.
+                    HStack(spacing: Self.gap) { label; label }
+                        .keyframeAnimator(initialValue: CGFloat(0), repeating: true) { row, x in
+                            row.offset(x: x)
+                        } keyframes: { _ in
+                            KeyframeTrack {
+                                LinearKeyframe(0, duration: Self.pause)
+                                LinearKeyframe(-distance, duration: distance / speed)
+                            }
+                        }
+                        .id(ScrollKey(text: text, distance: distance))
+                } else {
+                    label
+                }
             }
-            .offset(x: needsScroll ? offset : 0)
             .onAppear { containerWidth = geo.size.width }
             .onChange(of: geo.size.width) { _, w in containerWidth = w }
-            // The scroll loop depends on the two measured widths, so restart when either
-            // lands rather than when `text` changes: on a track change the new width is
-            // only known after the next layout pass.
-            .onChange(of: containerWidth) { _, _ in restart() }
-            .onChange(of: textWidth) { _, _ in restart() }
-            // A new title that happens to measure the same width leaves `textWidth`
-            // unchanged, so also restart here; the widths are still correct in that case.
-            // Assigning `offset` outside an animation also cancels the previous loop
-            // immediately so the old title's scroll does not linger under the new one.
-            .onChange(of: text) { _, _ in offset = 0; restart() }
         }
         .frame(height: height)
         .clipped()
         .mask(edgeFade)
     }
 
+    /// What a scroll loop runs for. A keyframe animator does not layer, but it does not restart
+    /// either: without this key a new title would carry on the old timeline mid-scroll. Keyed,
+    /// a new title restarts from 0 and a new distance restarts with the keyframes built for it.
+    /// The text is part of the key because a new title can measure the same width, and the
+    /// distance because on a track change the new width only lands after the next layout pass.
+    private struct ScrollKey: Hashable {
+        let text: String
+        let distance: CGFloat
+    }
+
     /// Fading both edges only earns its keep while the text scrolls under them. A title
     /// that fits is fully visible, so the same gradient would dim its first and last
     /// glyph for no reason — a plain opaque mask leaves it untouched and leading-aligned.
-    /// Keeping one mask modifier (rather than branching on `needsScroll` in `body`) keeps
-    /// the marquee's view identity stable, so the running scroll animation survives the
-    /// moment a longer title flips `needsScroll`.
+    /// The mask branches on its own, inside the one `.mask` modifier, so switching between the
+    /// gradient and the opaque mask never touches the row's identity: the loop starts when the
+    /// row appears and starts over only when `ScrollKey` changes.
     @ViewBuilder
     private var edgeFade: some View {
         if needsScroll {
@@ -70,14 +89,5 @@ struct MarqueeText: View {
             // change, so `onAppear` would fire once and freeze `textWidth` at the first
             // title's width.
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
-    }
-
-    private func restart() {
-        offset = 0
-        guard needsScroll else { return }
-        let distance = textWidth + 32
-        withAnimation(.linear(duration: distance / speed).delay(1.2).repeatForever(autoreverses: false)) {
-            offset = -distance
-        }
     }
 }
