@@ -219,8 +219,71 @@ Symbols: `MRMediaRemoteGetLocalOrigin`, `MRMediaRemoteGetNowPlayingClients`, `MR
 
 ---
 
-## Verification (lead, after both tasks)
+### Task 3: the marquee title never scrolls out of sight
+
+**Bug (spec §6):** on the expanded card a long title (e.g. `ScreenRecording_09-24-2026 11-15-26_1.mov - Google Диск`, 392.5 pt in a 240 pt slot) is blank for seconds at a time. `MarqueeText.restart()` runs twice on appear (once for `containerWidth`, once for `textWidth`) and every run starts another `withAnimation(….repeatForever)`. SwiftUI animations are additive and a repeat-forever one never ends, so the two loops stack: measured with an `Animatable` probe, the rendered offset ran from **+424.5** to −112 instead of 0 to −424.5 — the text sat right of the slot for ~6 s, crawled back, and left again. The comment that "assigning `offset` outside an animation also cancels the previous loop" is wrong, and resetting through a `Transaction` with `disablesAnimations` does not cancel it either (measured: same +424.5).
+
+**Fix:** the loop is a `keyframeAnimator(initialValue:repeating:)` that owns the offset — hold 1.2 s at 0, then linear to `-(textWidth + 32)` at `speed` pt/s, repeat — and is keyed with `.id` on the text and the distance, so a new title or a new width starts one fresh loop from 0 and nothing can stack. Measured the same way: the rendered offset stays within [−distance, 0], and a title change restarts at 0.
+
+**Files:**
+- Modify: `NotchKit/Sources/MusicFeature/Views/MarqueeText.swift` (the only file; both call sites — `MusicExpandedView` and the track-change peek in `MusicCompactViews` — keep their current initialiser calls unchanged)
+
+- [ ] **Step 1:** Replace the `offset` state, `restart()` and the four `onChange` restarts with the keyframe loop. The resulting `body` and helpers (keep `edgeFade`, `label`, the public properties and their defaults, and adapt the doc comments to the new mechanism — they must say *why* the loop is keyed, and must not repeat the wrong claim about cancelling):
+
+```swift
+    @State private var textWidth: CGFloat = 0
+    @State private var containerWidth: CGFloat = 0
+
+    private var needsScroll: Bool { textWidth > containerWidth + 1 }
+    /// One loop's travel: the title plus the gap to its copy, so the copy lands exactly where the
+    /// title started and the jump back to 0 is invisible.
+    private var distance: CGFloat { textWidth + Self.gap }
+    private static let gap: CGFloat = 32
+    private static let pause: TimeInterval = 1.2
+
+    var body: some View {
+        GeometryReader { geo in
+            Group {
+                if needsScroll {
+                    HStack(spacing: Self.gap) { label; label }
+                        .keyframeAnimator(initialValue: CGFloat(0), repeating: true) { row, x in
+                            row.offset(x: x)
+                        } keyframes: { _ in
+                            KeyframeTrack {
+                                LinearKeyframe(0, duration: Self.pause)
+                                LinearKeyframe(-distance, duration: distance / speed)
+                            }
+                        }
+                        .id(ScrollKey(text: text, distance: distance))
+                } else {
+                    label
+                }
+            }
+            .onAppear { containerWidth = geo.size.width }
+            .onChange(of: geo.size.width) { _, w in containerWidth = w }
+        }
+        .frame(height: height)
+        .clipped()
+        .mask(edgeFade)
+    }
+
+    /// What a scroll loop runs for. A new title or a new distance gets a new identity, which
+    /// starts one fresh loop from 0 instead of layering a second animation over the first.
+    private struct ScrollKey: Hashable {
+        let text: String
+        let distance: CGFloat
+    }
+```
+
+- [ ] **Step 2:** `cd NotchKit && swift build 2>&1 | grep -E "warning|error"` — nothing from `MarqueeText.swift`; then `swift test` — all pass (there are no view tests; the covering check is the probe below).
+- [ ] **Step 3:** Probe the real file. Copy `NotchKit/Sources/MusicFeature/Views/MarqueeText.swift` into a scratch directory next to a `main.swift` that hosts `MarqueeText(text: "ScreenRecording_09-24-2026 11-15-26_1.mov - Google Диск").frame(width: 240)` in an `NSHostingView` inside a borderless `NSWindow` with `alphaValue = 0`, `ignoresMouseEvents = true`, `orderFrontRegardless()`, runs `NSApplication` for 20 s, and changes the title to another long one at 3 s. In the copy only, replace `row.offset(x: x)` with a modifier that prints `x` and applies the offset. Build with `swiftc -O main.swift MarqueeText.swift -o probe`, run it, and record in the report: the number of printed frames, the min/max rendered offset before and after the title change (expected: within [−distance, 0], never positive), and the offset right after the change (0). Delete the scratch directory afterwards; nothing of the probe is committed.
+- [ ] **Step 4:** Commit `fix(Music): a long title no longer scrolls out of sight on the card`. Body: the stacking cause in two sentences with the measured +424.5, and the fix in one.
+
+---
+
+## Verification (lead, after all tasks)
 
 1. With a paused Chrome video elected and Spotify playing (the reported state): swap in the new helper, and `log stream --level debug --style compact --predicate 'subsystem == "app.notch"'` must show `Following com.spotify.client (elected com.google.Chrome)` and a `Snapshot:` with Spotify's title and artwork bytes.
 2. The user checks the island visually: Spotify's track, cover, pause glyph; the island's pause pauses Spotify, not Chrome.
 3. A 0.2 s sound or a short video in Chrome while Spotify plays does not take the island; a video played for > 3 s does, and pausing it hands the island back to Spotify.
+4. A long title (the Chrome item, or a long Spotify title) is readable on the expanded card: it waits 1.2 s, scrolls left, and loops without ever leaving the slot empty.

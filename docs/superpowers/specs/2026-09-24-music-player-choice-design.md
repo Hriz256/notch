@@ -90,4 +90,10 @@ The app side, the XPC protocol and the snapshot format do not change.
 
 ## 5. Not in scope
 
-Hardware media keys; several players inside one app (Chrome tabs share one client — the client's default player is used); the blank title on the expanded card in both screenshots (investigated separately).
+Hardware media keys; several players inside one app (Chrome tabs share one client — the client's default player is used).
+
+## 6. The blank title in both screenshots (`MarqueeText`)
+
+A second, independent bug. The Chrome item's title (392.5 pt in a 240 pt slot) is long enough to scroll, and `MarqueeText.restart()` runs twice on appear — for `containerWidth`, then for `textWidth` — each time starting another `withAnimation(….repeatForever)`. SwiftUI animations are additive and a repeat-forever one never finishes, so the loops stack. Measured with an `Animatable` probe in an invisible window: the rendered offset ran from **+424.5** to −112 instead of 0 to −424.5, i.e. the title sat right of the slot for ~6 s, crawled back, and left again — both screenshots caught it away. Neither setting `offset = 0` without animation (what the code's comment claims cancels the loop) nor a `Transaction` with `disablesAnimations` cancels it (measured: the same +424.5).
+
+Fix: the loop is a `keyframeAnimator(initialValue:repeating:)` that owns the offset (hold 1.2 s at 0, then linear to −distance at 30 pt/s, repeat), keyed with `.id` on the text and the distance, so a new title or width starts one fresh loop instead of layering another. Measured the same way: the offset stays within [−distance, 0] and a title change restarts at 0. Plan Task 3.
