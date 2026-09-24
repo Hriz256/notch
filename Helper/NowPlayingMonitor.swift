@@ -43,6 +43,9 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// `followUpMissingArtwork`), and the track it was scheduled for.
     private var pendingArtworkRefresh: DispatchWorkItem?
     private var artworkFollowUpTrack: TrackKey?
+    /// The corrective refresh after a command to the followed player (see `sendToFollowedPlayer`).
+    /// Its own item, so a notification's debounce (`pendingRefresh`) cannot cancel it.
+    private var pendingCorrection: DispatchWorkItem?
     /// The last snapshot handed to the client. Its projection is the position the UI is showing,
     /// and it is what a play/pause flip re-bases on when MediaRemote's own pair is stale.
     private var lastPublished: NowPlayingSnapshot?
@@ -68,6 +71,10 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// A player that is not elected can answer its first info request without artwork and with it
     /// a moment later (spike: 0 B, then 188 KB on every later call).
     private static let artworkRetry: DispatchTimeInterval = .seconds(1)
+    /// How long after a command to the followed player its corrective snapshot is sent. The player
+    /// applies a command on its own time (Spotify pauses 0.3–0.45 s after it), so a refresh sooner
+    /// than that can still read the state the command is changing.
+    private static let commandCorrectionDelay: DispatchTimeInterval = .seconds(1)
 
     /// One entry of MediaRemote's client list, as one refresh sees it.
     private struct Player {
@@ -189,9 +196,13 @@ final class NowPlayingMonitor: @unchecked Sendable {
     ///
     /// true means only that it was sent. `MRMediaRemoteSendCommandToClient` returns 1 whatever the
     /// player does (it sets `w0` to 1 right before its only return), so a player that ignores the
-    /// command cannot be told from one that obeys. The dedup is reset instead, as for a rejected
-    /// command: the next refresh always sends a snapshot, which corrects the app's optimistic state
-    /// if the player ignored the command.
+    /// command cannot be told from one that obeys. A corrective refresh `commandCorrectionDelay`
+    /// later resets the dedup first, as for a rejected command, so it always sends a snapshot: that
+    /// corrects the app's optimistic state if the player ignored the command.
+    ///
+    /// The reset waits for the player. The refresh the caller schedules 150 ms after a pause still
+    /// reads Spotify playing; deduped, that read is dropped as the snapshot the app already had,
+    /// but after a reset it reached the app and flipped the optimistic glyph to pause and back.
     private func sendToFollowedPlayer(_ command: MediaRemoteBridge.Command, options: CFDictionary? = nil) -> Bool {
         guard let calls = bridge.perClient, let followedClient else { return false }
         // Looked up per command, as per refresh: MediaRemote owns the local origin (it comes back
@@ -199,13 +210,24 @@ final class NowPlayingMonitor: @unchecked Sendable {
         let origin = calls.getLocalOrigin()?.takeUnretainedValue()
         // Always 1, so not read (see above).
         _ = calls.sendCommand(UInt32(command.rawValue), options, origin, followedClient, 0, queue) { _ in }
-        // A refresh already in flight may have read the player before the command. With the dedup
-        // reset its snapshot would reach the app and flip the optimistic play/pause glyph back for
-        // a moment; bumping the epoch drops its replies at their next guard, so only the refresh
-        // the caller schedules after the command publishes.
+        // A refresh already in flight may have read the player before the command. A snapshot of it that the
+        // dedup lets through (new artwork bytes, say) would still carry the old play state and flip
+        // the optimistic glyph back; bumping the epoch drops its replies at their next guard.
         epoch &+= 1
-        dedup.reset()
+        scheduleCorrection()
         return true
+    }
+
+    /// Replaces the pending correction, so after a burst of commands the last one gets the full delay.
+    private func scheduleCorrection() {
+        pendingCorrection?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            dedup.reset()
+            refresh()
+        }
+        pendingCorrection = item
+        queue.asyncAfter(deadline: .now() + Self.commandCorrectionDelay, execute: item)
     }
 
     private func commandRejected(_ command: MediaRemoteBridge.Command) {
