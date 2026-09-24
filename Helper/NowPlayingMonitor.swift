@@ -25,9 +25,10 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// Identifies the connection that installed `sendSnapshot`, so a late `stop` from a connection
     /// that has already been replaced cannot silence the current client.
     private var sendToken: UUID?
-    /// Bumped at the top of every refresh. A refresh is a chain of async round-trips, so a reply
-    /// from an older refresh can land after a newer one; the stale reply is dropped instead of
-    /// being published and becoming the dedup baseline.
+    /// Bumped at the top of every refresh, and by every command sent to the followed player (see
+    /// `sendToFollowedPlayer`). A refresh is a chain of async round-trips, so a reply from an older
+    /// refresh can land after a newer one; the stale reply is dropped instead of being published
+    /// and becoming the dedup baseline.
     private var epoch: UInt64 = 0
     /// Which listed player the island follows. Survives reconnects, full-state requests and memory
     /// pressure on purpose: forgetting it would make the island jump to the elected player.
@@ -198,6 +199,11 @@ final class NowPlayingMonitor: @unchecked Sendable {
         let origin = calls.getLocalOrigin()?.takeUnretainedValue()
         // Always 1, so not read (see above).
         _ = calls.sendCommand(UInt32(command.rawValue), options, origin, followedClient, 0, queue) { _ in }
+        // A refresh already in flight may have read the player before the command. With the dedup
+        // reset its snapshot would reach the app and flip the optimistic play/pause glyph back for
+        // a moment; bumping the epoch drops its replies at their next guard, so only the refresh
+        // the caller schedules after the command publishes.
+        epoch &+= 1
         dedup.reset()
         return true
     }

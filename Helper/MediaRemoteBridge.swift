@@ -9,10 +9,13 @@ import Foundation
 /// helper can tell the app.
 ///
 /// Optional, because they are absent on some macOS builds or private beyond the rest:
-/// - `MRMediaRemoteGetNowPlayingClient` and `MRNowPlayingClientGetBundleIdentifier`: without
-///   them the monitor reports `sourceBundleID == nil`.
-/// - `perClient`, the calls that address one listed player rather than the elected one: without
-///   them the monitor follows the elected player, as it did before it could tell players apart.
+/// - `perClient`, the calls that address one listed player rather than the elected one, and
+///   `MRNowPlayingClientGetBundleIdentifier`, which player ids are built from: without any of
+///   them the monitor follows the elected player, as it did before it could tell players apart,
+///   and without the bundle-id call it also reports `sourceBundleID == nil`.
+/// - `MRMediaRemoteGetNowPlayingClient`, macOS's elected client: while following players it only
+///   breaks ties, and without it ties go by start time and list order; while following the
+///   elected player it names the source app, and without it `sourceBundleID` is nil.
 /// - `MRNowPlayingClientGetProcessIdentifier`: names a player that has no bundle id, tells two
 ///   processes of one app apart, and matches the elected client to its list entry. Without it
 ///   those go by list order, and the elected client matches its app's first entry.
@@ -101,9 +104,9 @@ final class MediaRemoteBridge: @unchecked Sendable {
     let register: RegisterFn
     let getInfo: GetInfoFn
     let getIsPlaying: GetIsPlayingFn
-    /// nil when the symbol is missing on this macOS build; the source bundle id is then unknown.
+    /// nil when the symbol is missing on this macOS build; see the type's doc for what is lost.
     let getClient: GetClientFn?
-    /// nil when the symbol is missing on this macOS build; see `getClient`.
+    /// nil when the symbol is missing on this macOS build; see the type's doc for what is lost.
     let clientBundleID: ClientBundleIDFn?
     let sendCommand: SendCommandFn
     let setElapsed: SetElapsedFn
