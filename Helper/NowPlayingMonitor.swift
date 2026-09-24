@@ -4,6 +4,12 @@ import os
 import NowPlayingShared
 
 /// Listens to MediaRemote, builds snapshots, dedups/debounces and forwards them to the app.
+///
+/// It follows the player you hear, not the one macOS elected: macOS elects whoever most recently
+/// *started* playing and keeps it through a pause, so a 0.2 s sound in a Chrome tab would hide a
+/// playing Spotify. Every listed player's own state goes through `PlayerChoice`, and the buttons
+/// go to the player it picks. Without the per-client MediaRemote calls it falls back to the
+/// elected player (`refreshElectedOnly()`).
 final class NowPlayingMonitor: @unchecked Sendable {
     // @unchecked: all mutable state is confined to `queue`.
 
@@ -19,10 +25,23 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// Identifies the connection that installed `sendSnapshot`, so a late `stop` from a connection
     /// that has already been replaced cannot silence the current client.
     private var sendToken: UUID?
-    /// Bumped at the top of every `refresh()`. A refresh is two chained async round-trips, so a
-    /// reply from an older refresh can land after a newer one; the stale reply is dropped instead
-    /// of being published and becoming the dedup baseline.
+    /// Bumped at the top of every refresh. A refresh is a chain of async round-trips, so a reply
+    /// from an older refresh can land after a newer one; the stale reply is dropped instead of
+    /// being published and becoming the dedup baseline.
     private var epoch: UInt64 = 0
+    /// Which listed player the island follows. Survives reconnects, full-state requests and memory
+    /// pressure on purpose: forgetting it would make the island jump to the elected player.
+    private var choice = PlayerChoice()
+    /// The `MRClient` of `choice`'s player, so play/pause/next/previous/seek reach the player the
+    /// island shows, not the elected one. nil on the elected-only path and when nothing is listed.
+    private var followedClient: AnyObject?
+    /// Refreshes when a challenger's takeover delay runs out, which no notification marks. Its own
+    /// item, so a notification's debounce (`pendingRefresh`) cannot cancel it.
+    private var pendingRecheck: DispatchWorkItem?
+    /// The one follow-up refresh for a track whose artwork bytes were missing (see
+    /// `followUpMissingArtwork`), and the track it was scheduled for.
+    private var pendingArtworkRefresh: DispatchWorkItem?
+    private var artworkFollowUpTrack: TrackKey?
     /// The last snapshot handed to the client. Its projection is the position the UI is showing,
     /// and it is what a play/pause flip re-bases on when MediaRemote's own pair is stale.
     private var lastPublished: NowPlayingSnapshot?
@@ -42,10 +61,37 @@ final class NowPlayingMonitor: @unchecked Sendable {
     /// Play/pause flips arrive as a single notification and are the most latency-visible change in
     /// the UI (the visualizer and the glyph), so they are refreshed without coalescing.
     private static let immediate: DispatchTimeInterval = .milliseconds(0)
+    /// A recheck lands this far past `recheckAt`, so timer and clock jitter cannot run the decision
+    /// a hair before the challenger's delay is over and leave it waiting for the next notification.
+    private static let recheckSlack: TimeInterval = 0.05
+    /// A player that is not elected can answer its first info request without artwork and with it
+    /// a moment later (spike: 0 B, then 188 KB on every later call).
+    private static let artworkRetry: DispatchTimeInterval = .seconds(1)
+
+    /// One entry of MediaRemote's client list, as one refresh sees it.
+    private struct Player {
+        let client: AnyObject
+        /// Unique within the list, which `PlayerChoice` assumes; see `players(in:)`.
+        let id: String
+        /// What the snapshot publishes as `sourceBundleID`.
+        let bundleID: String?
+        let pid: Int32?
+    }
+
+    /// A track as far as the artwork follow-up is concerned.
+    private struct TrackKey: Equatable {
+        let bundleID: String?
+        let title: String
+        let artist: String?
+    }
 
     init(bridge: MediaRemoteBridge) {
         self.bridge = bridge
     }
+
+    /// Whether this macOS has everything the per-client path needs: the five per-client calls and
+    /// the client bundle id that player ids are made of.
+    private var followsPlayers: Bool { bridge.perClient != nil && bridge.clientBundleID != nil }
 
     /// - Parameter token: identifies the calling connection; pass the same value to `stop(token:)`.
     func start(token: UUID, send: @escaping @Sendable (NowPlayingSnapshot) -> Void) {
@@ -57,13 +103,25 @@ final class NowPlayingMonitor: @unchecked Sendable {
             sendToken = token
             // A (re)connecting client holds no state of its own. Without this reset, a client whose
             // last-seen snapshot matches the helper's cached one would be deduped into silence.
+            // `choice` is kept: a reconnecting app must not see the island jump to the elected player.
             dedup.reset()
             guard !isRegistered else { refresh(); return }
             isRegistered = true
             bridge.register(queue)
+            var names = [MediaRemoteBridge.infoDidChange, MediaRemoteBridge.isPlayingDidChange, MediaRemoteBridge.applicationDidChange]
+            if followsPlayers {
+                // The players that are not elected post only these, so only the per-client path
+                // listens; the elected-only fallback stays as it was.
+                names += [MediaRemoteBridge.playerInfoDidChange, MediaRemoteBridge.playerIsPlayingDidChange,
+                          MediaRemoteBridge.playerPlaybackStateDidChange, MediaRemoteBridge.applicationDidUnregister]
+            } else {
+                logger.notice("Per-client MediaRemote calls unavailable: following the player macOS elected")
+            }
+            let flips = [MediaRemoteBridge.isPlayingDidChange, MediaRemoteBridge.playerIsPlayingDidChange,
+                         MediaRemoteBridge.playerPlaybackStateDidChange]
             let center = NotificationCenter.default
-            for name in [MediaRemoteBridge.infoDidChange, MediaRemoteBridge.isPlayingDidChange, MediaRemoteBridge.applicationDidChange] {
-                let delay: DispatchTimeInterval = name == MediaRemoteBridge.isPlayingDidChange ? Self.immediate : Self.debounce
+            for name in names {
+                let delay: DispatchTimeInterval = flips.contains(name) ? Self.immediate : Self.debounce
                 // Delivered on an unspecified queue; hop onto `queue` so all state stays confined.
                 observers.append(center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                     guard let self else { return }
@@ -93,6 +151,7 @@ final class NowPlayingMonitor: @unchecked Sendable {
         }
     }
 
+    /// Resends everything; `choice` is kept, so the island stays on the player it follows.
     func requestFullState() {
         queue.async { [self] in
             dedup.reset()
@@ -102,26 +161,43 @@ final class NowPlayingMonitor: @unchecked Sendable {
 
     func send(_ command: MediaRemoteBridge.Command) {
         queue.async { [self] in
-            let ok = bridge.sendCommand(command.rawValue, nil)
-            if !ok {
-                logger.error("MediaRemote rejected command \(command.rawValue, privacy: .public)")
-                // The app may have applied the command optimistically. Nothing actually changed, so
-                // the corrective snapshot equals the last one sent and would be deduped into
-                // silence, leaving the UI stuck in the wrong state.
-                dedup.reset()
-            }
+            let ok = sendToFollowedPlayer(command) ?? bridge.sendCommand(command.rawValue, nil)
+            if !ok { commandRejected(command) }
             scheduleRefresh()
         }
     }
 
     func seek(to seconds: Double) {
         queue.async { [self] in
-            bridge.setElapsed(seconds)
+            let options = [MediaRemoteBridge.playbackPositionOption: seconds] as CFDictionary
+            if let ok = sendToFollowedPlayer(.seekToPlaybackPosition, options: options) {
+                if !ok { commandRejected(.seekToPlaybackPosition) }
+            } else {
+                bridge.setElapsed(seconds)
+            }
             scheduleRefresh()
         }
     }
 
     // MARK: Private (on `queue`)
+
+    /// Sends `command` to the player the island follows. nil when there is none (the elected-only
+    /// path, or nothing listed): the caller then addresses macOS's elected player, as before.
+    private func sendToFollowedPlayer(_ command: MediaRemoteBridge.Command, options: CFDictionary? = nil) -> Bool? {
+        guard let calls = bridge.perClient, let followedClient else { return nil }
+        // Looked up per command, as per refresh: MediaRemote owns the local origin (it comes back
+        // unretained), and this local holds it for the call.
+        let origin = calls.getLocalOrigin()?.takeUnretainedValue()
+        return calls.sendCommand(UInt32(command.rawValue), options, origin, followedClient, 0, queue) { _ in }
+    }
+
+    private func commandRejected(_ command: MediaRemoteBridge.Command) {
+        logger.error("MediaRemote rejected command \(command.rawValue, privacy: .public)")
+        // The app may have applied the command optimistically. Nothing actually changed, so
+        // the corrective snapshot equals the last one sent and would be deduped into
+        // silence, leaving the UI stuck in the wrong state.
+        dedup.reset()
+    }
 
     private func scheduleRefresh(after delay: DispatchTimeInterval = NowPlayingMonitor.debounce) {
         pendingRefresh?.cancel()
@@ -130,7 +206,144 @@ final class NowPlayingMonitor: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
+    /// Lists every now-playing client, reads each one's own state, lets `choice` pick one and
+    /// publishes that one's info. Falls back to `refreshElectedOnly()` without the per-client calls.
     private func refresh() {
+        guard followsPlayers, let calls = bridge.perClient else {
+            refreshElectedOnly()
+            return
+        }
+        epoch &+= 1
+        let current = epoch
+        // Taken per refresh rather than kept: MediaRemote owns the local origin (it comes back
+        // unretained), and this strong local holds it for every call of this refresh.
+        let origin = calls.getLocalOrigin()?.takeUnretainedValue()
+        calls.getClients(queue) { [weak self] list in
+            // Every reply arrives on `queue`, so `epoch` is read under the same confinement it is
+            // written under. A newer refresh having started means this reply is stale: drop it.
+            guard let self, current == epoch else { return }
+            let players = players(in: list as? [AnyObject] ?? [])
+            // The elected player only breaks ties; without the symbol there is none to break them.
+            guard let getClient = bridge.getClient else {
+                follow(players, elected: nil, origin: origin, calls: calls, epoch: current)
+                return
+            }
+            getClient(queue) { [weak self] elected in
+                guard let self, current == epoch else { return }
+                follow(players, elected: electedID(elected, in: players), origin: origin, calls: calls, epoch: current)
+            }
+        }
+    }
+
+    /// Reads every player's own state in parallel, lets `choice` pick one and publishes it. With
+    /// nothing listed, `choice` picks nothing and the card goes, as with no elected client.
+    private func follow(_ players: [Player], elected: String?, origin: AnyObject?,
+                        calls: MediaRemoteBridge.PerClient, epoch current: UInt64) {
+        // The replies land on `queue`, like every reply here, so the shared array needs no lock.
+        var states = [UInt32?](repeating: nil, count: players.count)
+        let group = DispatchGroup()
+        for (index, player) in players.enumerated() {
+            group.enter()
+            calls.getPlaybackState(player.client, origin, queue) { state in
+                // No epoch check: this touches only this refresh's own `states` and must balance
+                // the group; the notify that acts on them is checked. A second reply for one
+                // client would unbalance the group, which traps.
+                guard states[index] == nil else { return }
+                states[index] = state
+                group.leave()
+            }
+        }
+        group.notify(queue: queue) { [weak self] in
+            guard let self, current == epoch else { return }
+            let isPlaying = states.map { $0 == MediaRemoteBridge.PlaybackState.playing }
+            let candidates = zip(players, isPlaying).map { PlayerChoice.Candidate(id: $0.id, isPlaying: $1) }
+            let previous = choice.shownID
+            let decision = choice.decide(candidates, elected: elected, now: Date())
+            if decision.playerID != previous {
+                logger.notice("Following \(decision.playerID ?? "-", privacy: .public) (elected \(elected ?? "-", privacy: .public))")
+            }
+            scheduleRecheck(at: decision.recheckAt)
+            guard let index = players.firstIndex(where: { $0.id == decision.playerID }) else {
+                followedClient = nil
+                publish(info: [:], isPlaying: false, bundleID: nil)
+                return
+            }
+            let player = players[index]
+            followedClient = player.client
+            calls.getInfo(player.client, origin, true, queue) { [weak self] dict in
+                guard let self, current == epoch else { return }
+                let info = (dict as NSDictionary?) as? [String: Any] ?? [:]
+                publish(info: info, isPlaying: isPlaying[index], bundleID: player.bundleID)
+                followUpMissingArtwork(in: info, bundleID: player.bundleID)
+            }
+        }
+    }
+
+    /// Replaces the pending recheck; nil cancels it, since no challenger is waiting any more.
+    private func scheduleRecheck(at date: Date?) {
+        pendingRecheck?.cancel()
+        pendingRecheck = nil
+        guard let date else { return }
+        let item = DispatchWorkItem { [weak self] in self?.refresh() }
+        pendingRecheck = item
+        queue.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow) + Self.recheckSlack, execute: item)
+    }
+
+    /// A titled track without artwork bytes gets one more refresh `artworkRetry` later, so its
+    /// cover does not wait for the next notification. Once per track: Chrome items never have
+    /// artwork, and they cost one extra refresh each rather than one every second.
+    private func followUpMissingArtwork(in info: [String: Any], bundleID: String?) {
+        guard let title = info[MediaRemoteBridge.InfoKey.title] as? String, !title.isEmpty,
+              (info[MediaRemoteBridge.InfoKey.artworkData] as? Data)?.isEmpty ?? true
+        else { return }
+        let track = TrackKey(bundleID: bundleID, title: title, artist: info[MediaRemoteBridge.InfoKey.artist] as? String)
+        guard track != artworkFollowUpTrack else { return }
+        artworkFollowUpTrack = track
+        // Replaces only an earlier track's follow-up, which no longer matters: that track is gone.
+        pendingArtworkRefresh?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.refresh() }
+        pendingArtworkRefresh = item
+        queue.asyncAfter(deadline: .now() + Self.artworkRetry, execute: item)
+    }
+
+    /// MediaRemote's client list in its own order, with ids unique within it (`PlayerChoice` keys
+    /// on them): the bundle id; `<bundle id>#<pid>` for a second process of the same app;
+    /// `pid-<pid>` for a client without a bundle id.
+    private func players(in clients: [AnyObject]) -> [Player] {
+        var taken = Set<String>()
+        return clients.enumerated().map { index, client in
+            let bundleID = bundleID(of: client)
+            let pid = bridge.clientPID?(client)
+            let pidText = pid.map(String.init) ?? "?"
+            var id = bundleID ?? "pid-\(pidText)"
+            if taken.contains(id) { id += "#\(pidText)" }
+            // Still taken only without the pid symbol, or for one process listed twice.
+            if taken.contains(id) { id += "#\(index)" }
+            taken.insert(id)
+            return Player(client: client, id: id, bundleID: bundleID, pid: pid)
+        }
+    }
+
+    /// The id of macOS's elected client among `players`: the entry of the same process, else the
+    /// first of the same app. nil when there is no elected client or it is not listed.
+    private func electedID(_ elected: AnyObject?, in players: [Player]) -> String? {
+        // The client functions must not be called with a NULL client.
+        guard let elected else { return nil }
+        let bundleID = bundleID(of: elected)
+        let pid = bridge.clientPID?(elected)
+        let entry = players.first { $0.bundleID == bundleID && $0.pid == pid }
+            ?? players.first { bundleID != nil && $0.bundleID == bundleID }
+        return entry?.id
+    }
+
+    private func bundleID(of client: AnyObject) -> String? {
+        guard let id = bridge.clientBundleID?(client)?.takeUnretainedValue() as String?, !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// macOS's elected player only — its info, its is-playing flag, its bundle id — for a macOS
+    /// without the per-client calls. The path the helper had before it could tell players apart.
+    private func refreshElectedOnly() {
         epoch &+= 1
         let current = epoch
         bridge.getInfo(queue) { [weak self] dict in
@@ -164,6 +377,12 @@ final class NowPlayingMonitor: @unchecked Sendable {
 
     private func publish(info: [String: Any], isPlaying: Bool, bundleID: String?) {
         let now = Date()
+        // A flip is one player's: switching players is not a pause or a resume of either.
+        if bundleID != lastPublished?.sourceBundleID {
+            lastIsPlaying = nil
+            pauseObservedAt = nil
+            resumeObservedAt = nil
+        }
         recordTransportFlip(isPlaying: isPlaying, at: now)
         let artwork = info[MediaRemoteBridge.InfoKey.artworkData] as? Data
         let artworkID = Self.artworkIdentifier(info[MediaRemoteBridge.InfoKey.artworkIdentifier], artwork: artwork)
