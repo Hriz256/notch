@@ -113,4 +113,95 @@ struct PlayerChoiceTests {
         #expect(choice.shownID == nil)
         #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(1)).playerID == chrome)
     }
+
+    // MARK: Provisional switch (spec §2 rule 2, amended)
+
+    @Test func aShortSoundWhileTheMusicIsPausedHandsTheIslandBack() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false), c(chrome, false)], elected: spotify, now: t0)
+        #expect(choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10)).playerID == chrome)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(10.2)) == .init(playerID: spotify, recheckAt: nil))
+    }
+
+    @Test func aNewcomerThatPlaysForTheDelayKeepsTheIslandWhenItStops() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(20)).playerID == chrome)
+    }
+
+    /// The user's question: the music is paused while a video plays, and the video plays on.
+    @Test func pausingTheMusicForAVideoKeepsTheVideoOnceItPlaysForTheDelay() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(11)).playerID == chrome)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(30)).playerID == chrome)
+    }
+
+    @Test func pausingTheMusicForAVideoThatStopsWithinTheDelayReturnsToTheMusic() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(11))
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(11.5)).playerID == spotify)
+    }
+
+    @Test func quittingTheMusicLeavesTheVideoWithNothingToReturnTo() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(chrome, false)], elected: chrome, now: at(10.2)).playerID == chrome)
+    }
+
+    @Test func aPlayerThatAlreadyPlayedForTheDelayIsEstablishedAtOnce() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: t0)
+        #expect(choice.decide([c(spotify, true), c(chrome, false)], elected: chrome, now: at(60)).playerID == spotify)
+        #expect(choice.decide([c(spotify, false), c(chrome, false)], elected: chrome, now: at(61)).playerID == spotify)
+    }
+
+    @Test func aProvisionalPlayerReplacedByAnotherStillReturnsToTheEstablishedOne() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(spotify, false), c(chrome, false), c(music, false)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, false), c(chrome, true), c(music, false)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, false), c(chrome, false), c(music, true)], elected: music, now: at(10.5)).playerID == music)
+        #expect(choice.decide([c(spotify, false), c(chrome, false), c(music, false)], elected: music, now: at(11)).playerID == spotify)
+    }
+
+    // MARK: Coverage the task reviews asked for
+
+    @Test func amongSeveralReadyChallengersTheLatestStartWins() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(music, true)], elected: music, now: t0)
+        _ = choice.decide([c(music, true), c(spotify, true)], elected: music, now: at(1))
+        _ = choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(2))
+        #expect(choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(5)).playerID == chrome)
+    }
+
+    @Test func severalPendingChallengersRecheckAtTheEarliest() {
+        var choice = PlayerChoice()
+        let music = "com.apple.Music"
+        _ = choice.decide([c(music, true)], elected: music, now: t0)
+        _ = choice.decide([c(music, true), c(spotify, true)], elected: music, now: at(1))
+        #expect(choice.decide([c(music, true), c(spotify, true), c(chrome, true)], elected: music, now: at(2)).recheckAt == at(4))
+    }
+
+    @Test func resetForgetsWhenPlayersStarted() {
+        var choice = PlayerChoice()
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: spotify, now: at(1))
+        choice.reset()
+        // Kept starts would make Chrome (1 s) the latest start; forgotten ones tie at 2 s and list order wins.
+        #expect(choice.decide([c(spotify, true), c(chrome, true)], elected: nil, now: at(2)).playerID == spotify)
+    }
+
+    @Test func aCustomTakeoverDelayIsHonoured() {
+        var choice = PlayerChoice(takeoverDelay: 1)
+        _ = choice.decide([c(spotify, true)], elected: spotify, now: t0)
+        _ = choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(10))
+        #expect(choice.decide([c(spotify, true), c(chrome, true)], elected: chrome, now: at(11)).playerID == chrome)
+    }
 }
