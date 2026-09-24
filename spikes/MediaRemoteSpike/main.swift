@@ -17,7 +17,9 @@ typealias GetClientFn = @convention(c) (DispatchQueue, @escaping @convention(blo
 typealias ClientStringFn = @convention(c) (AnyObject?) -> Unmanaged<CFString>?
 /// The state block takes the state alone; declaring a second (error) parameter reads garbage and crashes.
 typealias StateForClientFn = @convention(c) (AnyObject?, AnyObject?, DispatchQueue, @escaping @convention(block) (UInt32) -> Void) -> Void
-/// The info block's second parameter is not an object; only the dictionary is read.
+/// The info block's second parameter is an `MRNowPlayingArtworkImage` passed as `void *` (the
+/// `…ForOrigin` wrapper copies its bytes into `ArtworkData`); it is left undeclared because only
+/// the dictionary is read.
 typealias InfoForClientFn = @convention(c) (AnyObject?, AnyObject?, Bool, DispatchQueue, @escaping @convention(block) (CFDictionary?) -> Void) -> Void
 typealias SendToClientFn = @convention(c) (UInt32, CFDictionary?, AnyObject?, AnyObject?, UInt32, DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void) -> Bool
 typealias GetInfoFn = @convention(c) (DispatchQueue, @escaping @convention(block) (CFDictionary?) -> Void) -> Void

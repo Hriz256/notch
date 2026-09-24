@@ -115,7 +115,10 @@ final class NowPlayingMonitor: @unchecked Sendable {
                 names += [MediaRemoteBridge.playerInfoDidChange, MediaRemoteBridge.playerIsPlayingDidChange,
                           MediaRemoteBridge.playerPlaybackStateDidChange, MediaRemoteBridge.applicationDidUnregister]
             } else {
-                logger.notice("Per-client MediaRemote calls unavailable: following the player macOS elected")
+                var missing: [String] = []
+                if bridge.perClient == nil { missing.append("the per-client calls") }
+                if bridge.clientBundleID == nil { missing.append("MRNowPlayingClientGetBundleIdentifier") }
+                logger.notice("MediaRemote lacks \(missing.joined(separator: " and "), privacy: .public): following the player macOS elected")
             }
             let flips = [MediaRemoteBridge.isPlayingDidChange, MediaRemoteBridge.playerIsPlayingDidChange,
                          MediaRemoteBridge.playerPlaybackStateDidChange]
@@ -161,7 +164,8 @@ final class NowPlayingMonitor: @unchecked Sendable {
 
     func send(_ command: MediaRemoteBridge.Command) {
         queue.async { [self] in
-            let ok = sendToFollowedPlayer(command) ?? bridge.sendCommand(command.rawValue, nil)
+            // Only the elected path can report a rejection; see `sendToFollowedPlayer`.
+            let ok = sendToFollowedPlayer(command) || bridge.sendCommand(command.rawValue, nil)
             if !ok { commandRejected(command) }
             scheduleRefresh()
         }
@@ -170,9 +174,7 @@ final class NowPlayingMonitor: @unchecked Sendable {
     func seek(to seconds: Double) {
         queue.async { [self] in
             let options = [MediaRemoteBridge.playbackPositionOption: seconds] as CFDictionary
-            if let ok = sendToFollowedPlayer(.seekToPlaybackPosition, options: options) {
-                if !ok { commandRejected(.seekToPlaybackPosition) }
-            } else {
+            if !sendToFollowedPlayer(.seekToPlaybackPosition, options: options) {
                 bridge.setElapsed(seconds)
             }
             scheduleRefresh()
@@ -181,14 +183,23 @@ final class NowPlayingMonitor: @unchecked Sendable {
 
     // MARK: Private (on `queue`)
 
-    /// Sends `command` to the player the island follows. nil when there is none (the elected-only
+    /// Sends `command` to the player the island follows. false when there is none (the elected-only
     /// path, or nothing listed): the caller then addresses macOS's elected player, as before.
-    private func sendToFollowedPlayer(_ command: MediaRemoteBridge.Command, options: CFDictionary? = nil) -> Bool? {
-        guard let calls = bridge.perClient, let followedClient else { return nil }
+    ///
+    /// true means only that it was sent. `MRMediaRemoteSendCommandToClient` returns 1 whatever the
+    /// player does (it sets `w0` to 1 right before its only return), so a player that ignores the
+    /// command cannot be told from one that obeys. The dedup is reset instead, as for a rejected
+    /// command: the next refresh always sends a snapshot, which corrects the app's optimistic state
+    /// if the player ignored the command.
+    private func sendToFollowedPlayer(_ command: MediaRemoteBridge.Command, options: CFDictionary? = nil) -> Bool {
+        guard let calls = bridge.perClient, let followedClient else { return false }
         // Looked up per command, as per refresh: MediaRemote owns the local origin (it comes back
         // unretained), and this local holds it for the call.
         let origin = calls.getLocalOrigin()?.takeUnretainedValue()
-        return calls.sendCommand(UInt32(command.rawValue), options, origin, followedClient, 0, queue) { _ in }
+        // Always 1, so not read (see above).
+        _ = calls.sendCommand(UInt32(command.rawValue), options, origin, followedClient, 0, queue) { _ in }
+        dedup.reset()
+        return true
     }
 
     private func commandRejected(_ command: MediaRemoteBridge.Command) {

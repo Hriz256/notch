@@ -13,7 +13,9 @@ import Foundation
 ///   them the monitor reports `sourceBundleID == nil`.
 /// - `perClient`, the calls that address one listed player rather than the elected one: without
 ///   them the monitor follows the elected player, as it did before it could tell players apart.
-/// - `MRNowPlayingClientGetProcessIdentifier`: only names a player that has no bundle id.
+/// - `MRNowPlayingClientGetProcessIdentifier`: names a player that has no bundle id, tells two
+///   processes of one app apart, and matches the elected client to its list entry. Without it
+///   those go by list order, and the elected client matches its app's first entry.
 final class MediaRemoteBridge: @unchecked Sendable {
     // @unchecked: wraps an immutable dlopen handle and C function pointers, which are thread-safe.
 
@@ -38,7 +40,8 @@ final class MediaRemoteBridge: @unchecked Sendable {
     typealias StateForClientFn = @convention(c) (AnyObject?, AnyObject?, DispatchQueue, @escaping @convention(block) (UInt32) -> Void) -> Void
     /// (client, origin, withArtwork, queue, reply).
     typealias InfoForClientFn = @convention(c) (AnyObject?, AnyObject?, Bool, DispatchQueue, @escaping @convention(block) (CFDictionary?) -> Void) -> Void
-    /// (command, options, origin, client, appOptions, queue, completion) → accepted.
+    /// (command, options, origin, client, appOptions, queue, completion). The result is always 1,
+    /// whatever the player does (`mov w0, #0x1` before its only `retab`), so it reports nothing.
     typealias SendToClientFn = @convention(c) (UInt32, CFDictionary?, AnyObject?, AnyObject?, UInt32, DispatchQueue, @escaping @convention(block) (AnyObject?) -> Void) -> Bool
     typealias ClientPIDFn = @convention(c) (AnyObject?) -> Int32
 

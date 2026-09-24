@@ -51,8 +51,9 @@ struct MarqueeText: View {
         .mask(edgeFade)
     }
 
-    /// What a scroll loop runs for. A new title or a new distance gets a new identity, which
-    /// starts one fresh loop from 0 instead of layering a second animation over the first.
+    /// What a scroll loop runs for. A keyframe animator does not layer, but it does not restart
+    /// either: without this key a new title would carry on the old timeline mid-scroll. Keyed,
+    /// a new title restarts from 0 and a new distance restarts with the keyframes built for it.
     /// The text is part of the key because a new title can measure the same width, and the
     /// distance because on a track change the new width only lands after the next layout pass.
     private struct ScrollKey: Hashable {
@@ -63,9 +64,9 @@ struct MarqueeText: View {
     /// Fading both edges only earns its keep while the text scrolls under them. A title
     /// that fits is fully visible, so the same gradient would dim its first and last
     /// glyph for no reason — a plain opaque mask leaves it untouched and leading-aligned.
-    /// The branch lives inside the one mask modifier rather than in `body`, so the mask adds
-    /// no identity of its own to the scrolling row: its loop starts when the row appears and
-    /// starts over only when `ScrollKey` changes.
+    /// The mask branches on its own, inside the one `.mask` modifier, so switching between the
+    /// gradient and the opaque mask never touches the row's identity: the loop starts when the
+    /// row appears and starts over only when `ScrollKey` changes.
     @ViewBuilder
     private var edgeFade: some View {
         if needsScroll {
